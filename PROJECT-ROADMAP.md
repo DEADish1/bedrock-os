@@ -52,14 +52,16 @@ Exit: a new user can create media and install Bedrock without using a terminal.
 
 - [ ] Implement disk inventory, SMART/health, temperatures, and alerts.
 - [ ] Create, expand, scrub, export, and import storage pools.
-- [ ] Support mirrors and single-/dual-drive failure protection where valid.
+- [ ] Support OpenZFS mirrors/RAID-Z and Linux software RAID (`mdadm`) with single-/dual-drive failure protection where valid.
+- [ ] Detect supported hardware RAID controllers and logical volumes; surface controller, cache/battery, disk, and rebuild health when vendor tooling permits.
+- [ ] Add guided RAID creation, degraded-array, replacement, rebuild-progress, scrub/check, and safe import workflows.
 - [ ] Implement datasets/shares, quotas, snapshots, recycle behavior, and permissions.
 - [ ] Add SMB; evaluate NFS and optional Time Machine support.
 - [ ] Add users, groups, access-control lists, and credential rotation.
 - [ ] Implement degraded-pool, drive-replacement, and recovery workflows.
 - [ ] Test power-loss behavior, disk failure, pool import, and data-integrity checks.
 
-Exit: NAS workflows are safe, monitored, recoverable, and usable from Windows/macOS/Linux.
+Exit: NAS and software/hardware RAID workflows are safe, monitored, recoverable, and usable from Windows/macOS/Linux.
 
 ## 0.5.0 — Virtual machines and image library
 

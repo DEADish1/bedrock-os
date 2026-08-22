@@ -17,11 +17,14 @@ linux-image-amd64
 live-boot
 live-config-systemd
 locales
+lvm2
+mdadm
 network-manager
 nvme-cli
 openssh-client
 openssl
 pciutils
+sg3-utils
 smartmontools
 sudo
 systemd-boot-efi

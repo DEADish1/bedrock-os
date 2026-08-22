@@ -1,0 +1,5 @@
+#!/bin/sh
+cat <<'EOF'
+0000:03:00.0 RAID bus controller [0104]: Broadcom / LSI MegaRAID SAS controller [1000:005d]
+0000:04:00.0 SATA controller [0106]: Bedrock Test AHCI controller [1b36:000d]
+EOF

@@ -17,10 +17,14 @@ Status: accepted for implementation; changes require a recorded architecture dec
 ## Storage and NAS
 
 - Primary pool technology: OpenZFS on Linux.
+- Software RAID: OpenZFS mirrors/RAID-Z are the default protected-pool path; Linux MD (`mdadm`) is supported for conventional RAID 1/5/6/10 arrays and recovery/import compatibility.
+- Hardware RAID: supported controllers may expose stable logical volumes to Bedrock. Controller, physical-drive, cache, battery/supercapacitor, patrol-read, and rebuild status are reported only when a tested open or vendor management interface is available.
+- ZFS should normally receive individual drives through AHCI, NVMe, or an IT-mode SAS HBA. Creating ZFS on a hardware RAID logical volume requires an advanced warning because the controller hides physical-drive error and recovery information.
 - File sharing: Samba/SMB first; NFS evaluated behind an explicit enablement flow.
 - Disk health: `smartmontools`, NVMe health data, temperature/alert collection, and direct-drive identity.
 - Bedrock stores intent and friendly metadata in SQLite but treats ZFS and the operating system as authoritative state.
 - Pool layout decisions must explain failure tolerance, usable capacity, expansion limits, and recovery consequences before creation.
+- Bedrock never labels a hardware array healthy solely because its logical disk is online; health is `limited` when physical-member telemetry is unavailable.
 
 ## Virtual machines and images
 

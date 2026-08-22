@@ -6,6 +6,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ### Next starting point
 
+- Implement the v0.4 RAID management service: safe array/pool creation, health adapters, rebuild progress, replacement, and recovery tests.
 - Run the image workflow in the public `bedrock-os` GitHub repository and retain the first verified ISO.
 - Pin the resolved Debian package set from that clean build and compare a second build for reproducibility.
 - Add update download/resume transport, release-channel policy, and certificate-rotation handling.
@@ -77,6 +78,9 @@ This file records completed work, decisions, validation, and the next starting p
 
 ### Architecture decisions
 
+- Defined RAID support: OpenZFS mirror/RAID-Z as the preferred software path, Linux MD RAID 1/5/6/10 compatibility, and tested hardware RAID logical volumes with honest limited-health status when member telemetry is unavailable.
+- Added `mdadm`, LVM, and SCSI/SAS inspection tools to the Bedrock image baseline and added PCI storage/RAID controller discovery to hardware inventory schema 2.
+- Added explicit software/hardware RAID status and contextual explanations to the Storage prototype and expanded the v0.4 checklist with controller-health and rebuild workflows.
 - Approved amd64/UEFI as the Bedrock 1.0 host platform; ARM64 is deferred to a named-device program after 1.0.
 - Selected Debian 13 stable with a release-pinned kernel and immutable, dm-verity-protected A/B system images.
 - Selected OpenZFS, Samba, KVM/QEMU, libvirt, OVMF, and VFIO for storage and virtualization.

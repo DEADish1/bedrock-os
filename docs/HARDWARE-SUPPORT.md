@@ -10,6 +10,8 @@ Status: approved for 0.1 product definition. This is the minimum support contrac
 - Memory: 8 GB minimum for storage-only evaluation; 16 GB recommended; 32 GB recommended when running multiple VMs or ZFS-heavy workloads.
 - System drive: dedicated 32 GB minimum; 64 GB or larger recommended. It must not be part of the NAS storage pool.
 - Data drives: at least one supported SATA, SAS-through-HBA, or NVMe drive. Redundancy requires multiple drives.
+- Software RAID: OpenZFS mirror/RAID-Z and Linux MD RAID 1/5/6/10 are in the 1.0 storage target; exact layouts remain subject to minimum disk counts and recovery testing.
+- Hardware RAID: logical volumes from tested controllers are supported when device identity and array state remain stable. Full support requires controller tooling that exposes member-disk, cache/battery, and rebuild health.
 - Network: supported wired Ethernet adapter; 1 GbE minimum recommendation. Wi-Fi is not a supported primary server connection for 1.0.
 - Display/input: only required for installation and local recovery; normal administration is browser/client based.
 
@@ -27,7 +29,7 @@ Status: approved for 0.1 product definition. This is the minimum support contrac
 - Legacy BIOS-only systems.
 - Apple Silicon as a Bedrock host.
 - ARM64 appliances and single-board computers.
-- Proprietary RAID controllers that hide individual disk health or rewrite disk geometry.
+- Untested proprietary RAID controllers, controllers that rewrite logical-disk geometry after import, and controllers without any usable health interface. Such volumes may be detected but are reported as limited/unsupported rather than healthy.
 - USB flash drives as the permanent Bedrock system disk.
 - Wi-Fi-only servers.
 
@@ -40,10 +42,12 @@ Debian supports ARM64, but ARM systems have substantially more platform variatio
 - Intel and AMD desktop-class systems from multiple generations.
 - At least two server/workstation boards with ECC.
 - SATA AHCI, NVMe, and IT-mode SAS HBA storage paths.
+- Linux MD RAID 1/5/6/10 assembly, degradation, replacement, rebuild, and import.
+- At least one tested hardware RAID family with logical-volume discovery, member health, cache/battery state, and rebuild reporting; other controllers are best-effort until added to the matrix.
 - Intel, Realtek, and supported server-class Ethernet adapters.
 - UEFI boot, Secure Boot, IOMMU, power-loss, thermal, suspend-disabled, and headless boot behavior.
 - QEMU virtual hardware, VMware, and Hyper-V as development/test environments; physical-hardware results remain authoritative.
 
 ## Inventory contract
 
-At boot, Bedrock writes `/var/lib/bedrock/hardware/inventory.json` with CPU topology and virtualization support, total memory, physical disks, non-loopback network interfaces, and DRM GPU devices. GPU records identify Intel, AMD, and NVIDIA vendor IDs, the active kernel driver, and an IOMMU group when one is available. This is discovery data for setup and resource assignment; passthrough eligibility still requires the isolation checks described above.
+At boot, Bedrock writes `/var/lib/bedrock/hardware/inventory.json` with CPU topology and virtualization support, total memory, physical/logical disks, PCI storage and RAID controllers, non-loopback network interfaces, and DRM GPU devices. Storage-controller records identify RAID, SAS, SATA, and NVMe classes so the UI can distinguish direct disks, HBAs, and hardware logical volumes. GPU records identify Intel, AMD, and NVIDIA vendor IDs, the active kernel driver, and an IOMMU group when one is available. This is discovery data for setup and resource assignment; RAID support level and passthrough eligibility still require their deeper checks.

@@ -30,6 +30,17 @@ networks=$(ip -j -details link show | jq -c '[.[] | select(.ifname != "lo") | {
   name:.ifname,mac:(.address // null),mtu:.mtu,state:(.operstate // "UNKNOWN"),link_type:(.link_type // "unknown")
 }]')
 
+storage_controllers='[]'
+if command -v lspci >/dev/null 2>&1; then
+  storage_controllers=$(lspci -Dnn | awk '
+    /RAID bus controller/ { kind="hardware-raid" }
+    /Serial Attached SCSI controller/ { kind="sas" }
+    /SATA controller/ { kind="sata" }
+    /Non-Volatile memory controller/ { kind="nvme" }
+    kind != "" { address=$1; print address "\t" kind "\t" $0; kind="" }
+  ' | jq -Rsc 'split("\n") | map(select(length > 0) | split("\t") | {address:.[0],class:.[1],description:.[2]})')
+fi
+
 gpus='[]'
 for card in "$sys_root"/class/drm/card[0-9]*; do
   [ -e "$card/device/vendor" ] || continue
@@ -49,7 +60,8 @@ jq -S -n \
   --arg architecture "$architecture" --arg model "$model" --argjson logical "$logical" --argjson sockets "$sockets" \
   --argjson cores_per_socket "$cores_per_socket" --argjson threads_per_core "$threads_per_core" \
   --arg virtualization "$virtualization" --argjson virtualization_supported "$virtualization_supported" \
-  --argjson memory_bytes "$memory_bytes" --argjson disks "$disks" --argjson networks "$networks" --argjson gpus "$gpus" \
-  '{schema:1,cpu:{architecture:$architecture,model:$model,logical_processors:$logical,sockets:$sockets,cores_per_socket:$cores_per_socket,threads_per_core:$threads_per_core,virtualization:$virtualization,virtualization_supported:$virtualization_supported},memory:{total_bytes:$memory_bytes},disks:$disks,networks:$networks,gpus:$gpus}' > "$temporary"
+  --argjson memory_bytes "$memory_bytes" --argjson disks "$disks" --argjson storage_controllers "$storage_controllers" \
+  --argjson networks "$networks" --argjson gpus "$gpus" \
+  '{schema:2,cpu:{architecture:$architecture,model:$model,logical_processors:$logical,sockets:$sockets,cores_per_socket:$cores_per_socket,threads_per_core:$threads_per_core,virtualization:$virtualization,virtualization_supported:$virtualization_supported},memory:{total_bytes:$memory_bytes},disks:$disks,storage_controllers:$storage_controllers,networks:$networks,gpus:$gpus}' > "$temporary"
 mv "$temporary" "$output"
 printf 'BEDROCK_HARDWARE_INVENTORY_READY path=%s\n' "$output" > /dev/console 2>/dev/null || true
