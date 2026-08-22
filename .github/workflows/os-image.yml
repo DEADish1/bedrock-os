@@ -26,14 +26,13 @@ jobs:
       matrix:
         replica: [1, 2]
     runs-on: ubuntu-24.04
-    container: debian:13.6-slim
     permissions:
       contents: read
       id-token: write
       attestations: write
     steps:
       - name: Install build tools
-        run: apt-get update && apt-get install --yes --no-install-recommends ca-certificates cryptsetup-bin dosfstools e2fsprogs erofs-utils gdisk git jq live-build mtools openssl ovmf qemu-system-x86 sbsigntool systemd-boot-efi systemd-ukify xorriso xxd zstd squashfs-tools grub-efi-amd64-bin shim-signed
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends ca-certificates cryptsetup-bin dosfstools e2fsprogs erofs-utils gdisk git jq live-build mtools openssl ovmf qemu-system-x86 sbsigntool systemd-boot-efi systemd-ukify xorriso xxd zstd squashfs-tools grub-efi-amd64-bin shim-signed
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
