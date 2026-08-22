@@ -1,0 +1,14 @@
+[Unit]
+Description=Validate Bedrock boot and mark the selected slot healthy
+Documentation=https://haven-server.deadish1.chatgpt.site
+After=local-fs.target network-online.target bedrock-hardware-inventory.service
+Wants=network-online.target bedrock-hardware-inventory.service
+ConditionPathIsMountPoint=/var
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/bedrock/mark-boot-healthy
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

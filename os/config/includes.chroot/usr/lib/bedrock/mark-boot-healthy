@@ -1,0 +1,52 @@
+#!/bin/sh
+set -eu
+
+cmdline=$(cat /proc/cmdline)
+slot=
+for argument in $cmdline; do
+  case "$argument" in bedrock.slot=a) slot=a ;; bedrock.slot=b) slot=b ;; esac
+done
+[ -n "$slot" ] || { printf 'BEDROCK_BOOT_UNHEALTHY reason=missing-slot\n' > /dev/console; exit 1; }
+
+findmnt --mountpoint /var >/dev/null 2>&1 || { printf 'BEDROCK_BOOT_UNHEALTHY slot=%s reason=state-unmounted\n' "$slot" > /dev/console; exit 1; }
+options=$(findmnt --noheadings --output OPTIONS /var)
+printf '%s' "$options" | grep -Eq '(^|,)rw(,|$)' || { printf 'BEDROCK_BOOT_UNHEALTHY slot=%s reason=state-read-only\n' "$slot" > /dev/console; exit 1; }
+
+mkdir -p /var/lib/bedrock/boot-health
+boot_id=$(cat /proc/sys/kernel/random/boot_id)
+marker=/var/lib/bedrock/boot-health/last-good.json
+temporary="$marker.new"
+printf '{"schema":1,"slot":"%s","boot_id":"%s","healthy":true}\n' "$slot" "$boot_id" > "$temporary"
+sync "$temporary"
+mv "$temporary" "$marker"
+sync "$(dirname -- "$marker")"
+
+esp_device=/dev/disk/by-partlabel/bedrock-esp
+esp_mount=/run/bedrock-esp
+[ -b "$esp_device" ] || { printf 'BEDROCK_BOOT_UNHEALTHY slot=%s reason=esp-device-missing\n' "$slot" > /dev/console; exit 1; }
+mkdir -p "$esp_mount"
+mount -t vfat "$esp_device" "$esp_mount"
+trap 'umount "$esp_mount" 2>/dev/null || true' EXIT INT TERM
+
+efi_linux=$esp_mount/EFI/Linux
+successful_entry="$efi_linux/bedrock-$slot.efi"
+if [ ! -f "$successful_entry" ]; then
+  counted_entry=$(find "$efi_linux" -maxdepth 1 -type f -name "bedrock-$slot+*-*.efi" -print -quit 2>/dev/null || true)
+  [ -n "$counted_entry" ] || { printf 'BEDROCK_BOOT_UNHEALTHY slot=%s reason=counted-entry-missing\n' "$slot" > /dev/console; exit 1; }
+  mv "$counted_entry" "$successful_entry"
+  sync "$efi_linux"
+fi
+umount "$esp_mount"
+trap - EXIT INT TERM
+
+pending=/var/lib/bedrock/update/pending.json
+if [ -s "$pending" ] && jq -e --arg slot "$slot" '.schema == 1 and .slot == $slot and (.generation | type == "number" and . > 0 and floor == .)' "$pending" >/dev/null 2>&1; then
+  update_dir=$(dirname -- "$pending")
+  jq -r .generation "$pending" > "$update_dir/generation.new"
+  sync "$update_dir/generation.new"
+  mv "$update_dir/generation.new" "$update_dir/generation"
+  mv "$pending" "$update_dir/last-installed.json"
+  sync "$update_dir"
+fi
+
+printf 'BEDROCK_BOOT_HEALTHY slot=%s boot_id=%s\n' "$slot" "$boot_id" > /dev/console

@@ -1,0 +1,4 @@
+#!/bin/sh
+cat <<'EOF'
+{"lscpu":[{"field":"Architecture:","data":"x86_64"},{"field":"CPU(s):","data":"8"},{"field":"Model name:","data":"Bedrock Test CPU"},{"field":"Thread(s) per core:","data":"2"},{"field":"Core(s) per socket:","data":"4"},{"field":"Socket(s):","data":"1"},{"field":"Virtualization:","data":"VT-x"}]}
+EOF

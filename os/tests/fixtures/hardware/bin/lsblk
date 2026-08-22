@@ -1,0 +1,4 @@
+#!/bin/sh
+cat <<'EOF'
+{"blockdevices":[{"name":"sda","kname":"sda","path":"/dev/sda","type":"disk","size":1000204886016,"rota":false,"tran":"sata","model":"Bedrock SSD","vendor":"Test","rm":false}]}
+EOF

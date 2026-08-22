@@ -1,0 +1,90 @@
+{
+  "schema": 1,
+  "architecture": "amd64",
+  "firmware": "uefi",
+  "minimum_disk_bytes": 34359738368,
+  "alignment_bytes": 1048576,
+  "boot_policy": {
+    "active_slot": "a",
+    "attempts_before_rollback": 3,
+    "promotion_requires_health": true,
+    "kernel_artifact": "unified-kernel-image",
+    "root_selection": "signed-dm-verity-root-hash"
+  },
+  "partitions": [
+    {
+      "number": 1,
+      "name": "bedrock-esp",
+      "role": "efi-system",
+      "type_guid": "c12a7328-f81f-11d2-ba4b-00a0c93ec93b",
+      "filesystem": "vfat",
+      "size_bytes": 1073741824,
+      "mutable": true
+    },
+    {
+      "number": 2,
+      "name": "bedrock-root-a",
+      "role": "root-a",
+      "type_guid": "4f68bce3-e8cd-4db1-96e7-fbcaf984b709",
+      "filesystem": "erofs",
+      "size_bytes": 4294967296,
+      "mutable": false
+    },
+    {
+      "number": 3,
+      "name": "bedrock-verity-a",
+      "role": "verity-a",
+      "type_guid": "2c7357ed-ebd2-46d9-aec1-23d437ec2bf5",
+      "filesystem": null,
+      "size_bytes": 536870912,
+      "mutable": false
+    },
+    {
+      "number": 4,
+      "name": "bedrock-verity-sig-a",
+      "role": "verity-signature-a",
+      "type_guid": "41092b05-9fc8-4523-994f-2def0408b176",
+      "filesystem": null,
+      "size_bytes": 1048576,
+      "mutable": false
+    },
+    {
+      "number": 5,
+      "name": "bedrock-root-b",
+      "role": "root-b",
+      "type_guid": "4f68bce3-e8cd-4db1-96e7-fbcaf984b709",
+      "filesystem": "erofs",
+      "size_bytes": 4294967296,
+      "mutable": false
+    },
+    {
+      "number": 6,
+      "name": "bedrock-verity-b",
+      "role": "verity-b",
+      "type_guid": "2c7357ed-ebd2-46d9-aec1-23d437ec2bf5",
+      "filesystem": null,
+      "size_bytes": 536870912,
+      "mutable": false
+    },
+    {
+      "number": 7,
+      "name": "bedrock-verity-sig-b",
+      "role": "verity-signature-b",
+      "type_guid": "41092b05-9fc8-4523-994f-2def0408b176",
+      "filesystem": null,
+      "size_bytes": 1048576,
+      "mutable": false
+    },
+    {
+      "number": 8,
+      "name": "bedrock-state",
+      "role": "persistent-state",
+      "type_guid": "4d21b016-b534-45c2-a9fb-5c16e091fd2d",
+      "filesystem": "ext4",
+      "minimum_size_bytes": 8589934592,
+      "grow": true,
+      "mutable": true
+    }
+  ]
+}
+

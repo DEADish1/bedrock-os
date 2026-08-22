@@ -1,0 +1,14 @@
+[Unit]
+Description=Collect Bedrock hardware inventory
+Documentation=https://haven-server.deadish1.chatgpt.site
+After=local-fs.target systemd-udev-settle.service
+Before=bedrock-boot-health.service
+ConditionPathIsMountPoint=/var
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/bedrock/collect-hardware-inventory
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

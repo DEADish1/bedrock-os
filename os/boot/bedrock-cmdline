@@ -1,0 +1,1 @@
+root=/dev/mapper/root rootfstype=erofs ro quiet loglevel=3 console=tty0 console=ttyS0,115200n8 rd.systemd.show_status=auto rd.systemd.verity=1 systemd.gpt_auto=1

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" role="img" aria-labelledby="title"><title id="title">Bedrock server B mark</title><g id="br">
+  <rect x="10" y="8" width="18" height="80" rx="4" fill="#FF6A1F"/>
+  <circle cx="19" cy="24" r="2.2" fill="#0D1215"/><circle cx="19" cy="72" r="2.2" fill="#0D1215"/>
+  <path d="M24 8h42c14 0 22 8 22 20s-8 20-22 20H24V8Z" fill="#131A1E" stroke="#FF6A1F" stroke-width="7"/>
+  <path d="M24 48h42c14 0 22 8 22 20S80 88 66 88H24V48Z" fill="#131A1E" stroke="#FF6A1F" stroke-width="7"/>
+  <g fill="#39444B"><rect x="36" y="24" width="3" height="9" rx="1"/><rect x="36" y="64" width="3" height="9" rx="1"/><rect x="42" y="24" width="3" height="9" rx="1"/><rect x="42" y="64" width="3" height="9" rx="1"/><rect x="48" y="24" width="3" height="9" rx="1"/><rect x="48" y="64" width="3" height="9" rx="1"/><rect x="54" y="24" width="3" height="9" rx="1"/><rect x="54" y="64" width="3" height="9" rx="1"/></g>
+  <g ><circle cx="67" cy="28" r="2.4" fill="#33D790"/><circle cx="75" cy="28" r="2.4" fill="#F5B83D"/></g>
+  <g ><circle cx="67" cy="68" r="2.4" fill="#33D790"/><circle cx="75" cy="68" r="2.4" fill="#F5B83D"/></g>
+</g></svg>

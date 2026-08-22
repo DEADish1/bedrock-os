@@ -1,0 +1,7 @@
+NAME="Bedrock Server OS"
+ID=bedrock
+VERSION="0.2.0-dev.1"
+VERSION_ID="0.2.0-dev.1"
+PRETTY_NAME="Bedrock Server OS 0.2.0-dev.1"
+BUILD_STAGE="bootable-foundation"
+

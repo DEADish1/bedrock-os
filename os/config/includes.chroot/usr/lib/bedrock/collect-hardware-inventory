@@ -1,0 +1,55 @@
+#!/bin/sh
+set -eu
+
+output=${1:-/var/lib/bedrock/hardware/inventory.json}
+sys_root=${BEDROCK_SYS_ROOT:-/sys}
+proc_root=${BEDROCK_PROC_ROOT:-/proc}
+for tool in jq lscpu lsblk ip; do command -v "$tool" >/dev/null 2>&1 || { printf 'error: %s is required for hardware inventory\n' "$tool" >&2; exit 1; }; done
+
+lscpu_json=$(lscpu -J)
+cpu_value() { printf '%s' "$lscpu_json" | jq -r --arg field "$1:" '[.lscpu[] | select(.field == $field) | .data][0] // "unknown"'; }
+architecture=$(cpu_value Architecture)
+model=$(cpu_value 'Model name')
+logical=$(cpu_value 'CPU(s)')
+sockets=$(cpu_value 'Socket(s)')
+cores_per_socket=$(cpu_value 'Core(s) per socket')
+threads_per_core=$(cpu_value 'Thread(s) per core')
+virtualization=$(cpu_value Virtualization)
+case "$virtualization" in VT-x|AMD-V) virtualization_supported=true ;; *) virtualization_supported=false ;; esac
+
+memory_kib=$(awk '/^MemTotal:/{print $2; exit}' "$proc_root/meminfo")
+printf '%s' "$memory_kib" | grep -Eq '^[0-9]+$' || { printf 'error: MemTotal is unavailable\n' >&2; exit 1; }
+memory_bytes=$((memory_kib * 1024))
+
+disks=$(lsblk -J -b -d -o NAME,KNAME,PATH,TYPE,SIZE,ROTA,TRAN,MODEL,VENDOR,RM | jq -c '[.blockdevices[] | select(.type == "disk") | {
+  name:.name,path:.path,size_bytes:.size,rotational:(.rota == true or .rota == 1),transport:(.tran // "unknown"),
+  model:((.model // "unknown") | gsub("^[[:space:]]+|[[:space:]]+$";"")),
+  vendor:((.vendor // "unknown") | gsub("^[[:space:]]+|[[:space:]]+$";"")),removable:(.rm == true or .rm == 1)
+}]')
+networks=$(ip -j -details link show | jq -c '[.[] | select(.ifname != "lo") | {
+  name:.ifname,mac:(.address // null),mtu:.mtu,state:(.operstate // "UNKNOWN"),link_type:(.link_type // "unknown")
+}]')
+
+gpus='[]'
+for card in "$sys_root"/class/drm/card[0-9]*; do
+  [ -e "$card/device/vendor" ] || continue
+  vendor_id=$(cat "$card/device/vendor")
+  device_id=$(cat "$card/device/device")
+  driver=none
+  [ ! -L "$card/device/driver" ] || driver=$(basename "$(readlink "$card/device/driver")")
+  iommu_group=null
+  [ ! -L "$card/device/iommu_group" ] || iommu_group=$(basename "$(readlink "$card/device/iommu_group")")
+  case "$vendor_id" in 0x8086) vendor=Intel; recognized=true ;; 0x1002) vendor=AMD; recognized=true ;; 0x10de) vendor=NVIDIA; recognized=true ;; *) vendor=Unknown; recognized=false ;; esac
+  gpus=$(printf '%s' "$gpus" | jq -c --arg name "$(basename "$card")" --arg vendor "$vendor" --arg vendor_id "$vendor_id" --arg device_id "$device_id" --arg driver "$driver" --arg iommu_group "$iommu_group" --argjson recognized "$recognized" '. + [{name:$name,vendor:$vendor,vendor_id:$vendor_id,device_id:$device_id,driver:$driver,iommu_group:(if $iommu_group == "null" then null else $iommu_group end),recognized_vendor:$recognized}]')
+done
+
+mkdir -p "$(dirname -- "$output")"
+temporary="$output.new"
+jq -S -n \
+  --arg architecture "$architecture" --arg model "$model" --argjson logical "$logical" --argjson sockets "$sockets" \
+  --argjson cores_per_socket "$cores_per_socket" --argjson threads_per_core "$threads_per_core" \
+  --arg virtualization "$virtualization" --argjson virtualization_supported "$virtualization_supported" \
+  --argjson memory_bytes "$memory_bytes" --argjson disks "$disks" --argjson networks "$networks" --argjson gpus "$gpus" \
+  '{schema:1,cpu:{architecture:$architecture,model:$model,logical_processors:$logical,sockets:$sockets,cores_per_socket:$cores_per_socket,threads_per_core:$threads_per_core,virtualization:$virtualization,virtualization_supported:$virtualization_supported},memory:{total_bytes:$memory_bytes},disks:$disks,networks:$networks,gpus:$gpus}' > "$temporary"
+mv "$temporary" "$output"
+printf 'BEDROCK_HARDWARE_INVENTORY_READY path=%s\n' "$output" > /dev/console 2>/dev/null || true

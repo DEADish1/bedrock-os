@@ -1,0 +1,81 @@
+name: Bedrock OS image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'os/**'
+      - '.github/workflows/os-image.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate configuration
+        run: ./os/scripts/validate-config.sh
+
+  build:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        replica: [1, 2]
+    runs-on: ubuntu-24.04
+    container: debian:13.6-slim
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Install build tools
+        run: apt-get update && apt-get install --yes --no-install-recommends ca-certificates cryptsetup-bin dosfstools e2fsprogs erofs-utils gdisk git jq live-build mtools openssl ovmf qemu-system-x86 sbsigntool systemd-boot-efi systemd-ukify xorriso xxd zstd squashfs-tools grub-efi-amd64-bin shim-signed
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Build and verify image
+        env:
+          BEDROCK_BUILD_RAW: ${{ matrix.replica == 1 && '1' || '0' }}
+          BEDROCK_ALLOW_EPHEMERAL_KEYS: '1'
+        run: ./os/scripts/build-image.sh
+      - name: Upload image and metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: bedrock-os-amd64-${{ matrix.replica }}
+          path: |
+            os/out/bedrock-os-amd64.iso
+            os/out/bedrock-os-amd64.iso.sha256
+            os/out/bedrock-os-amd64.raw.zst
+            os/out/bedrock-os-amd64.raw.sha256
+            os/out/bedrock-build-manifest.json
+            os/out/bedrock-signing-manifest.json
+            os/out/packages.lock
+            os/out/build.log
+          if-no-files-found: error
+      - name: Attest image provenance
+        if: matrix.replica == 1
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            os/out/bedrock-os-amd64.iso
+            os/out/bedrock-os-amd64.raw.zst
+
+  reproducibility:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bedrock-os-amd64-1
+          path: build-a
+      - uses: actions/download-artifact@v4
+        with:
+          name: bedrock-os-amd64-2
+          path: build-b
+      - name: Require identical clean ISO builds
+        run: ./os/scripts/compare-reproducible-builds.sh build-a build-b

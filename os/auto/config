@@ -1,0 +1,26 @@
+#!/bin/sh
+set -eu
+
+PROJECT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$PROJECT_DIR/build.env"
+
+lb config noauto \
+  --mode debian \
+  --distribution "$BEDROCK_DISTRIBUTION" \
+  --architectures "$BEDROCK_ARCHITECTURE" \
+  --binary-image iso-hybrid \
+  --archive-areas "main contrib non-free-firmware" \
+  --debian-installer none \
+  --bootloaders "grub-efi" \
+  --apt-recommends false \
+  --memtest none \
+  --iso-application "Bedrock Server OS" \
+  --iso-publisher "Bedrock Server OS Project" \
+  --iso-volume "$BEDROCK_VOLUME_LABEL" \
+  --image-name "${BEDROCK_IMAGE_NAME%-${BEDROCK_ARCHITECTURE}}" \
+  --mirror-bootstrap "$DEBIAN_MIRROR" \
+  --mirror-binary "$DEBIAN_MIRROR" \
+  --mirror-chroot-security "$DEBIAN_SECURITY_MIRROR" \
+  --mirror-binary-security "$DEBIAN_SECURITY_MIRROR" \
+  --bootappend-live "boot=live components hostname=bedrock username=bedrock quiet" \
+  "$@"

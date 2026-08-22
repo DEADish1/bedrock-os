@@ -1,0 +1,4 @@
+#!/bin/sh
+cat <<'EOF'
+[{"ifname":"lo","address":"00:00:00:00:00:00","mtu":65536,"operstate":"UNKNOWN","link_type":"loopback"},{"ifname":"enp1s0","address":"02:00:00:00:00:01","mtu":1500,"operstate":"UP","link_type":"ether"}]
+EOF
