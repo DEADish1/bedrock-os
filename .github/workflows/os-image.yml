@@ -31,16 +31,21 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends ca-certificates cryptsetup-bin dosfstools e2fsprogs erofs-utils gdisk git jq live-build mtools openssl ovmf qemu-system-x86 sbsigntool systemd-boot-efi systemd-ukify xorriso xxd zstd squashfs-tools grub-efi-amd64-bin shim-signed
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
-      - name: Build and verify image
+      - name: Build and verify image in Debian 13
         env:
           BEDROCK_BUILD_RAW: ${{ matrix.replica == 1 && '1' || '0' }}
           BEDROCK_ALLOW_EPHEMERAL_KEYS: '1'
-        run: ./os/scripts/build-image.sh
+        run: |
+          docker run --rm --privileged \
+            --volume "$GITHUB_WORKSPACE:/workspace" \
+            --workdir /workspace \
+            --env BEDROCK_BUILD_RAW \
+            --env BEDROCK_ALLOW_EPHEMERAL_KEYS \
+            debian:13.6-slim \
+            bash -lc 'apt-get update && apt-get install --yes --no-install-recommends ca-certificates cryptsetup-bin dosfstools e2fsprogs erofs-utils gdisk git jq live-build mtools openssl ovmf qemu-system-x86 sbsigntool systemd-boot-efi systemd-ukify xorriso xxd zstd squashfs-tools grub-efi-amd64-bin shim-signed && ./os/scripts/build-image.sh'
       - name: Upload image and metadata
         uses: actions/upload-artifact@v4
         with:
