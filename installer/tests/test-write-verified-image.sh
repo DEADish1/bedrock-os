@@ -38,6 +38,13 @@ if BEDROCK_INSTALLER_TEST_MODE=1 BEDROCK_TEST_TARGET_DIR="$work/targets" \
   exit 1
 fi
 
+if BEDROCK_INSTALLER_TEST_MODE=1 BEDROCK_TEST_TARGET_DIR="$work/targets" BEDROCK_TEST_INTERRUPT_AFTER_WRITE=1 \
+  sh "$ROOT/installer/core/write-verified-image.sh" "$work/release" "$cert" bedrock-os-amd64.iso \
+  "$work/inventory.json" test-usb "$confirmation" >/dev/null 2>&1; then
+  printf 'error: simulated interrupted write was reported as successful\n' >&2
+  exit 1
+fi
+
 jq '.targets[0].size_bytes = 1' "$work/inventory.json" > "$work/too-small.json"
 if BEDROCK_INSTALLER_TEST_MODE=1 BEDROCK_TEST_TARGET_DIR="$work/targets" \
   sh "$ROOT/installer/core/write-verified-image.sh" "$work/release" "$cert" bedrock-os-amd64.iso \
