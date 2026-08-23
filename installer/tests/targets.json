@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "generated_at": "2026-08-23T23:00:00Z",
+  "targets": [
+    {"id":"usb-safe","path":"/dev/disk9","model":"Bedrock Test USB","size_bytes":17179869184,"removable":true,"system":false,"mounted":false,"read_only":false},
+    {"id":"system-disk","path":"/dev/disk0","model":"Internal SSD","size_bytes":512110190592,"removable":false,"system":true,"mounted":true,"read_only":false},
+    {"id":"mounted-usb","path":"/dev/disk8","model":"Mounted USB","size_bytes":17179869184,"removable":true,"system":false,"mounted":true,"read_only":false},
+    {"id":"tiny-usb","path":"/dev/disk7","model":"Tiny USB","size_bytes":4294967296,"removable":true,"system":false,"mounted":false,"read_only":false}
+  ]
+}
