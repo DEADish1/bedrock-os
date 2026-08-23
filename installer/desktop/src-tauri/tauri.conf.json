@@ -1,0 +1,29 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Bedrock Installer",
+  "version": "0.3.0",
+  "identifier": "os.bedrock.installer",
+  "build": { "frontendDist": "../../ui" },
+  "app": {
+    "withGlobalTauri": true,
+    "security": {
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    },
+    "windows": [{
+      "label": "main",
+      "title": "Bedrock Installer",
+      "width": 1180,
+      "height": 780,
+      "minWidth": 360,
+      "minHeight": 640,
+      "resizable": true,
+      "fullscreen": false
+    }]
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Utility",
+    "shortDescription": "Safely create Bedrock OS installation media"
+  }
+}
