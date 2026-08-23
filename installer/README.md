@@ -14,7 +14,7 @@ Platform adapters must provide stable target IDs and refresh the inventory immed
 
 `core/verify-signed-image.sh` is the mandatory pre-write trust gate. It validates the CMS signature against the bundled Bedrock release certificate, enforces the canonical manifest schema and requested filename, and verifies exact image size and SHA-256.
 
-`core/write-verified-image.sh` revalidates the exact target and confirmation, requires a whole block device and administrator privileges in production, writes only a verified hybrid ISO, flushes it, rereads the written byte range, and requires the signed SHA-256 before reporting success.
+`core/write-verified-image.sh` revalidates the exact target and confirmation, requires a whole block device and administrator privileges in production, writes a verified hybrid ISO or expands a signed raw Zstandard image, flushes it, rereads the written byte range, and requires the signed expanded SHA-256 before reporting success.
 
 ## Platform adapters
 
