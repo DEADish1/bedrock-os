@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "image_sha256": "replace-with-64-lowercase-hex-characters",
+  "platform": "vmware",
+  "cpu_vendor": "intel",
+  "uefi": true,
+  "healthy_boot": true,
+  "persistent_reboot": true,
+  "inventory": {
+    "cpu": true,
+    "memory": true,
+    "disk": true,
+    "network": true
+  },
+  "notes": "Do not include serial numbers, IP addresses, or usernames."
+}
