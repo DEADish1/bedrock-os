@@ -39,11 +39,17 @@ jobs:
           BEDROCK_BUILD_RAW: ${{ matrix.replica == 1 && '1' || '0' }}
           BEDROCK_ALLOW_EPHEMERAL_KEYS: '1'
         run: |
+          SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$GITHUB_SHA")
+          export SOURCE_DATE_EPOCH
+          BEDROCK_SOURCE_COMMIT=$GITHUB_SHA
+          export BEDROCK_SOURCE_COMMIT
           docker run --rm --privileged \
             --volume "$GITHUB_WORKSPACE:/workspace" \
             --workdir /workspace \
             --env BEDROCK_BUILD_RAW \
             --env BEDROCK_ALLOW_EPHEMERAL_KEYS \
+            --env SOURCE_DATE_EPOCH \
+            --env BEDROCK_SOURCE_COMMIT \
             debian:13.6-slim \
             bash -lc 'apt-get update && apt-get install --yes --no-install-recommends ca-certificates cryptsetup-bin dosfstools e2fsprogs erofs-utils gdisk git jq live-build mtools openssl ovmf qemu-system-x86 sbsigntool systemd-boot-efi systemd-ukify xorriso xxd zstd squashfs-tools grub-efi-amd64-bin shim-signed && ./os/scripts/build-image.sh'
       - name: Upload image and metadata
