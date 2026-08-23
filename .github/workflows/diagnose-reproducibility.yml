@@ -20,14 +20,14 @@ jobs:
           name: bedrock-os-amd64-1
           path: build-a
           repository: DEADish1/bedrock-os
-          run-id: 32640190700
+          run-id: 32642359121
           github-token: ${{ github.token }}
       - uses: actions/download-artifact@v4
         with:
           name: bedrock-os-amd64-2
           path: build-b
           repository: DEADish1/bedrock-os
-          run-id: 32640190700
+          run-id: 32642359121
           github-token: ${{ github.token }}
       - name: Report remaining differences
         run: |
