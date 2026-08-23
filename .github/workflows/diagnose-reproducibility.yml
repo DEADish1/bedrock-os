@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends xorriso
+      - run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends initramfs-tools-core squashfs-tools xorriso
       - uses: actions/download-artifact@v4
         with:
           name: bedrock-os-amd64-1
@@ -44,3 +44,32 @@ jobs:
           (cd iso-a && find . -type f -print0 | sort -z | xargs -0 sha256sum) > files-a.sha256
           (cd iso-b && find . -type f -print0 | sort -z | xargs -0 sha256sum) > files-b.sha256
           diff -u files-a.sha256 files-b.sha256 | head -400 || true
+      - name: Compare compressed root filesystems
+        run: |
+          set -eu
+          unsquashfs -quiet -dest root-a iso-a/live/filesystem.squashfs
+          unsquashfs -quiet -dest root-b iso-b/live/filesystem.squashfs
+          (cd root-a && find . -type f -print0 | sort -z | xargs -0 sha256sum) > root-a.sha256
+          (cd root-b && find . -type f -print0 | sort -z | xargs -0 sha256sum) > root-b.sha256
+          echo 'Content differences inside filesystem.squashfs:'
+          diff -u root-a.sha256 root-b.sha256 | head -800 || true
+          (cd root-a && find . -printf '%P|%y|%m|%U|%G|%T@|%l\n' | sort) > root-a.metadata
+          (cd root-b && find . -printf '%P|%y|%m|%U|%G|%T@|%l\n' | sort) > root-b.metadata
+          echo 'Metadata differences inside filesystem.squashfs:'
+          diff -u root-a.metadata root-b.metadata | head -1200 || true
+      - name: Compare initramfs images
+        run: |
+          set -eu
+          initrd_a=$(find iso-a/live -maxdepth 1 -type f -name 'initrd.img-*' -print -quit)
+          initrd_b=$(find iso-b/live -maxdepth 1 -type f -name 'initrd.img-*' -print -quit)
+          mkdir initrd-a initrd-b
+          unmkinitramfs "$initrd_a" initrd-a
+          unmkinitramfs "$initrd_b" initrd-b
+          (cd initrd-a && find . -type f -print0 | sort -z | xargs -0 sha256sum) > initrd-a.sha256
+          (cd initrd-b && find . -type f -print0 | sort -z | xargs -0 sha256sum) > initrd-b.sha256
+          echo 'Content differences inside initramfs:'
+          diff -u initrd-a.sha256 initrd-b.sha256 | head -800 || true
+          (cd initrd-a && find . -printf '%P|%y|%m|%U|%G|%T@|%l\n' | sort) > initrd-a.metadata
+          (cd initrd-b && find . -printf '%P|%y|%m|%U|%G|%T@|%l\n' | sort) > initrd-b.metadata
+          echo 'Metadata differences inside initramfs:'
+          diff -u initrd-a.metadata initrd-b.metadata | head -1200 || true
