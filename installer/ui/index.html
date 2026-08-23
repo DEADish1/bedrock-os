@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Bedrock Installer</title><link rel="stylesheet" href="styles.css"></head>
+<body>
+<main class="app">
+  <header><div class="brand"><span>B</span><div><strong>BEDROCK</strong><small>SERVER OS INSTALLER</small></div></div><div class="secure">● Verified media only</div></header>
+  <div class="layout">
+    <nav aria-label="Installation progress">
+      <button class="step active" data-step="image"><b>1</b><span>Choose image<small>Verify the Bedrock download</small></span></button>
+      <button class="step" data-step="drive"><b>2</b><span>Select drive<small>Pick removable media safely</small></span></button>
+      <button class="step" data-step="write"><b>3</b><span>Create media<small>Write and verify every byte</small></span></button>
+      <button class="step" data-step="done"><b>4</b><span>Ready to boot<small>Start your Bedrock server</small></span></button>
+    </nav>
+    <section class="content">
+      <div id="alert" class="alert" role="alert" hidden></div>
+      <article id="image" class="panel active">
+        <p class="eyebrow">STEP 1 OF 4</p><h1>Choose your Bedrock image</h1>
+        <p class="intro">Select the signed ISO or compressed USB image you downloaded. Bedrock checks its signature and every byte before showing any drives.</p>
+        <button id="choose-image" class="drop"><span>⇧</span><strong>Choose Bedrock image</strong><small>ISO or RAW.ZST plus its signed manifest</small></button>
+        <div id="image-result" class="result" hidden></div>
+      </article>
+      <article id="drive" class="panel">
+        <p class="eyebrow">STEP 2 OF 4</p><h1>Select a removable drive <button class="help" aria-label="Explain removable drives">?<span>Internal, system, mounted, read-only, and undersized drives cannot be selected.</span></button></h1>
+        <p class="intro">Only eligible removable drives appear below. Unplug any drive you do not want to erase.</p>
+        <div id="drives" class="drives"></div><button id="refresh" class="secondary">↻ Refresh drives</button>
+      </article>
+      <article id="write" class="panel">
+        <p class="eyebrow">STEP 3 OF 4</p><h1>Confirm the exact drive</h1><div id="target-summary" class="target"></div>
+        <label for="confirmation">Type the complete phrase below to continue <button class="help" aria-label="Explain confirmation">?<span>This prevents a nearby drive or an old selection from being erased accidentally.</span></button></label>
+        <code id="confirmation-phrase"></code><input id="confirmation" autocomplete="off" spellcheck="false">
+        <button id="write-button" class="danger" disabled>Erase drive and create Bedrock media</button>
+        <div id="progress" class="progress" hidden><i></i><span>Preparing verified media…</span></div>
+      </article>
+      <article id="done" class="panel">
+        <p class="eyebrow">COMPLETE</p><h1>Your Bedrock media is ready</h1><div class="success">✓</div>
+        <p class="intro">The drive was written, flushed, reread, and matched against Bedrock’s signed checksum.</p>
+        <ol><li>Safely remove the USB drive.</li><li>Insert it into your server.</li><li>Boot in UEFI mode and follow first-run setup.</li></ol>
+        <button id="start-over" class="primary">Create another drive</button>
+      </article>
+    </section>
+  </div>
+  <footer>Bedrock Installer <span>•</span> No drive is written until its full name is confirmed.</footer>
+</main>
+<script src="app.js"></script>
+</body></html>
