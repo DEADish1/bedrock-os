@@ -12,6 +12,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Aligned native drive and image response fields with the graphical interface contract.
 - Added independent Windows, macOS, and Linux compile checks for the desktop package.
 - Added the official Bedrock application icon required by native package compilation.
+- Added a multi-resolution Windows icon resource generated from the same approved Bedrock artwork.
 
 ### Next starting point
 

@@ -22,8 +22,9 @@ assert "script-src 'self'" in csp
 assert "*" not in csp
 assert capability["windows"] == ["main"]
 assert capability["permissions"] == ["core:default"]
-assert config["bundle"]["icon"] == ["icons/icon.png"]
+assert config["bundle"]["icon"] == ["icons/icon.png", "icons/icon.ico"]
 assert (root / "icons/icon.png").stat().st_size > 0
+assert (root / "icons/icon.ico").stat().st_size > 0
 PY
 
 grep -Eq '^tauri = \{ version = "2", features = \[\] \}$' "$TAURI/Cargo.toml"
