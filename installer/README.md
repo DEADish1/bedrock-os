@@ -4,10 +4,14 @@ This directory contains the cross-platform installer foundation. The graphical W
 
 ## Safety boundary
 
-\`core/validate-target-selection.sh\` consumes a fresh JSON inventory snapshot and returns the selected target only when all release-blocking rules pass. It never writes to a disk.
+`core/validate-target-selection.sh` consumes a fresh JSON inventory snapshot and returns the selected target only when all release-blocking rules pass. It never writes to a disk.
 
-\`\`\`sh
+```sh
 sh installer/core/validate-target-selection.sh inventory.json target-id "ERASE model — path — capacity"
-\`\`\`
+```
 
-Platform adapters must provide stable target IDs and refresh the inventory immediately before privileged writing. See \`docs/INSTALLER-SAFETY.md\`.
+Platform adapters must provide stable target IDs and refresh the inventory immediately before privileged writing. See `docs/INSTALLER-SAFETY.md`.
+
+## Platform adapters
+
+- `adapters/linux-list-targets.sh` reads Linux block-device metadata without elevation, identifies the disk containing `/`, and emits the shared schema. If the system disk cannot be identified, every target is marked as a system disk and writing remains blocked.
