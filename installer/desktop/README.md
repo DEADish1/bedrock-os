@@ -8,6 +8,8 @@ This Tauri 2 shell packages the shared installer interface as native Windows, ma
 
 The native handlers currently fail closed with a clear message. They cannot write disks until the platform-specific protected service is connected and tested. The shell intentionally has no general command runner, shell plugin, or unrestricted filesystem permission.
 
+The Rust response models use the same camel-case fields consumed by `ui/app.js`. GitHub checks the contract and compiles the shell independently on Windows, macOS, and Linux before it can be accepted.
+
 ## Development
 
 Install the Rust toolchain and Tauri 2 prerequisites for the host platform, then run from `installer/desktop/src-tauri`:
