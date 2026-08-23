@@ -83,6 +83,8 @@ This file records completed work, decisions, validation, and the next starting p
 - Defined the cross-platform installer disk-inventory and privileged-writer safety boundary.
 - Added a fail-closed target-selection validator that rejects system, internal, mounted, read-only, undersized, missing, ambiguous, and incorrectly confirmed disks.
 - Added regression fixtures covering the safe removable-drive path and destructive-selection rejection cases.
+- Added the Linux removable-drive inventory adapter with root-disk, mounted-media, read-only, capacity, model, and path reporting.
+- Added fixture-based Linux enumeration tests, including fail-closed behavior when the system disk cannot be identified.
 
 ### Architecture decisions
 
