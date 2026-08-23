@@ -4,6 +4,12 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+### Desktop installer packaging
+
+- Added a Tauri 2 desktop packaging shell for the shared Windows, macOS, and Linux installer interface.
+- Restricted the desktop window to three typed installer commands with a strict content-security policy and no general shell access.
+- Kept all native disk handlers fail-closed until the protected platform services are connected and verified.
+
 ### Next starting point
 
 - Boot-test the v0.2 image on physical Intel and AMD systems and the remaining common VM platforms.
