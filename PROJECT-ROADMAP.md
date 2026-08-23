@@ -25,7 +25,7 @@ Exit: product scope, supported hardware, architecture, and release process are a
 ## 0.2.0 — Bootable foundation (current)
 
 - [x] Select the Linux base distribution and define the kernel pinning policy.
-- [ ] Create reproducible OS image builds in CI.
+- [x] Create reproducible OS image builds in CI.
 - [x] Implement UEFI boot, boot splash, service startup, and diagnostics mode.
 - [x] Add read-only system partition and persistent configuration/data partitions.
 - [x] Detect CPU, RAM, disks, NICs, and supported GPUs.
