@@ -78,6 +78,12 @@ This file records completed work, decisions, validation, and the next starting p
 - Kept reproducible CI builds open because `DEADish1/bedrock-os` does not yet exist and the available signed GitHub browser session requires login before repository creation.
 - Changed the normal UEFI smoke test to boot a disposable image copy so validation can no longer promote or otherwise mutate release artifacts.
 
+### Installer and first-run work
+
+- Defined the cross-platform installer disk-inventory and privileged-writer safety boundary.
+- Added a fail-closed target-selection validator that rejects system, internal, mounted, read-only, undersized, missing, ambiguous, and incorrectly confirmed disks.
+- Added regression fixtures covering the safe removable-drive path and destructive-selection rejection cases.
+
 ### Architecture decisions
 
 - Defined RAID support: OpenZFS mirror/RAID-Z as the preferred software path, Linux MD RAID 1/5/6/10 compatibility, and tested hardware RAID logical volumes with honest limited-health status when member telemetry is unavailable.
