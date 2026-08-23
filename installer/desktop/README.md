@@ -10,6 +10,8 @@ The native handlers currently fail closed with a clear message. They cannot writ
 
 The Rust response models use the same camel-case fields consumed by `ui/app.js`. GitHub checks the contract and compiles the shell independently on Windows, macOS, and Linux before it can be accepted.
 
+The packaged application uses the official 512-pixel Bedrock app icon from the supplied brand kit.
+
 ## Development
 
 Install the Rust toolchain and Tauri 2 prerequisites for the host platform, then run from `installer/desktop/src-tauri`:

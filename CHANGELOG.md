@@ -11,6 +11,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Kept all native disk handlers fail-closed until the protected platform services are connected and verified.
 - Aligned native drive and image response fields with the graphical interface contract.
 - Added independent Windows, macOS, and Linux compile checks for the desktop package.
+- Added the official Bedrock application icon required by native package compilation.
 
 ### Next starting point
 
