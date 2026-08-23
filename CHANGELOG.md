@@ -94,6 +94,9 @@ This file records completed work, decisions, validation, and the next starting p
 - Added regression tests proving valid signed media is accepted while modified images, unexpected names, and modified manifests are rejected.
 - Added the guarded hybrid-ISO media writer with target revalidation, administrator/block-device enforcement, capacity checks, flushed writes, full reread, and signed SHA-256 verification.
 - Added disposable-file regression coverage for successful write/verify, incorrect destructive confirmation, and insufficient target capacity.
+- Extended signed manifests with the exact expanded size and SHA-256 of bytes destined for disk.
+- Added streaming Zstandard raw-image writing with expanded-byte capacity checks and full post-write verification.
+- Added deterministic interrupted-write failure handling that requires a complete rewrite, plus compressed-raw and interruption regression coverage.
 
 ### Architecture decisions
 
