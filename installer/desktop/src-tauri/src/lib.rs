@@ -9,21 +9,21 @@ struct InstallTarget {
     id: String,
     path: String,
     model: String,
-    capacity: String,
+    size_bytes: u64,
     removable: bool,
-    system_disk: bool,
-    read_only: bool,
+    system: bool,
     mounted: bool,
+    read_only: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct VerifiedImage {
-    path: String,
-    filename: String,
-    size: u64,
+    name: String,
+    version: String,
+    size_bytes: u64,
     sha256: String,
-    format: String,
+    image_type: String,
 }
 
 #[tauri::command]
