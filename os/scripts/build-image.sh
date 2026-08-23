@@ -16,6 +16,7 @@ command -v jq >/dev/null 2>&1 || { printf 'error: jq is required\n' >&2; exit 1;
 . "$OS_DIR/build.env"
 
 SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git -C "$ROOT" log -1 --format=%ct 2>/dev/null || date +%s)}
+BEDROCK_SOURCE_COMMIT=${BEDROCK_SOURCE_COMMIT:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || printf unknown)}
 export SOURCE_DATE_EPOCH TZ=UTC LC_ALL=C.UTF-8
 
 mkdir -p "$OUT_DIR"
@@ -44,7 +45,7 @@ jq -n \
   --arg distribution "$BEDROCK_DISTRIBUTION" \
   --arg architecture "$BEDROCK_ARCHITECTURE" \
   --arg source_date_epoch "$SOURCE_DATE_EPOCH" \
-  --arg commit "$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || printf unknown)" \
+  --arg commit "$BEDROCK_SOURCE_COMMIT" \
   --arg live_build "$(lb --version 2>/dev/null | head -n1)" \
   '{schema:1,product:"Bedrock Server OS",version:$version,distribution:$distribution,architecture:$architecture,source_date_epoch:($source_date_epoch|tonumber),commit:$commit,live_build:$live_build}' \
   > bedrock-build-manifest.json
