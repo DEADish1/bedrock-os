@@ -69,5 +69,6 @@ if command -v pwsh >/dev/null 2>&1; then
   sh "$ROOT/installer/tests/test-windows-list-targets.sh"
 fi
 sh "$ROOT/installer/tests/test-signed-image.sh"
+sh "$ROOT/installer/tests/test-write-verified-image.sh"
 
 printf 'Bedrock image configuration is valid.\n'
