@@ -92,6 +92,8 @@ This file records completed work, decisions, validation, and the next starting p
 - Added a canonical signed installer-image manifest for ISO and compressed raw USB artifacts.
 - Added a mandatory pre-write verifier for certificate trust, strict schema and filename matching, exact size, and SHA-256.
 - Added regression tests proving valid signed media is accepted while modified images, unexpected names, and modified manifests are rejected.
+- Added the guarded hybrid-ISO media writer with target revalidation, administrator/block-device enforcement, capacity checks, flushed writes, full reread, and signed SHA-256 verification.
+- Added disposable-file regression coverage for successful write/verify, incorrect destructive confirmation, and insufficient target capacity.
 
 ### Architecture decisions
 
