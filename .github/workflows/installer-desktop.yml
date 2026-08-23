@@ -1,0 +1,45 @@
+name: Installer desktop
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/installer-desktop.yml"
+      - "installer/desktop/**"
+      - "installer/ui/**"
+      - "installer/tests/test-desktop-shell.sh"
+      - "installer/tests/test-ui-shell.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate desktop and interface contracts
+        run: |
+          sh installer/tests/test-desktop-shell.sh
+          sh installer/tests/test-ui-shell.sh
+
+  compile:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libayatana-appindicator3-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libwebkit2gtk-4.1-dev
+      - name: Compile native bridge
+        run: cargo check --manifest-path installer/desktop/src-tauri/Cargo.toml
