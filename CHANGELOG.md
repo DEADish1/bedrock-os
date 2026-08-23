@@ -12,6 +12,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ### Bootable foundation work
 
+- Added a defined v0.2 boot-test matrix, privacy-safe report format, and fail-closed validator for VMware, Hyper-V, and physical Intel/AMD acceptance evidence.
 - Passed the reproducible-build release gate in GitHub Actions run `32644096736`: two independent Debian 13 builders produced byte-identical ISOs with identical package locks and build manifests.
 - Passed the complete raw-disk validation suite in the same run, including signed artifact verification, UEFI boot, good-update promotion, bad-update exhaustion, and automatic rollback.
 - Made release timestamps and source revisions explicit inside isolated builders instead of relying on inaccessible mounted Git metadata.
