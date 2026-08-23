@@ -12,6 +12,8 @@ sh installer/core/validate-target-selection.sh inventory.json target-id "ERASE m
 
 Platform adapters must provide stable target IDs and refresh the inventory immediately before privileged writing. See `docs/INSTALLER-SAFETY.md`.
 
+`core/verify-signed-image.sh` is the mandatory pre-write trust gate. It validates the CMS signature against the bundled Bedrock release certificate, enforces the canonical manifest schema and requested filename, and verifies exact image size and SHA-256.
+
 ## Platform adapters
 
 - `adapters/linux-list-targets.sh` reads Linux block-device metadata without elevation, identifies the disk containing `/`, and emits the shared schema. If the system disk cannot be identified, every target is marked as a system disk and writing remains blocked.
