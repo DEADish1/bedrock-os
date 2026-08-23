@@ -65,5 +65,8 @@ grep -q '^ExecStart=/usr/lib/bedrock/mark-boot-healthy$' "$OS_DIR/config/include
 sh "$ROOT/installer/tests/test-target-selection.sh"
 sh "$ROOT/installer/tests/test-linux-list-targets.sh"
 sh "$ROOT/installer/tests/test-macos-list-targets.sh"
+if command -v pwsh >/dev/null 2>&1; then
+  sh "$ROOT/installer/tests/test-windows-list-targets.sh"
+fi
 
 printf 'Bedrock image configuration is valid.\n'
