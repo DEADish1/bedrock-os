@@ -87,6 +87,8 @@ This file records completed work, decisions, validation, and the next starting p
 - Added fixture-based Linux enumeration tests, including fail-closed behavior when the system disk cannot be identified.
 - Added the macOS removable-drive adapter using read-only `diskutil` property lists, including mounted-partition and system-disk detection.
 - Added macOS enumeration fixtures and the same unknown-system-disk fail-closed acceptance test.
+- Added the Windows physical-drive adapter using read-only Storage cmdlets, with boot/system, mounted-volume, removable-bus, capacity, and read-only detection.
+- Added PowerShell fixture coverage for safe USB selection and unknown-system-disk fail-closed behavior.
 
 ### Architecture decisions
 
