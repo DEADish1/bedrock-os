@@ -89,6 +89,9 @@ This file records completed work, decisions, validation, and the next starting p
 - Added macOS enumeration fixtures and the same unknown-system-disk fail-closed acceptance test.
 - Added the Windows physical-drive adapter using read-only Storage cmdlets, with boot/system, mounted-volume, removable-bus, capacity, and read-only detection.
 - Added PowerShell fixture coverage for safe USB selection and unknown-system-disk fail-closed behavior.
+- Added a canonical signed installer-image manifest for ISO and compressed raw USB artifacts.
+- Added a mandatory pre-write verifier for certificate trust, strict schema and filename matching, exact size, and SHA-256.
+- Added regression tests proving valid signed media is accepted while modified images, unexpected names, and modified manifests are rejected.
 
 ### Architecture decisions
 
