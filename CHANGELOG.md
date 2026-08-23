@@ -6,23 +6,24 @@ This file records completed work, decisions, validation, and the next starting p
 
 ### Next starting point
 
+- Boot-test the v0.2 image on physical Intel and AMD systems and the remaining common VM platforms.
 - Implement the v0.4 RAID management service: safe array/pool creation, health adapters, rebuild progress, replacement, and recovery tests.
-- Run the image workflow in the public `bedrock-os` GitHub repository and retain the first verified ISO.
-- Pin the resolved Debian package set from that clean build and compare a second build for reproducibility.
 - Add update download/resume transport, release-channel policy, and certificate-rotation handling.
-- Run the image workflow in the public `bedrock-os` GitHub repository, retain the verified ISO, and compare a second clean build for reproducibility.
-- Add hardware-inventory output for CPU, RAM, disks, NICs, and supported GPUs.
-- Create the public GitHub repositories: `bedrock-os`, `bedrock-installer`, and `bedrock-ui`.
 
 ### Bootable foundation work
 
+- Passed the reproducible-build release gate in GitHub Actions run `32644096736`: two independent Debian 13 builders produced byte-identical ISOs with identical package locks and build manifests.
+- Passed the complete raw-disk validation suite in the same run, including signed artifact verification, UEFI boot, good-update promotion, bad-update exhaustion, and automatic rollback.
+- Made release timestamps and source revisions explicit inside isolated builders instead of relying on inaccessible mounted Git metadata.
+- Made live initramfs generation independent of AMD-versus-Intel build-host hardware by always including both supported CPU microcode families.
+- Removed transient DNS, NVMe identity, download-history, random-seed, and package-cache state before sealing the image; disabled regenerated APT caches at the source.
+- Marked the v0.2 reproducible CI requirement complete; v0.2 now has seven of eight requirements complete.
 - Added the Debian 13 `live-build` configuration under `os/`.
 - Added a sorted baseline package list for boot, networking, hardware discovery, drive health, and recovery tooling.
 - Added deterministic build inputs using `SOURCE_DATE_EPOCH`, a release environment file, and a source-derived build manifest.
 - Added ISO checksum generation and artifact verification scripts.
 - Added a GitHub Actions workflow for clean Debian 13 builds, artifact upload, and build-provenance attestation.
 - Validated shell syntax, configuration invariants, package ordering, duplicate detection, and workflow YAML locally.
-- Kept “reproducible OS image builds in CI” open until CI produces a verified ISO and a second build matches it.
 - Added the machine-readable amd64 GPT layout for UEFI, root A/B, dm-verity hash/signature pairs, and persistent state.
 - Added a validated three-attempt health-gated promotion and automatic rollback policy.
 - Added layout invariants covering partition order, unique labels, standard type GUIDs, mutability, capacity, and recovery behavior.
