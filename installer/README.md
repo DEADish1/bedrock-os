@@ -15,3 +15,4 @@ Platform adapters must provide stable target IDs and refresh the inventory immed
 ## Platform adapters
 
 - `adapters/linux-list-targets.sh` reads Linux block-device metadata without elevation, identifies the disk containing `/`, and emits the shared schema. If the system disk cannot be identified, every target is marked as a system disk and writing remains blocked.
+- `adapters/macos-list-targets.sh` uses read-only `diskutil` property lists to identify whole disks, the macOS system disk, removable/ejectable media, mounted partitions, capacity, and read-only state.
