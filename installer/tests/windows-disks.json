@@ -1,0 +1,5 @@
+[
+  {"number":0,"model":"Internal NVMe","size_bytes":512110190592,"bus_type":"NVMe","is_boot":true,"is_system":true,"read_only":false,"mounted":true},
+  {"number":2,"model":" Bedrock Test USB ","size_bytes":17179869184,"bus_type":"USB","is_boot":false,"is_system":false,"read_only":false,"mounted":false},
+  {"number":3,"model":"Mounted USB","size_bytes":17179869184,"bus_type":"USB","is_boot":false,"is_system":false,"read_only":false,"mounted":true}
+]
