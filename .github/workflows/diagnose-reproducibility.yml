@@ -69,6 +69,12 @@ jobs:
           sudo sh -c '(cd initrd-b && find . -type f -print0 | sort -z | xargs -0 sha256sum)' > initrd-b.sha256
           echo 'Content differences inside initramfs:'
           diff -u initrd-a.sha256 initrd-b.sha256 | head -800 || true
+          echo 'Initramfs archive sections:'
+          find initrd-a initrd-b -mindepth 1 -maxdepth 1 -printf '%p|%y\n' | sort
+          sudo sh -c "cd initrd-a && find . -type f -exec sha256sum {} + | sed -E 's#  \\./(early[0-9]*|main)/#  ./#' | sort" > initrd-a.normalized.sha256
+          sudo sh -c "cd initrd-b && find . -type f -exec sha256sum {} + | sed -E 's#  \\./(early[0-9]*|main)/#  ./#' | sort" > initrd-b.normalized.sha256
+          echo 'Content differences after normalizing archive section names:'
+          diff -u initrd-a.normalized.sha256 initrd-b.normalized.sha256 | head -800 || true
           sudo sh -c "cd initrd-a && find . -printf '%P|%y|%m|%U|%G|%T@|%l\\n' | sort" > initrd-a.metadata
           sudo sh -c "cd initrd-b && find . -printf '%P|%y|%m|%U|%G|%T@|%l\\n' | sort" > initrd-b.metadata
           echo 'Metadata differences inside initramfs:'
