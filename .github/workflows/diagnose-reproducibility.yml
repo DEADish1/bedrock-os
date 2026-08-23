@@ -1,0 +1,46 @@
+name: Diagnose ISO reproducibility
+
+on:
+  push:
+    branches: [codex/reproducible-iso-fix]
+    paths: ['.github/workflows/diagnose-reproducibility.yml']
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends xorriso
+      - uses: actions/download-artifact@v4
+        with:
+          name: bedrock-os-amd64-1
+          path: build-a
+          repository: DEADish1/bedrock-os
+          run-id: 32640190700
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: bedrock-os-amd64-2
+          path: build-b
+          repository: DEADish1/bedrock-os
+          run-id: 32640190700
+          github-token: ${{ github.token }}
+      - name: Report remaining differences
+        run: |
+          set -eu
+          sha256sum build-a/bedrock-os-amd64.iso build-b/bedrock-os-amd64.iso
+          diff -u build-a/bedrock-build-manifest.json build-b/bedrock-build-manifest.json || true
+          diff -u build-a/packages.lock build-b/packages.lock || true
+          mkdir iso-a iso-b
+          xorriso -indev build-a/bedrock-os-amd64.iso -pvd_info 2>&1 | tee pvd-a.txt
+          xorriso -indev build-b/bedrock-os-amd64.iso -pvd_info 2>&1 | tee pvd-b.txt
+          diff -u pvd-a.txt pvd-b.txt || true
+          xorriso -osirrox on -indev build-a/bedrock-os-amd64.iso -extract / iso-a >/dev/null 2>&1
+          xorriso -osirrox on -indev build-b/bedrock-os-amd64.iso -extract / iso-b >/dev/null 2>&1
+          (cd iso-a && find . -type f -print0 | sort -z | xargs -0 sha256sum) > files-a.sha256
+          (cd iso-b && find . -type f -print0 | sort -z | xargs -0 sha256sum) > files-b.sha256
+          diff -u files-a.sha256 files-b.sha256 | head -400 || true
