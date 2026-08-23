@@ -41,4 +41,11 @@ if grep -Eq 'std::process|Command::new|tauri_plugin_shell|plugin\(.*shell' "$LIB
 fi
 
 grep -q 'No disk operation was attempted' "$LIB"
+for field in 'size_bytes: u64' 'system: bool' 'name: String' 'version: String'; do
+  grep -q "$field" "$LIB"
+done
+if grep -Eq 'capacity: String|system_disk: bool|filename: String' "$LIB"; then
+  printf 'error: desktop bridge data no longer matches the interface contract\n' >&2
+  exit 1
+fi
 printf 'Desktop shell contract is valid.\n'
