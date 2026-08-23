@@ -9,6 +9,8 @@ This file records completed work, decisions, validation, and the next starting p
 - Added a Tauri 2 desktop packaging shell for the shared Windows, macOS, and Linux installer interface.
 - Restricted the desktop window to three typed installer commands with a strict content-security policy and no general shell access.
 - Kept all native disk handlers fail-closed until the protected platform services are connected and verified.
+- Aligned native drive and image response fields with the graphical interface contract.
+- Added independent Windows, macOS, and Linux compile checks for the desktop package.
 
 ### Next starting point
 
