@@ -70,5 +70,6 @@ if command -v pwsh >/dev/null 2>&1; then
 fi
 sh "$ROOT/installer/tests/test-signed-image.sh"
 sh "$ROOT/installer/tests/test-write-verified-image.sh"
+sh "$ROOT/installer/tests/test-compressed-raw-write.sh"
 
 printf 'Bedrock image configuration is valid.\n'
