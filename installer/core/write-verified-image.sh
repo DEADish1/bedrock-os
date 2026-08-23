@@ -19,13 +19,9 @@ target=$(sh "$ROOT/installer/core/validate-target-selection.sh" "$inventory" "$t
 path=$(printf '%s\n' "$target" | jq -r .path)
 capacity=$(printf '%s\n' "$target" | jq -r .size_bytes)
 image="$release/$image_name"
-image_size=$(stat -c %s "$image" 2>/dev/null || stat -f %z "$image")
-[ "$capacity" -ge "$image_size" ] || { printf 'error: selected target is too small for this image\n' >&2; exit 1; }
-
-case "$image_name" in
-  *.iso) ;;
-  *) printf 'error: this writer currently accepts verified hybrid ISO media only\n' >&2; exit 1;;
-esac
+write_size=$(jq -r .artifact.write_size "$release/manifest.json")
+[ "$capacity" -ge "$write_size" ] || { printf 'error: selected target is too small for this image\n' >&2; exit 1; }
+image_type=$(jq -r .artifact.type "$release/manifest.json")
 
 if [ "${BEDROCK_INSTALLER_TEST_MODE:-0}" = 1 ]; then
   : "${BEDROCK_TEST_TARGET_DIR:?test mode requires BEDROCK_TEST_TARGET_DIR}"
@@ -39,17 +35,31 @@ else
 fi
 
 printf 'Writing verified Bedrock image to %s...\n' "$path"
-if ! dd if="$image" of="$path" bs=1048576 conv=fsync,notrunc 2>/dev/null; then
-  printf 'error: media write was interrupted or incomplete; reconnect or replace the drive and try again\n' >&2
+case "$image_type" in
+  iso)
+    dd if="$image" of="$path" bs=1048576 conv=fsync,notrunc 2>/dev/null || write_failed=1
+    ;;
+  raw-zst)
+    command -v zstd >/dev/null 2>&1 || { printf 'error: zstd is required to write this raw image\n' >&2; exit 1; }
+    zstd -dc "$image" | dd of="$path" bs=1048576 conv=fsync,notrunc 2>/dev/null || write_failed=1
+    ;;
+  *) write_failed=1 ;;
+esac
+[ "${write_failed:-0}" = 0 ] || {
+  printf 'error: media write was interrupted or incomplete; reconnect or replace the drive and rewrite it from the beginning\n' >&2
   exit 1
-fi
+}
 sync
+[ "${BEDROCK_TEST_INTERRUPT_AFTER_WRITE:-0}" != 1 ] || {
+  printf 'error: media write was interrupted; the drive is incomplete and must be rewritten from the beginning\n' >&2
+  exit 1
+}
 
-expected_hash=$(jq -r .artifact.sha256 "$release/manifest.json")
+expected_hash=$(jq -r .artifact.write_sha256 "$release/manifest.json")
 if command -v sha256sum >/dev/null 2>&1; then
-  actual_hash=$(dd if="$path" bs=1048576 count=$(( (image_size + 1048575) / 1048576 )) 2>/dev/null | head -c "$image_size" | sha256sum | awk '{print $1}')
+  actual_hash=$(dd if="$path" bs=1048576 count=$(( (write_size + 1048575) / 1048576 )) 2>/dev/null | head -c "$write_size" | sha256sum | awk '{print $1}')
 else
-  actual_hash=$(dd if="$path" bs=1048576 count=$(( (image_size + 1048575) / 1048576 )) 2>/dev/null | head -c "$image_size" | shasum -a 256 | awk '{print $1}')
+  actual_hash=$(dd if="$path" bs=1048576 count=$(( (write_size + 1048575) / 1048576 )) 2>/dev/null | head -c "$write_size" | shasum -a 256 | awk '{print $1}')
 fi
 [ "$actual_hash" = "$expected_hash" ] || {
   printf 'error: written media failed verification; do not boot it, and retry with another drive\n' >&2
