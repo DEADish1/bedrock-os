@@ -62,5 +62,6 @@ grep -q '^ExecStart=/usr/lib/bedrock/mark-boot-healthy$' "$OS_DIR/config/include
 [ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/multi-user.target.wants/bedrock-hardware-inventory.service" ] || { printf 'error: hardware inventory service is not enabled\n' >&2; exit 1; }
 "$OS_DIR/scripts/validate-layout.sh"
 "$OS_DIR/scripts/validate-boot.sh"
+sh "$ROOT/installer/tests/test-target-selection.sh"
 
 printf 'Bedrock image configuration is valid.\n'
