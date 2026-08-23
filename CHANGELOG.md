@@ -97,6 +97,8 @@ This file records completed work, decisions, validation, and the next starting p
 - Extended signed manifests with the exact expanded size and SHA-256 of bytes destined for disk.
 - Added streaming Zstandard raw-image writing with expanded-byte capacity checks and full post-write verification.
 - Added deterministic interrupted-write failure handling that requires a complete rewrite, plus compressed-raw and interruption regression coverage.
+- Added the branded responsive graphical installer shell with guided verification, removable-drive selection, exact erase confirmation, write progress, recovery messages, and keyboard-accessible explanations.
+- Restricted the UI to three narrow desktop-bridge commands so frontend code cannot enumerate or write disks directly.
 
 ### Architecture decisions
 
