@@ -27,3 +27,9 @@ Immediately before writing, the privileged helper must enumerate again and requi
 - Refuse system, mounted, read-only, undersized, or non-removable media again after elevation.
 - Stream writes with progress, flush all data, reread and hash the completed media, then safely eject when supported.
 - Treat interruption, short writes, disappearing media, and verification mismatch as failures with recovery guidance.
+
+## Protected helper boundary
+
+The desktop package contains a separate `bedrock-media-writer` executable. It accepts only a bounded schema-1 request on standard input, requires a valid opaque session identity and a request no more than two minutes old, independently re-verifies the signed image, locates only a packaged platform scanner relative to its own executable, refreshes inventory, and repeats the complete target and confirmation checks. Unknown request fields, caller-provided scanner paths, relative image paths, oversized requests, and expired requests are rejected.
+
+The helper currently stops after preflight. It does not open a physical target until signed package placement, OS-specific elevation, administrator verification, whole-device opening, exclusive access, flush/eject, and real-device acceptance tests are complete.

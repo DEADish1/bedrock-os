@@ -71,6 +71,11 @@ grep -q 'fn validate_write_target' "$LIB"
 grep -q 'mod media_writer;' "$LIB"
 grep -q 'fn write_verified_media' "$TAURI/src/media_writer.rs"
 grep -q 'The written media checksum does not match the signed release' "$TAURI/src/media_writer.rs"
+grep -q 'fn protected_writer_preflight' "$LIB"
+grep -q 'deny_unknown_fields' "$LIB"
+grep -q 'MAX_HELPER_REQUEST_BYTES' "$LIB"
+grep -q 'HELPER_REQUEST_LIFETIME_SECONDS' "$LIB"
+grep -q 'run_protected_writer_helper' "$TAURI/src/bin/bedrock-media-writer.rs"
 
 if grep -q 'dialog:' "$TAURI/capabilities/default.json"; then
   printf 'error: the frontend must not receive direct dialog-plugin permission\n' >&2

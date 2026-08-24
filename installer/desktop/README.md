@@ -10,6 +10,8 @@ Live removable-drive discovery is connected to the bundled read-only Windows, ma
 
 The native media engine is implemented and tested for ISO streams and compressed raw images. It enforces the signed expanded size, emits progress, flushes the target, rereads the written range, and verifies the signed SHA-256. The application still cannot open a physical disk for writing; that remains isolated behind the unfinished OS-specific elevated helper.
 
+A separate `bedrock-media-writer` executable now owns the protected-helper preflight. It reads one small, strict, time-limited request from standard input, independently re-verifies the release, finds only a packaged platform scanner relative to itself, refreshes drive inventory, and repeats the exact selection checks. It deliberately exits before opening the drive until signed package placement and native elevation are connected and accepted on real hardware.
+
 The Rust response models use the same camel-case fields consumed by `ui/app.js`. GitHub checks the contract and compiles the shell independently on Windows, macOS, and Linux before it can be accepted.
 
 The packaged application uses the official 512-pixel Bedrock app icon from the supplied brand kit.

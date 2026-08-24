@@ -5,6 +5,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{path::BaseDirectory, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
@@ -17,6 +18,8 @@ const RELEASE_TRUST_CERT_PEM: &[u8] =
 const BRIDGE_UNAVAILABLE: &str =
     "The protected disk service is not connected. No disk operation was attempted.";
 const MINIMUM_TARGET_SIZE: u64 = 8 * 1024 * 1024 * 1024;
+const MAX_HELPER_REQUEST_BYTES: u64 = 64 * 1024;
+const HELPER_REQUEST_LIFETIME_SECONDS: u64 = 120;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct InstallTarget {
@@ -78,6 +81,17 @@ struct VerifiedSession {
 #[derive(Default)]
 struct InstallerState {
     verified: Mutex<Option<VerifiedSession>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrivilegedWriteRequest {
+    schema: u8,
+    session_id: String,
+    requested_at: u64,
+    image_path: PathBuf,
+    target_id: String,
+    confirmation: String,
 }
 
 #[tauri::command]
@@ -372,6 +386,103 @@ fn validate_write_target<'a>(
     Ok(target)
 }
 
+fn validate_helper_request(request: &PrivilegedWriteRequest, now: u64) -> Result<(), String> {
+    if request.schema != 1
+        || Uuid::parse_str(&request.session_id).is_err()
+        || !request.image_path.is_absolute()
+        || request.target_id.is_empty()
+        || request.target_id.len() > 512
+        || request.confirmation.is_empty()
+        || request.confirmation.len() > 1024
+    {
+        return Err("The protected writer request is invalid.".into());
+    }
+    if request.requested_at > now.saturating_add(30)
+        || now.saturating_sub(request.requested_at) > HELPER_REQUEST_LIFETIME_SECONDS
+    {
+        return Err("The protected writer request has expired.".into());
+    }
+    Ok(())
+}
+
+fn helper_adapter_path(executable: &Path) -> Result<PathBuf, String> {
+    let executable_dir = executable
+        .parent()
+        .ok_or_else(|| "The protected writer location is invalid.".to_string())?;
+    let adapter = platform_adapter_path();
+    let candidates = [
+        executable_dir.join(adapter),
+        executable_dir.join("adapters").join(
+            Path::new(adapter)
+                .file_name()
+                .ok_or_else(|| "The drive scanner name is invalid.".to_string())?,
+        ),
+        executable_dir.join("../Resources").join(adapter),
+        executable_dir
+            .join("../share/bedrock-installer")
+            .join(adapter),
+    ];
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .ok_or_else(|| "The protected writer could not locate its packaged drive scanner.".into())
+}
+
+fn protected_writer_preflight<R: Read>(
+    input: R,
+    executable: &Path,
+    now: u64,
+) -> Result<(), String> {
+    let mut request_bytes = Vec::new();
+    input
+        .take(MAX_HELPER_REQUEST_BYTES + 1)
+        .read_to_end(&mut request_bytes)
+        .map_err(|_| "The protected writer request could not be read.".to_string())?;
+    if request_bytes.len() as u64 > MAX_HELPER_REQUEST_BYTES {
+        return Err("The protected writer request is too large.".into());
+    }
+    let request: PrivilegedWriteRequest = serde_json::from_slice(&request_bytes)
+        .map_err(|_| "The protected writer request format is invalid.".to_string())?;
+    validate_helper_request(&request, now)?;
+
+    let manifest = verify_signed_release(&request.image_path, RELEASE_TRUST_CERT_PEM)?;
+    let targets = parse_inventory(&run_inventory_adapter(&helper_adapter_path(executable)?)?)?;
+    validate_write_target(
+        &targets,
+        &request.target_id,
+        &request.confirmation,
+        manifest.artifact.write_size,
+    )?;
+    Ok(())
+}
+
+pub fn run_protected_writer_helper() -> i32 {
+    let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_secs(),
+        Err(_) => {
+            eprintln!("The protected writer could not validate the system clock.");
+            return 1;
+        }
+    };
+    let executable = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(_) => {
+            eprintln!("The protected writer executable could not be identified.");
+            return 1;
+        }
+    };
+    match protected_writer_preflight(std::io::stdin().lock(), &executable, now) {
+        Ok(()) => {
+            eprintln!("{BRIDGE_UNAVAILABLE}");
+            1
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            1
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -389,7 +500,8 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_sha256, parse_inventory, validate_write_target, verify_cms_signature, InstallTarget,
+        is_sha256, parse_inventory, protected_writer_preflight, validate_helper_request,
+        validate_write_target, verify_cms_signature, InstallTarget, PrivilegedWriteRequest,
     };
     use openssl::asn1::Asn1Time;
     use openssl::bn::BigNum;
@@ -399,6 +511,9 @@ mod tests {
     use openssl::rsa::Rsa;
     use openssl::x509::extension::{BasicConstraints, ExtendedKeyUsage, KeyUsage};
     use openssl::x509::{X509NameBuilder, X509};
+    use std::io::Cursor;
+    use std::path::{Path, PathBuf};
+    use uuid::Uuid;
 
     #[test]
     fn accepts_shared_inventory_contract() {
@@ -456,6 +571,50 @@ mod tests {
             9 * 1024 * 1024 * 1024,
         )
         .is_err());
+    }
+
+    fn helper_request(requested_at: u64) -> PrivilegedWriteRequest {
+        PrivilegedWriteRequest {
+            schema: 1,
+            session_id: Uuid::new_v4().to_string(),
+            requested_at,
+            image_path: absolute_test_image_path(),
+            target_id: "linux:test".into(),
+            confirmation: "ERASE Test USB — /dev/test — 8589934592".into(),
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn absolute_test_image_path() -> PathBuf {
+        PathBuf::from(r"C:\releases\bedrock-os-amd64.iso")
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn absolute_test_image_path() -> PathBuf {
+        PathBuf::from("/releases/bedrock-os-amd64.iso")
+    }
+
+    #[test]
+    fn accepts_only_fresh_bounded_helper_requests() {
+        assert!(validate_helper_request(&helper_request(1_000), 1_100).is_ok());
+        assert!(validate_helper_request(&helper_request(1_000), 1_121).is_err());
+        assert!(validate_helper_request(&helper_request(1_031), 1_000).is_err());
+
+        let mut request = helper_request(1_000);
+        request.image_path = PathBuf::from("bedrock-os-amd64.iso");
+        assert!(validate_helper_request(&request, 1_000).is_err());
+
+        let mut request = helper_request(1_000);
+        request.target_id = "x".repeat(513);
+        assert!(validate_helper_request(&request, 1_000).is_err());
+    }
+
+    #[test]
+    fn rejects_oversized_helper_input_before_processing() {
+        let input = Cursor::new(vec![b'x'; 64 * 1024 + 1]);
+        let error = protected_writer_preflight(input, Path::new("/bedrock/helper"), 1_000)
+            .unwrap_err();
+        assert!(error.contains("too large"));
     }
 
     fn temporary_signer() -> (PKey<openssl::pkey::Private>, X509) {

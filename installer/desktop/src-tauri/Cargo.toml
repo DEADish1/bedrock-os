@@ -5,6 +5,7 @@ description = "Bedrock OS graphical media installer"
 authors = ["Bedrock OS contributors"]
 edition = "2021"
 license = "MIT"
+default-run = "bedrock-installer"
 
 [lib]
 name = "bedrock_installer_lib"

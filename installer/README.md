@@ -18,6 +18,8 @@ Platform adapters must provide stable target IDs and refresh the inventory immed
 
 The desktop package now also contains a platform-neutral native streaming engine for the protected helper. It writes ISO or compressed raw content, reports byte progress, rejects short or oversized streams, flushes, rereads the exact signed range, and requires the signed expanded SHA-256. It is not connected to a physical target until the OS-specific elevation and whole-disk opening layer is complete.
 
+`desktop/src-tauri/src/bin/bedrock-media-writer.rs` is the separate protected-helper entry point. Its bounded, time-limited request contains no caller-selected target path. The helper independently verifies the image, resolves only its packaged drive scanner, refreshes inventory, and repeats target selection before stopping at the disabled physical-device boundary.
+
 ## Platform adapters
 
 - `adapters/linux-list-targets.sh` reads Linux block-device metadata without elevation, identifies the disk containing `/`, and emits the shared schema. If the system disk cannot be identified, every target is marked as a system disk and writing remains blocked.
