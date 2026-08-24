@@ -16,6 +16,8 @@ use uuid::Uuid;
 mod media_writer;
 mod device_finalizer;
 mod write_pipeline;
+#[cfg(target_os = "linux")]
+mod physical_device;
 
 const RELEASE_TRUST_CERT_PEM: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/bedrock-release-trust.pem"));
@@ -26,6 +28,7 @@ const MINIMUM_TARGET_SIZE: u64 = 8 * 1024 * 1024 * 1024;
 const MAX_HELPER_REQUEST_BYTES: u64 = 16 * 1024;
 const HELPER_REQUEST_LIFETIME_SECONDS: u64 = 120;
 const HELPER_PREFLIGHT_ONLY_EXIT: i32 = 3;
+const HELPER_WRITE_COMPLETE_EXIT: i32 = 0;
 const MACOS_APP_IDENTIFIER: &str = "os.bedrock.installer";
 const MACOS_HELPER_IDENTIFIER: &str = "com.bedrock.server.installer.writer";
 #[cfg(target_os = "macos")]
@@ -107,6 +110,20 @@ struct PrivilegedWriteRequest {
 #[derive(Debug)]
 struct PreparedWrite {
     target: InstallTarget,
+    image_path: PathBuf,
+    image_type: String,
+    write_size: u64,
+    write_sha256: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProtectedWriterResult {
+    PreflightOnly,
+    WriteComplete,
+}
+
+fn physical_writer_enabled() -> bool {
+    cfg!(all(target_os = "linux", bedrock_physical_writer))
 }
 
 #[tauri::command]
@@ -379,8 +396,10 @@ fn write_verified_image(
         target_id,
         confirmation,
     };
-    launch_protected_writer(&request)?;
-    Err(BRIDGE_UNAVAILABLE.into())
+    match launch_protected_writer(&request)? {
+        ProtectedWriterResult::WriteComplete => Ok(()),
+        ProtectedWriterResult::PreflightOnly => Err(BRIDGE_UNAVAILABLE.into()),
+    }
 }
 
 fn validate_write_target<'a>(
@@ -691,13 +710,16 @@ fn linux_helper_command(encoded: &str) -> Command {
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-fn launch_protected_writer(request: &PrivilegedWriteRequest) -> Result<(), String> {
+fn launch_protected_writer(
+    request: &PrivilegedWriteRequest,
+) -> Result<ProtectedWriterResult, String> {
     let encoded = encode_helper_request(request)?;
     let status = linux_helper_command(&encoded)
         .status()
         .map_err(|_| "The Linux administrator approval service could not start.".to_string())?;
     match status.code() {
-        Some(HELPER_PREFLIGHT_ONLY_EXIT) => Ok(()),
+        Some(HELPER_WRITE_COMPLETE_EXIT) => Ok(ProtectedWriterResult::WriteComplete),
+        Some(HELPER_PREFLIGHT_ONLY_EXIT) => Ok(ProtectedWriterResult::PreflightOnly),
         Some(126) | Some(127) => {
             Err("Administrator approval was cancelled or unavailable.".into())
         }
@@ -720,7 +742,9 @@ unsafe extern "C" {
 }
 
 #[cfg(target_os = "macos")]
-fn launch_protected_writer(request: &PrivilegedWriteRequest) -> Result<(), String> {
+fn launch_protected_writer(
+    request: &PrivilegedWriteRequest,
+) -> Result<ProtectedWriterResult, String> {
     let bytes = helper_request_bytes(request)?;
     let requirement = macos_peer_requirement(MACOS_HELPER_IDENTIFIER, APPLE_TEAM_ID)?;
     let requirement = std::ffi::CString::new(requirement)
@@ -729,7 +753,8 @@ fn launch_protected_writer(request: &PrivilegedWriteRequest) -> Result<(), Strin
         bedrock_macos_send_writer_request(bytes.as_ptr(), bytes.len(), requirement.as_ptr())
     };
     match result {
-        HELPER_PREFLIGHT_ONLY_EXIT => Ok(()),
+        HELPER_WRITE_COMPLETE_EXIT => Ok(ProtectedWriterResult::WriteComplete),
+        HELPER_PREFLIGHT_ONLY_EXIT => Ok(ProtectedWriterResult::PreflightOnly),
         4 => Err(
             "Approve Bedrock Installer in System Settings > General > Login Items, then try again. No disk operation was attempted."
                 .into(),
@@ -749,7 +774,9 @@ fn launch_protected_writer(request: &PrivilegedWriteRequest) -> Result<(), Strin
 }
 
 #[cfg(target_os = "windows")]
-fn launch_protected_writer(request: &PrivilegedWriteRequest) -> Result<(), String> {
+fn launch_protected_writer(
+    request: &PrivilegedWriteRequest,
+) -> Result<ProtectedWriterResult, String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
     use windows_sys::Win32::System::Threading::{
@@ -799,10 +826,12 @@ fn launch_protected_writer(request: &PrivilegedWriteRequest) -> Result<(), Strin
     if wait != WAIT_OBJECT_0 || read_exit == 0 {
         return Err("The protected Windows writer did not finish safely.".into());
     }
-    if exit_code == HELPER_PREFLIGHT_ONLY_EXIT as u32 {
-        Ok(())
-    } else {
-        Err("The protected writer rejected the request. No disk operation was attempted.".into())
+    match exit_code as i32 {
+        HELPER_WRITE_COMPLETE_EXIT => Ok(ProtectedWriterResult::WriteComplete),
+        HELPER_PREFLIGHT_ONLY_EXIT => Ok(ProtectedWriterResult::PreflightOnly),
+        _ => Err(
+            "The protected writer rejected the request. No disk operation was attempted.".into(),
+        ),
     }
 }
 
@@ -855,13 +884,54 @@ fn protected_writer_preflight<R: Read>(
         manifest.artifact.write_size,
     )?
     .clone();
-    Ok(PreparedWrite { target })
+    Ok(PreparedWrite {
+        target,
+        image_path: request.image_path,
+        image_type: manifest.artifact.image_type,
+        write_size: manifest.artifact.write_size,
+        write_sha256: manifest.artifact.write_sha256,
+    })
 }
 
 fn protected_writer_open_gate<R: Read>(input: R, executable: &Path, now: u64) -> Result<(), String> {
     let prepared = protected_writer_preflight(input, executable, now)?;
     let _exclusive_device = open_exclusive_whole_device(&prepared.target)?;
     Ok(())
+}
+
+#[cfg(all(target_os = "linux", bedrock_physical_writer))]
+fn protected_writer_operation<R: Read>(
+    input: R,
+    executable: &Path,
+    now: u64,
+) -> Result<ProtectedWriterResult, String> {
+    use crate::physical_device::LinuxPhysicalDevice;
+    use crate::write_pipeline::write_verify_and_finalize;
+
+    let prepared = protected_writer_preflight(input, executable, now)?;
+    let mut source = File::open(&prepared.image_path)
+        .map_err(|_| "The verified image could not be reopened for writing.".to_string())?;
+    let exclusive = open_exclusive_whole_device(&prepared.target)?;
+    let mut device = LinuxPhysicalDevice::from_exclusive_file(exclusive);
+    write_verify_and_finalize(
+        &prepared.image_type,
+        &mut source,
+        &mut device,
+        prepared.write_size,
+        &prepared.write_sha256,
+        |_, _| {},
+    )?;
+    Ok(ProtectedWriterResult::WriteComplete)
+}
+
+#[cfg(not(all(target_os = "linux", bedrock_physical_writer)))]
+fn protected_writer_operation<R: Read>(
+    input: R,
+    executable: &Path,
+    now: u64,
+) -> Result<ProtectedWriterResult, String> {
+    protected_writer_open_gate(input, executable, now)?;
+    Ok(ProtectedWriterResult::PreflightOnly)
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -886,15 +956,16 @@ pub fn run_protected_writer_helper() -> i32 {
     };
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let result = match arguments.as_slice() {
-        [] => protected_writer_open_gate(std::io::stdin().lock(), &executable, now),
+        [] => protected_writer_operation(std::io::stdin().lock(), &executable, now),
         [flag, encoded] if flag == "--request-base64" => decode_helper_request(encoded)
             .and_then(|bytes| {
-                protected_writer_open_gate(std::io::Cursor::new(bytes), &executable, now)
+                protected_writer_operation(std::io::Cursor::new(bytes), &executable, now)
             }),
         _ => Err("The protected writer command line is invalid.".into()),
     };
     match result {
-        Ok(()) => {
+        Ok(ProtectedWriterResult::WriteComplete) => HELPER_WRITE_COMPLETE_EXIT,
+        Ok(ProtectedWriterResult::PreflightOnly) => {
             eprintln!("{BRIDGE_UNAVAILABLE}");
             HELPER_PREFLIGHT_ONLY_EXIT
         }
@@ -985,9 +1056,9 @@ mod tests {
     use super::{
         decode_helper_request, encode_helper_request, is_sha256, parse_inventory,
         macos_peer_requirement, protected_writer_preflight, validate_elevated_identity,
-        validate_helper_request, validate_write_target, verify_cms_signature,
-        whole_device_open_path, InstallTarget, PrivilegedWriteRequest, MACOS_APP_IDENTIFIER,
-        MACOS_HELPER_IDENTIFIER,
+        physical_writer_enabled, validate_helper_request, validate_write_target,
+        verify_cms_signature, whole_device_open_path, InstallTarget, PrivilegedWriteRequest,
+        MACOS_APP_IDENTIFIER, MACOS_HELPER_IDENTIFIER,
     };
     use openssl::asn1::Asn1Time;
     use openssl::bn::BigNum;
@@ -1145,6 +1216,12 @@ mod tests {
         let error = validate_elevated_identity(false).unwrap_err();
         assert!(error.contains("administrator authority"));
         assert!(error.contains("No disk operation was attempted"));
+    }
+
+    #[test]
+    #[cfg(not(bedrock_physical_writer))]
+    fn normal_build_keeps_physical_writing_disabled() {
+        assert!(!physical_writer_enabled());
     }
 
     #[test]

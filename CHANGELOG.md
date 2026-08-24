@@ -38,6 +38,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Added an end-to-end virtual-device pipeline covering verified ISO and compressed-raw writing, progress, reread identity, cache synchronization, eject/manual-removal outcomes, and fail-closed checksum and synchronization errors without accessing host media.
 - Added an explicitly destructive Linux disposable-drive acceptance runner with fresh inventory, whole/removable-device checks, exact path/capacity attestations, conservative large-drive protection, and privacy-safe evidence that cannot be confused with fixture results.
 - Added fixture-tested Windows and macOS disposable-drive preflight gates with native inventory, exact whole-device/path/capacity/confirmation checks, destructive and large-drive attestations, and an explicit disabled-writer plan result.
+- Added an acceptance-only Linux native device adapter connecting one exclusive handle through verified write, reread, synchronization, and finalization behind an exact production-trust build token; normal builds remain preflight-only and completed writes use a distinct helper result.
 
 ### Next starting point
 

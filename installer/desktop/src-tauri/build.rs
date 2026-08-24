@@ -2,8 +2,23 @@ fn main() {
     println!("cargo:rerun-if-env-changed=BEDROCK_INSTALLER_TRUST_CERT");
     println!("cargo:rerun-if-env-changed=BEDROCK_REQUIRE_PRODUCTION_TRUST");
     println!("cargo:rerun-if-env-changed=BEDROCK_APPLE_TEAM_ID");
-
+    println!("cargo:rerun-if-env-changed=BEDROCK_ENABLE_PHYSICAL_WRITER");
+    println!("cargo:rustc-check-cfg=cfg(bedrock_physical_writer)");
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS is set");
+
+    if let Some(value) = std::env::var_os("BEDROCK_ENABLE_PHYSICAL_WRITER") {
+        if value != "I_ACCEPT_REAL_DEVICE_DATA_LOSS" {
+            panic!("BEDROCK_ENABLE_PHYSICAL_WRITER has an invalid value");
+        }
+        if std::env::var_os("BEDROCK_REQUIRE_PRODUCTION_TRUST").is_none() {
+            panic!("physical writer builds require BEDROCK_REQUIRE_PRODUCTION_TRUST");
+        }
+        if target_os != "linux" {
+            panic!("the gated physical writer is not connected on this target OS");
+        }
+        println!("cargo:rustc-cfg=bedrock_physical_writer");
+    }
+
     if target_os == "macos" {
         println!("cargo:rerun-if-changed=src/macos_service.m");
         cc::Build::new()
