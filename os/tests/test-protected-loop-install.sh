@@ -65,7 +65,7 @@ BEDROCK_ENABLE_SYSTEM_PHYSICAL_WRITER=I_ACCEPT_REAL_SYSTEM_DISK_DATA_LOSS \
 BEDROCK_REQUIRE_PRODUCTION_TRUST=1 \
   sh "$ROOT/os/installer/build-protected-system-writer.sh" "$work/writer"
 
-loop_device=$(losetup --find --show "$target_image")
+loop_device=$(losetup --find --show --partscan "$target_image")
 case $loop_device in /dev/loop[0-9]*) ;; *) printf 'error: disposable target is not a loop device\n' >&2; exit 1 ;; esac
 backing_file=$(cat "/sys/class/block/${loop_device##*/}/loop/backing_file")
 [ "$(readlink -f "$backing_file")" = "$(readlink -f "$target_image")" ] || {
