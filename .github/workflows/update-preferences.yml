@@ -1,0 +1,26 @@
+name: Update preferences
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/update-preferences.yml"
+      - "os/config/includes.chroot/etc/systemd/system/timers.target.wants/bedrock-update-check.timer"
+      - "os/config/includes.chroot/usr/lib/bedrock/check-for-updates"
+      - "os/config/includes.chroot/usr/lib/systemd/system/bedrock-update-check.service"
+      - "os/config/includes.chroot/usr/lib/systemd/system/bedrock-update-check.timer"
+      - "os/config/includes.chroot/usr/sbin/bedrock-setup-updates"
+      - "os/config/includes.chroot/usr/sbin/bedrock-update-settings"
+      - "os/config/includes.chroot/usr/share/bedrock/default-update-policy.json"
+      - "os/tests/test-update-preferences.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  policy-contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate opt-in, opt-out, manual checks, and signed metadata
+        run: sh os/tests/test-update-preferences.sh

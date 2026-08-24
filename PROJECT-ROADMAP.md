@@ -44,6 +44,7 @@ Exit: a repeatable image boots, identifies hardware, persists configuration, upd
 - [ ] Write and verify USB media; provide ISO download and DVD guidance.
 - [ ] Implement on-server installation to a selected system drive.
 - [ ] Add first-run wizard for hostname, administrator, network, time, and updates.
+  - Update preference step implemented: users choose automatic signed-metadata checks or manual-only checks; the rest of the first-run wizard remains open.
 - [ ] Test interrupted writes, bad media, insufficient space, and recovery messages.
 
 Exit: a new user can create media and install Bedrock without using a terminal.

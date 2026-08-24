@@ -1,0 +1,66 @@
+#!/bin/sh
+set -eu
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+LC_ALL=C
+export PATH LC_ALL
+if [ "${BEDROCK_UPDATE_TEST_MODE:-0}" = 1 ]; then
+  policy=${BEDROCK_UPDATE_POLICY_FILE:?test mode requires BEDROCK_UPDATE_POLICY_FILE}
+  default_policy=${BEDROCK_UPDATE_DEFAULT_POLICY:?test mode requires BEDROCK_UPDATE_DEFAULT_POLICY}
+  checker=${BEDROCK_UPDATE_CHECKER:?test mode requires BEDROCK_UPDATE_CHECKER}
+else
+  policy=/var/lib/bedrock/settings/update-policy.json
+  default_policy=/usr/share/bedrock/default-update-policy.json
+  checker=/usr/lib/bedrock/check-for-updates
+fi
+
+usage() { printf 'usage: %s show | automatic-checks on|off | check-now\n' "$0" >&2; exit 2; }
+select_policy() {
+  selected_policy=$policy
+  [ -s "$selected_policy" ] || selected_policy=$default_policy
+  [ -f "$selected_policy" ] && [ ! -L "$selected_policy" ] || {
+    printf 'error: update policy is missing or indirect\n' >&2
+    exit 1
+  }
+  jq -e '
+    (keys | sort) == (["automatic_checks","channel","endpoint","schema","setup_choice_recorded"] | sort) and
+    .schema == 1 and (.automatic_checks | type == "boolean") and
+    (.setup_choice_recorded | type == "boolean") and .channel == "stable" and
+    (.endpoint | type == "string" and test("^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._/-]*)?$"))
+  ' "$selected_policy" >/dev/null || { printf 'error: update policy is invalid\n' >&2; exit 1; }
+}
+[ "$#" -ge 1 ] || usage
+case $1 in
+  show)
+    [ "$#" -eq 1 ] || usage
+    select_policy
+    cat "$selected_policy"
+    ;;
+  automatic-checks)
+    [ "$#" -eq 2 ] || usage
+    [ "$2" = on ] || [ "$2" = off ] || usage
+    if [ "${BEDROCK_UPDATE_TEST_MODE:-0}" != 1 ]; then
+      [ "$(id -u)" -eq 0 ] || { printf 'error: changing update settings requires root\n' >&2; exit 1; }
+    fi
+    enabled=false
+    [ "$2" = off ] || enabled=true
+    select_policy
+    mkdir -p "$(dirname -- "$policy")"
+    temporary=$(mktemp "$(dirname -- "$policy")/.update-policy.XXXXXX")
+    trap 'rm -f "$temporary"' EXIT INT TERM
+    jq --argjson enabled "$enabled" \
+      '.automatic_checks = $enabled | .setup_choice_recorded = true' "$selected_policy" > "$temporary"
+    chmod 0644 "$temporary"
+    mv "$temporary" "$policy"
+    trap - EXIT INT TERM
+    printf 'Automatic update checks are %s. Manual checks remain available.\n' "$2"
+    ;;
+  check-now)
+    [ "$#" -eq 1 ] || usage
+    if [ "${BEDROCK_UPDATE_TEST_MODE:-0}" != 1 ]; then
+      [ "$(id -u)" -eq 0 ] || { printf 'error: checking for updates requires root\n' >&2; exit 1; }
+    fi
+    exec "$checker" --manual
+    ;;
+  *) usage ;;
+esac

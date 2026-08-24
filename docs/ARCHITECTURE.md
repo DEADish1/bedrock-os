@@ -10,7 +10,7 @@ Status: accepted for implementation; changes require a recorded architecture dec
 - Boot: UEFI with systemd-boot and two bootable system slots.
 - System image: immutable, signed, read-only root protected with dm-verity.
 - Persistence: dedicated configuration/state partition plus separate user storage pools. Runtime state must never make the system image non-reproducible.
-- Updates: signed release metadata, verified image download, inactive-slot installation, health-confirmed promotion, and automatic/manual rollback. UKIs carry monotonic `IMAGE_VERSION` metadata; systemd-boot selects the newest viable image and moves an entry behind its fallback when its counted attempts reach zero.
+- Updates: signed release metadata, user-controlled scheduled or manual availability checks, verified image download, inactive-slot installation, health-confirmed promotion, and automatic/manual rollback. Scheduled checks default off until first-run setup records the user's choice, never install automatically, and make no network request when disabled. UKIs carry monotonic `IMAGE_VERSION` metadata; systemd-boot selects the newest viable image and moves an entry behind its fallback when its counted attempts reach zero.
 - Builds: reproducible CI image pipeline producing ISO, raw USB image, SBOM, provenance, SHA-256 checksums, and signatures.
 - Disk contract: `os/layout/bedrock-amd64.json` defines ESP, root A/B, matching dm-verity and signature partitions, and growing persistent state. Root slot selection is bound to the signed root hash rather than an ambiguous first matching partition.
 
