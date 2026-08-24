@@ -21,16 +21,16 @@ enum {
 
 extern int32_t bedrock_macos_handle_writer_request(const uint8_t *bytes, uintptr_t length);
 
-int32_t bedrock_macos_probe_exclusive_disk(const char *path, uint64_t expected_size)
+static int32_t bedrock_macos_open_validated_disk(const char *path, uint64_t expected_size)
 {
     if (path == NULL || expected_size == 0) {
-        return BRWriterRejected;
+        return -1;
     }
     const int descriptor = open(
         path,
         O_RDWR | O_EXCL | O_EXLOCK | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
     if (descriptor < 0) {
-        return BRWriterRejected;
+        return -1;
     }
     struct stat identity = {0};
     uint32_t block_size = 0;
@@ -42,8 +42,26 @@ int32_t bedrock_macos_probe_exclusive_disk(const char *path, uint64_t expected_s
         && block_size > 0
         && block_count <= UINT64_MAX / block_size
         && block_count * block_size == expected_size;
+    if (!valid) {
+        close(descriptor);
+        return -1;
+    }
+    return descriptor;
+}
+
+int32_t bedrock_macos_probe_exclusive_disk(const char *path, uint64_t expected_size)
+{
+    const int32_t descriptor = bedrock_macos_open_validated_disk(path, expected_size);
+    if (descriptor < 0) {
+        return BRWriterRejected;
+    }
     close(descriptor);
-    return valid ? 0 : BRWriterRejected;
+    return 0;
+}
+
+int32_t bedrock_macos_open_exclusive_disk(const char *path, uint64_t expected_size)
+{
+    return bedrock_macos_open_validated_disk(path, expected_size);
 }
 
 int32_t bedrock_macos_synchronize_disk(int32_t descriptor)
@@ -168,7 +186,13 @@ int32_t bedrock_macos_send_writer_request(
                 result = (int32_t)reply;
                 dispatch_semaphore_signal(completed);
             }];
-            const dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_SEC);
+#ifdef BEDROCK_PHYSICAL_WRITER
+            const int64_t timeout_seconds = 24 * 60 * 60;
+#else
+            const int64_t timeout_seconds = 120;
+#endif
+            const dispatch_time_t deadline = dispatch_time(
+                DISPATCH_TIME_NOW, timeout_seconds * NSEC_PER_SEC);
             if (dispatch_semaphore_wait(completed, deadline) != 0) {
                 result = BRWriterConnectionFailed;
             }

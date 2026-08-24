@@ -13,7 +13,7 @@ fn main() {
         if std::env::var_os("BEDROCK_REQUIRE_PRODUCTION_TRUST").is_none() {
             panic!("physical writer builds require BEDROCK_REQUIRE_PRODUCTION_TRUST");
         }
-        if target_os != "linux" && target_os != "windows" {
+        if target_os != "linux" && target_os != "macos" && target_os != "windows" {
             panic!("the gated physical writer is not connected on this target OS");
         }
         println!("cargo:rustc-cfg=bedrock_physical_writer");
@@ -21,12 +21,16 @@ fn main() {
 
     if target_os == "macos" {
         println!("cargo:rerun-if-changed=src/macos_service.m");
-        cc::Build::new()
+        let mut service = cc::Build::new();
+        service
             .file("src/macos_service.m")
             .flag("-fobjc-arc")
             .flag("-fblocks")
-            .flag("-mmacosx-version-min=13.0")
-            .compile("bedrock_macos_service");
+            .flag("-mmacosx-version-min=13.0");
+        if std::env::var_os("BEDROCK_ENABLE_PHYSICAL_WRITER").is_some() {
+            service.define("BEDROCK_PHYSICAL_WRITER", None);
+        }
+        service.compile("bedrock_macos_service");
         println!("cargo:rustc-link-lib=framework=Foundation");
         println!("cargo:rustc-link-lib=framework=ServiceManagement");
         if std::env::var_os("BEDROCK_REQUIRE_PRODUCTION_TRUST").is_some() {

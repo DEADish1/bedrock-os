@@ -16,7 +16,11 @@ use uuid::Uuid;
 mod media_writer;
 mod device_finalizer;
 mod write_pipeline;
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 mod physical_device;
 
 const RELEASE_TRUST_CERT_PEM: &[u8] =
@@ -123,10 +127,7 @@ enum ProtectedWriterResult {
 }
 
 fn physical_writer_enabled() -> bool {
-    cfg!(all(
-        any(target_os = "linux", target_os = "windows"),
-        bedrock_physical_writer
-    ))
+    cfg!(bedrock_physical_writer)
 }
 
 #[tauri::command]
@@ -595,9 +596,11 @@ fn open_exclusive_whole_device(
 #[cfg(target_os = "macos")]
 unsafe extern "C" {
     fn bedrock_macos_probe_exclusive_disk(path: *const core::ffi::c_char, size: u64) -> i32;
+    #[cfg(bedrock_physical_writer)]
+    fn bedrock_macos_open_exclusive_disk(path: *const core::ffi::c_char, size: u64) -> i32;
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", not(bedrock_physical_writer)))]
 fn open_exclusive_whole_device(target: &InstallTarget) -> Result<(), String> {
     let path = whole_device_open_path(target)?;
     let path = std::ffi::CString::new(path.to_string_lossy().as_bytes())
@@ -609,6 +612,27 @@ fn open_exclusive_whole_device(target: &InstallTarget) -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+#[cfg(all(target_os = "macos", bedrock_physical_writer))]
+fn open_exclusive_whole_device(
+    target: &InstallTarget,
+) -> Result<crate::physical_device::PlatformPhysicalDevice, String> {
+    let path = whole_device_open_path(target)?;
+    let path = std::ffi::CString::new(path.to_string_lossy().as_bytes())
+        .map_err(|_| "The confirmed macOS disk path is invalid.".to_string())?;
+    let descriptor = unsafe {
+        bedrock_macos_open_exclusive_disk(path.as_ptr(), target.size_bytes)
+    };
+    if descriptor < 0 {
+        return Err(
+            "The confirmed macOS disk could not be exclusively opened with the same capacity."
+                .into(),
+        );
+    }
+    Ok(unsafe {
+        crate::physical_device::PlatformPhysicalDevice::from_exclusive_descriptor(descriptor)
+    })
 }
 
 #[cfg(target_os = "windows")]
@@ -909,7 +933,11 @@ fn protected_writer_open_gate<R: Read>(input: R, executable: &Path, now: u64) ->
 }
 
 #[cfg(all(
-    any(target_os = "linux", target_os = "windows"),
+    any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows"
+    ),
     bedrock_physical_writer
 ))]
 fn protected_writer_operation<R: Read>(
@@ -935,7 +963,11 @@ fn protected_writer_operation<R: Read>(
 }
 
 #[cfg(not(all(
-    any(target_os = "linux", target_os = "windows"),
+    any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows"
+    ),
     bedrock_physical_writer
 )))]
 fn protected_writer_operation<R: Read>(
@@ -990,7 +1022,7 @@ pub fn run_protected_writer_helper() -> i32 {
 }
 
 #[cfg(target_os = "macos")]
-fn macos_preflight_request(bytes: &[u8]) -> i32 {
+fn macos_writer_request(bytes: &[u8]) -> i32 {
     if let Err(error) = validate_elevated_identity(platform_is_elevated()) {
         eprintln!("{error}");
         return 1;
@@ -1009,8 +1041,9 @@ fn macos_preflight_request(bytes: &[u8]) -> i32 {
             return 1;
         }
     };
-    match protected_writer_open_gate(std::io::Cursor::new(bytes), &executable, now) {
-        Ok(()) => HELPER_PREFLIGHT_ONLY_EXIT,
+    match protected_writer_operation(std::io::Cursor::new(bytes), &executable, now) {
+        Ok(ProtectedWriterResult::WriteComplete) => HELPER_WRITE_COMPLETE_EXIT,
+        Ok(ProtectedWriterResult::PreflightOnly) => HELPER_PREFLIGHT_ONLY_EXIT,
         Err(error) => {
             eprintln!("{error}");
             1
@@ -1027,7 +1060,7 @@ pub unsafe extern "C" fn bedrock_macos_handle_writer_request(
     if bytes.is_null() || length == 0 || length as u64 > MAX_HELPER_REQUEST_BYTES {
         return 1;
     }
-    macos_preflight_request(unsafe { std::slice::from_raw_parts(bytes, length) })
+    macos_writer_request(unsafe { std::slice::from_raw_parts(bytes, length) })
 }
 
 #[cfg(target_os = "macos")]

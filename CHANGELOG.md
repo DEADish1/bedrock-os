@@ -40,6 +40,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Added fixture-tested Windows and macOS disposable-drive preflight gates with native inventory, exact whole-device/path/capacity/confirmation checks, destructive and large-drive attestations, and an explicit disabled-writer plan result.
 - Added an acceptance-only Linux native device adapter connecting one exclusive handle through verified write, reread, synchronization, and finalization behind an exact production-trust build token; normal builds remain preflight-only and completed writes use a distinct helper result.
 - Added the equivalent acceptance-only Windows adapter, retaining one zero-share `PhysicalDrive` handle through streaming, reread verification, cache flush, allow-removal, eject/manual-removal handling, and final close; CI compiles the gated branch without executing it.
+- Added the acceptance-only macOS adapter, retaining one exclusive raw-disk descriptor through streaming, reread verification, full cache synchronization, eject, and final close; the authenticated XPC handler returns completed-write status only in an exact-token production build, and CI compiles without executing the branch.
 
 ### Next starting point
 
