@@ -22,6 +22,10 @@ const MINIMUM_TARGET_SIZE: u64 = 8 * 1024 * 1024 * 1024;
 const MAX_HELPER_REQUEST_BYTES: u64 = 16 * 1024;
 const HELPER_REQUEST_LIFETIME_SECONDS: u64 = 120;
 const HELPER_PREFLIGHT_ONLY_EXIT: i32 = 3;
+const MACOS_APP_IDENTIFIER: &str = "os.bedrock.installer";
+const MACOS_HELPER_IDENTIFIER: &str = "com.bedrock.server.installer.writer";
+#[cfg(target_os = "macos")]
+const APPLE_TEAM_ID: Option<&str> = option_env!("BEDROCK_APPLE_TEAM_ID");
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct InstallTarget {
@@ -424,13 +428,36 @@ fn unix_time_seconds() -> Result<u64, String> {
         .map_err(|_| "The protected writer could not validate the system clock.".to_string())
 }
 
-fn encode_helper_request(request: &PrivilegedWriteRequest) -> Result<String, String> {
+fn helper_request_bytes(request: &PrivilegedWriteRequest) -> Result<Vec<u8>, String> {
     let bytes = serde_json::to_vec(request)
         .map_err(|_| "The protected writer request could not be encoded.".to_string())?;
     if bytes.len() as u64 > MAX_HELPER_REQUEST_BYTES {
         return Err("The protected writer request is too large.".into());
     }
-    Ok(BASE64.encode(bytes))
+    Ok(bytes)
+}
+
+fn encode_helper_request(request: &PrivilegedWriteRequest) -> Result<String, String> {
+    Ok(BASE64.encode(helper_request_bytes(request)?))
+}
+
+fn macos_peer_requirement(identifier: &str, team_id: Option<&str>) -> Result<String, String> {
+    if identifier != MACOS_APP_IDENTIFIER && identifier != MACOS_HELPER_IDENTIFIER {
+        return Err("The macOS code-signing identity is invalid.".into());
+    }
+    let team_id = team_id
+        .filter(|value| {
+            value.len() == 10
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+        })
+        .ok_or_else(|| {
+            "This build has no trusted Apple Team ID. No disk operation was attempted.".to_string()
+        })?;
+    Ok(format!(
+        "identifier \"{identifier}\" and anchor apple generic and certificate leaf[subject.OU] = \"{team_id}\""
+    ))
 }
 
 fn decode_helper_request(encoded: &str) -> Result<Vec<u8>, String> {
@@ -520,11 +547,44 @@ fn launch_protected_writer(request: &PrivilegedWriteRequest) -> Result<(), Strin
 }
 
 #[cfg(target_os = "macos")]
-fn launch_protected_writer(_request: &PrivilegedWriteRequest) -> Result<(), String> {
-    Err(
-        "The signed macOS protected service is not registered yet. No disk operation was attempted."
-            .into(),
-    )
+unsafe extern "C" {
+    fn bedrock_macos_send_writer_request(
+        bytes: *const u8,
+        length: usize,
+        helper_requirement: *const core::ffi::c_char,
+    ) -> i32;
+    fn bedrock_macos_run_writer_service(
+        client_requirement: *const core::ffi::c_char,
+    ) -> i32;
+}
+
+#[cfg(target_os = "macos")]
+fn launch_protected_writer(request: &PrivilegedWriteRequest) -> Result<(), String> {
+    let bytes = helper_request_bytes(request)?;
+    let requirement = macos_peer_requirement(MACOS_HELPER_IDENTIFIER, APPLE_TEAM_ID)?;
+    let requirement = std::ffi::CString::new(requirement)
+        .map_err(|_| "The trusted macOS helper requirement is invalid.".to_string())?;
+    let result = unsafe {
+        bedrock_macos_send_writer_request(bytes.as_ptr(), bytes.len(), requirement.as_ptr())
+    };
+    match result {
+        HELPER_PREFLIGHT_ONLY_EXIT => Ok(()),
+        4 => Err(
+            "Approve Bedrock Installer in System Settings > General > Login Items, then try again. No disk operation was attempted."
+                .into(),
+        ),
+        5 => Err(
+            "The signed macOS protected service could not be registered. No disk operation was attempted."
+                .into(),
+        ),
+        6 => Err(
+            "The authenticated macOS protected service could not be reached. No disk operation was attempted."
+                .into(),
+        ),
+        _ => Err(
+            "The protected writer rejected the request. No disk operation was attempted.".into(),
+        ),
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -636,6 +696,7 @@ fn protected_writer_preflight<R: Read>(
     Ok(())
 }
 
+#[cfg(not(target_os = "macos"))]
 pub fn run_protected_writer_helper() -> i32 {
     if let Err(error) = validate_elevated_identity(platform_is_elevated()) {
         eprintln!("{error}");
@@ -676,6 +737,67 @@ pub fn run_protected_writer_helper() -> i32 {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn macos_preflight_request(bytes: &[u8]) -> i32 {
+    if let Err(error) = validate_elevated_identity(platform_is_elevated()) {
+        eprintln!("{error}");
+        return 1;
+    }
+    let now = match unix_time_seconds() {
+        Ok(now) => now,
+        Err(error) => {
+            eprintln!("{error}");
+            return 1;
+        }
+    };
+    let executable = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(_) => {
+            eprintln!("The protected writer executable could not be identified.");
+            return 1;
+        }
+    };
+    match protected_writer_preflight(std::io::Cursor::new(bytes), &executable, now) {
+        Ok(()) => HELPER_PREFLIGHT_ONLY_EXIT,
+        Err(error) => {
+            eprintln!("{error}");
+            1
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[no_mangle]
+pub unsafe extern "C" fn bedrock_macos_handle_writer_request(
+    bytes: *const u8,
+    length: usize,
+) -> i32 {
+    if bytes.is_null() || length == 0 || length as u64 > MAX_HELPER_REQUEST_BYTES {
+        return 1;
+    }
+    macos_preflight_request(unsafe { std::slice::from_raw_parts(bytes, length) })
+}
+
+#[cfg(target_os = "macos")]
+pub fn run_protected_writer_helper() -> i32 {
+    if let Err(error) = validate_elevated_identity(platform_is_elevated()) {
+        eprintln!("{error}");
+        return 1;
+    }
+    let requirement = match macos_peer_requirement(MACOS_APP_IDENTIFIER, APPLE_TEAM_ID)
+        .and_then(|value| {
+            std::ffi::CString::new(value)
+                .map_err(|_| "The trusted macOS client requirement is invalid.".to_string())
+        }) {
+        Ok(requirement) => requirement,
+        Err(error) => {
+            eprintln!("{error}");
+            return 1;
+        }
+    };
+    unsafe { bedrock_macos_run_writer_service(requirement.as_ptr()) }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -694,8 +816,9 @@ pub fn run() {
 mod tests {
     use super::{
         decode_helper_request, encode_helper_request, is_sha256, parse_inventory,
-        protected_writer_preflight, validate_elevated_identity, validate_helper_request,
-        validate_write_target, verify_cms_signature, InstallTarget, PrivilegedWriteRequest,
+        macos_peer_requirement, protected_writer_preflight, validate_elevated_identity,
+        validate_helper_request, validate_write_target, verify_cms_signature, InstallTarget,
+        PrivilegedWriteRequest, MACOS_APP_IDENTIFIER, MACOS_HELPER_IDENTIFIER,
     };
     use openssl::asn1::Asn1Time;
     use openssl::bn::BigNum;
@@ -820,6 +943,17 @@ mod tests {
         let error = validate_elevated_identity(false).unwrap_err();
         assert!(error.contains("administrator authority"));
         assert!(error.contains("No disk operation was attempted"));
+    }
+
+    #[test]
+    fn macos_peer_requirements_bind_identifier_and_team() {
+        let requirement =
+            macos_peer_requirement(MACOS_HELPER_IDENTIFIER, Some("A1B2C3D4E5")).unwrap();
+        assert!(requirement.contains("identifier \"com.bedrock.server.installer.writer\""));
+        assert!(requirement.contains("certificate leaf[subject.OU] = \"A1B2C3D4E5\""));
+        assert!(macos_peer_requirement(MACOS_APP_IDENTIFIER, None).is_err());
+        assert!(macos_peer_requirement(MACOS_APP_IDENTIFIER, Some("bad team!")).is_err());
+        assert!(macos_peer_requirement("com.attacker.writer", Some("A1B2C3D4E5")).is_err());
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]

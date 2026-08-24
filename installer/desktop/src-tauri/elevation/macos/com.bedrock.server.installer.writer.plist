@@ -6,6 +6,10 @@
   <string>com.bedrock.server.installer.writer</string>
   <key>BundleProgram</key>
   <string>Contents/MacOS/bedrock-media-writer</string>
+  <key>AssociatedBundleIdentifiers</key>
+  <array>
+    <string>os.bedrock.installer</string>
+  </array>
   <key>MachServices</key>
   <dict>
     <key>com.bedrock.server.installer.writer</key>

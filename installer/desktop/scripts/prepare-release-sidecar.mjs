@@ -17,6 +17,14 @@ if (!development) {
   if (!certificate || !existsSync(certificate)) {
     throw new Error("release sidecars require a readable BEDROCK_INSTALLER_TRUST_CERT");
   }
+  if (process.platform === "darwin") {
+    if (!/^[A-Z0-9]{10}$/.test(process.env.BEDROCK_APPLE_TEAM_ID || "")) {
+      throw new Error("macOS release sidecars require a valid BEDROCK_APPLE_TEAM_ID");
+    }
+    if (!process.env.BEDROCK_APPLE_SIGNING_IDENTITY) {
+      throw new Error("macOS release sidecars require BEDROCK_APPLE_SIGNING_IDENTITY");
+    }
+  }
 }
 
 const cargo = process.env.CARGO || "cargo";
@@ -38,6 +46,22 @@ const targetRoot = process.env.CARGO_TARGET_DIR
 const source = join(targetRoot, "release", `bedrock-media-writer${extension}`);
 const destination = join(tauriDir, "binaries", `bedrock-media-writer-${triple}${extension}`);
 if (!existsSync(source)) throw new Error("the protected writer helper output is missing");
+
+if (process.platform === "darwin" && !development) {
+  const codesign = process.env.CODESIGN || "codesign";
+  execFileSync(codesign, [
+    "--force",
+    "--options", "runtime",
+    "--timestamp",
+    "--identifier", "com.bedrock.server.installer.writer",
+    "--sign", process.env.BEDROCK_APPLE_SIGNING_IDENTITY,
+    source,
+  ], { cwd: tauriDir, stdio: "inherit" });
+  execFileSync(codesign, ["--verify", "--strict", "--verbose=2", source], {
+    cwd: tauriDir,
+    stdio: "inherit",
+  });
+}
 
 // Tauri's build resource gives every Windows binary the unprivileged app manifest.
 // Replace resource 1 only in the separately built helper after linking so the main

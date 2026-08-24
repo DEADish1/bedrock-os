@@ -33,6 +33,7 @@ assert config["bundle"]["resources"] == {
 PY
 
 grep -Eq '^tauri = \{ version = "2", features = \[\] \}$' "$TAURI/Cargo.toml"
+grep -q '^cc = "1"$' "$TAURI/Cargo.toml"
 if grep -q 'tauri-plugin-shell' "$TAURI/Cargo.toml"; then
   printf 'error: desktop package grants shell-plugin access\n' >&2
   exit 1
@@ -66,6 +67,8 @@ grep -q 'windows-sys = { version = "0.61"' "$TAURI/Cargo.toml"
 grep -q '"Win32_Security"' "$TAURI/Cargo.toml"
 grep -q 'libc = "0.2"' "$TAURI/Cargo.toml"
 grep -q 'production installer builds require BEDROCK_INSTALLER_TRUST_CERT' "$TAURI/build.rs"
+grep -q 'production macOS installer builds require BEDROCK_APPLE_TEAM_ID' "$TAURI/build.rs"
+grep -q 'src/macos_service.m' "$TAURI/build.rs"
 grep -q 'session_id: String' "$LIB"
 grep -q 'struct InstallerState' "$LIB"
 grep -q 'manage(InstallerState::default())' "$LIB"
@@ -88,7 +91,15 @@ grep -q 'HELPER_PREFLIGHT_ONLY_EXIT' "$LIB"
 grep -q 'fn validate_elevated_identity' "$LIB"
 grep -q 'libc::geteuid() == 0' "$LIB"
 grep -q 'TokenIsElevated != 0' "$LIB"
-grep -q 'The signed macOS protected service is not registered yet' "$LIB"
+grep -q 'bedrock_macos_send_writer_request' "$LIB"
+grep -q 'bedrock_macos_run_writer_service' "$LIB"
+grep -q 'certificate leaf\[subject.OU\]' "$LIB"
+grep -q 'setConnectionCodeSigningRequirement' "$TAURI/src/macos_service.m"
+grep -q 'setCodeSigningRequirement' "$TAURI/src/macos_service.m"
+grep -q 'daemonServiceWithPlistName' "$TAURI/src/macos_service.m"
+grep -q 'NSXPCConnectionPrivileged' "$TAURI/src/macos_service.m"
+grep -q 'BEDROCK_APPLE_SIGNING_IDENTITY' "$ROOT/installer/desktop/scripts/prepare-release-sidecar.mjs"
+grep -q '"--verify", "--strict", "--verbose=2"' "$ROOT/installer/desktop/scripts/prepare-release-sidecar.mjs"
 node --check "$ROOT/installer/desktop/scripts/prepare-release-sidecar.mjs"
 if env -u BEDROCK_REQUIRE_PRODUCTION_TRUST -u BEDROCK_INSTALLER_TRUST_CERT \
   node "$ROOT/installer/desktop/scripts/prepare-release-sidecar.mjs" >/dev/null 2>&1; then
@@ -116,6 +127,7 @@ with macos.open("rb") as stream:
     plist = plistlib.load(stream)
 assert plist["Label"] == "com.bedrock.server.installer.writer"
 assert plist["BundleProgram"] == "Contents/MacOS/bedrock-media-writer"
+assert plist["AssociatedBundleIdentifiers"] == ["os.bedrock.installer"]
 assert bundle["macOS"]["minimumSystemVersion"] == "13.0"
 assert "/usr/share/polkit-1/actions/com.bedrock.server.installer.write.policy" in bundle["linux"]["deb"]["files"]
 PY

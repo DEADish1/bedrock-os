@@ -32,6 +32,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Added release-only helper staging with target-triple naming and SHA-256 copy verification, helper-only Windows UAC metadata, exact-path Linux polkit policy, and macOS 13+ signed-bundle launch-daemon placement.
 - Connected bounded protected-helper requests through exact-path Linux `pkexec` and native Windows `runas`, including process completion and a dedicated preflight-only exit code; macOS remains fail-closed pending signed SMAppService/XPC peer validation.
 - Required the protected helper to prove effective UID 0 on Unix/macOS or an elevated Windows process token before reading any request.
+- Added macOS 13+ SMAppService launch-daemon registration and privileged XPC request transport with mutual signing-identifier/Team-ID requirements, a production Team-ID gate, and fixed-identifier helper signing before staging.
 
 ### Next starting point
 
