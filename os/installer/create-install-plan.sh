@@ -11,6 +11,9 @@ inventory=$1
 target_id=$2
 confirmation=$3
 layout="$ROOT/os/layout/bedrock-amd64.json"
+if [ "${BEDROCK_INSTALLER_TEST_MODE:-0}" = 1 ] && [ -n "${BEDROCK_TEST_LAYOUT:-}" ]; then
+  layout=$BEDROCK_TEST_LAYOUT
+fi
 validator="$ROOT/os/installer/validate-install-target.sh"
 
 for tool in jq sha256sum; do

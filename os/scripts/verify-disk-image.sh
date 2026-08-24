@@ -3,8 +3,12 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 LAYOUT="$ROOT/os/layout/bedrock-amd64.json"
-[ "$#" -eq 1 ] || { printf 'usage: %s IMAGE.raw\n' "$0" >&2; exit 2; }
+[ "$#" -ge 1 ] && [ "$#" -le 2 ] || { printf 'usage: %s IMAGE.raw [TEST-LAYOUT.json]\n' "$0" >&2; exit 2; }
 image=$1
+if [ "$#" -eq 2 ]; then
+  [ "${BEDROCK_INSTALLER_TEST_MODE:-0}" = 1 ] || { printf 'error: alternate layouts are test-only\n' >&2; exit 1; }
+  LAYOUT=$2
+fi
 [ -s "$image" ] || { printf 'error: disk image is missing\n' >&2; exit 1; }
 for tool in jq sgdisk; do
   command -v "$tool" >/dev/null 2>&1 || { printf 'error: %s is required\n' "$tool" >&2; exit 1; }

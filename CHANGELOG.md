@@ -49,6 +49,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Added in-app and written USB/DVD guidance that distinguishes verified image burning from copying an ISO file and makes clear that optical writing and physical-hardware acceptance are not yet complete.
 - Added the non-writing on-server installation foundation: live-media source protection, exact internal-drive confirmation, system/removable/mounted/read-only/undersized/ambiguous rejection, canonical-layout checksum binding, and a review-only plan that cannot claim writer readiness.
 - Added a focused pull-request safety gate for Linux live-media discovery, the canonical system-disk layout, and non-writing installation-plan validation.
+- Added a test-only on-server installation simulator that verifies the source, writes and rereads a confined sparse file, relocates GPT metadata, expands and checks persistent state, preserves fixed system content, and rejects interruption, corruption, outside-directory targets, and all non-test use.
 
 ### Next starting point
 

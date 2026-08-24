@@ -22,3 +22,9 @@ The eventual privileged installer must obtain fresh inventory, match the same ID
 The protected writer must create GPT and the canonical EFI, A/B verified-root, verity, signature, and growing state partitions; install signed boot artifacts; flush; reread and verify every fixed component; validate the final GPT; and report success only after synchronization. Interruption or any mismatch leaves the installation incomplete and requires restarting from the beginning.
 
 This checkpoint implements only selection validation and a reviewable plan. It does not open or modify a disk, and it does not complete the v0.3 on-server installation checklist item.
+
+## Disposable write simulation
+
+`os/installer/simulate-install-image.sh` exercises the next installation stage only against a regular file directly inside a declared temporary directory. It requires explicit test mode and refuses block devices. The simulator verifies the source checksum and GPT, writes and rereads the planned image, relocates the backup GPT to the simulated disk end, expands partition 8 while preserving its identity and type, grows and checks its ext4 filesystem, and validates the final eight-partition structure.
+
+CI uses a reduced-size layout with the same eight roles and standard partition type GUIDs. It proves successful installation, fixed-system-content preservation, state growth, interruption rejection, corruption rejection, and target-directory confinement without touching host media. This is evidence for the write engine, not physical-installation acceptance.
