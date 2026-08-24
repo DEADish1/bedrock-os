@@ -72,9 +72,10 @@ jobs:
         run: |
           work=$(mktemp -d)
           trap 'rm -rf "$work"' EXIT
-          BEDROCK_ALLOW_EPHEMERAL_KEYS=1 \
+          MSYS2_ARG_CONV_EXCL='/CN=*' BEDROCK_ALLOW_EPHEMERAL_KEYS=1 \
             sh os/scripts/generate-development-keys.sh "$work/keys" >/dev/null
-          BEDROCK_INSTALLER_TRUST_CERT="$work/keys/DO-NOT-SHIP-development.crt" \
+          trust_cert=$(cygpath -w "$work/keys/DO-NOT-SHIP-development.crt")
+          BEDROCK_INSTALLER_TRUST_CERT="$trust_cert" \
           BEDROCK_REQUIRE_PRODUCTION_TRUST=1 \
           BEDROCK_ENABLE_PHYSICAL_WRITER=I_ACCEPT_REAL_DEVICE_DATA_LOSS \
             cargo check --manifest-path installer/desktop/src-tauri/Cargo.toml --lib
