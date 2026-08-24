@@ -1,0 +1,76 @@
+{
+  "schema": 1,
+  "generated_at": "2026-08-24T00:00:00Z",
+  "targets": [
+    {
+      "id": "linux:live-media",
+      "path": "/dev/sda",
+      "model": "Bedrock Live USB",
+      "size_bytes": 17179869184,
+      "removable": true,
+      "system": true,
+      "mounted": true,
+      "read_only": false
+    },
+    {
+      "id": "linux:install-safe",
+      "path": "/dev/nvme1n1",
+      "model": "Test System SSD",
+      "size_bytes": 68719476736,
+      "removable": false,
+      "system": false,
+      "mounted": false,
+      "read_only": false
+    },
+    {
+      "id": "linux:running-system",
+      "path": "/dev/nvme0n1",
+      "model": "Running System",
+      "size_bytes": 68719476736,
+      "removable": false,
+      "system": true,
+      "mounted": true,
+      "read_only": false
+    },
+    {
+      "id": "linux:mounted-data",
+      "path": "/dev/sdb",
+      "model": "Mounted Data Disk",
+      "size_bytes": 68719476736,
+      "removable": false,
+      "system": false,
+      "mounted": true,
+      "read_only": false
+    },
+    {
+      "id": "linux:read-only",
+      "path": "/dev/sdc",
+      "model": "Read Only Disk",
+      "size_bytes": 68719476736,
+      "removable": false,
+      "system": false,
+      "mounted": false,
+      "read_only": true
+    },
+    {
+      "id": "linux:too-small",
+      "path": "/dev/sdd",
+      "model": "Small Disk",
+      "size_bytes": 34359738367,
+      "removable": false,
+      "system": false,
+      "mounted": false,
+      "read_only": false
+    },
+    {
+      "id": "linux:other-usb",
+      "path": "/dev/sde",
+      "model": "Other USB",
+      "size_bytes": 68719476736,
+      "removable": true,
+      "system": false,
+      "mounted": false,
+      "read_only": false
+    }
+  ]
+}

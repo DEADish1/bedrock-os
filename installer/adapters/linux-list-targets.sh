@@ -15,7 +15,7 @@ if [ -n "${BEDROCK_ROOT_PARENT:-}" ]; then
 else
   root_parent=$(printf '%s\n' "$inventory" | jq -r '
     [.blockdevices[] | .. | objects |
-      select((.mountpoints // []) | index("/") != null) |
+      select((.mountpoints // []) | any(. == "/" or . == "/run/live/medium" or . == "/lib/live/mount/medium")) |
       (.pkname // (if .type == "disk" then .name else empty end))][0] // ""
   ')
 fi

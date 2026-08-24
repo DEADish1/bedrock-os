@@ -47,6 +47,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Connected macOS protected-helper byte progress through a progress-only proxy object on the existing mutually code-signed XPC connection, with bounded messages, locked callback invalidation, shared session/size/sequence/phase validation, and successful protected-service completion still required.
 - Added tested installer recovery guidance for insufficient space, interrupted writes, checksum failure, unavailable media, administrator approval, malformed progress, and unknown failures; failed media remains visibly untrusted and can be restarted safely.
 - Added in-app and written USB/DVD guidance that distinguishes verified image burning from copying an ISO file and makes clear that optical writing and physical-hardware acceptance are not yet complete.
+- Added the non-writing on-server installation foundation: live-media source protection, exact internal-drive confirmation, system/removable/mounted/read-only/undersized/ambiguous rejection, canonical-layout checksum binding, and a review-only plan that cannot claim writer readiness.
 
 ### Next starting point
 
