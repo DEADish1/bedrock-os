@@ -32,6 +32,7 @@ duplicates=$(LC_ALL=C sort "$OS_DIR/config/package-lists/bedrock.list.chroot" | 
 sh -n "$OS_DIR/auto/config"
 sh -n "$OS_DIR/scripts/build-image.sh"
 sh -n "$OS_DIR/scripts/verify-artifacts.sh"
+sh -n "$OS_DIR/scripts/verify-live-installer-package.sh"
 sh -n "$OS_DIR/scripts/validate-layout.sh"
 sh -n "$OS_DIR/scripts/build-uki.sh"
 sh -n "$OS_DIR/scripts/validate-boot.sh"

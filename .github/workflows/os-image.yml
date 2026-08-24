@@ -2,6 +2,12 @@ name: Bedrock OS image
 
 on:
   workflow_dispatch:
+    inputs:
+      protected_writer_acceptance:
+        description: Build an acceptance-only image with the protected system-disk writer enabled
+        required: true
+        default: false
+        type: boolean
   push:
     branches: [main]
     paths:
@@ -38,6 +44,8 @@ jobs:
         env:
           BEDROCK_BUILD_RAW: ${{ matrix.replica == 1 && '1' || '0' }}
           BEDROCK_ALLOW_EPHEMERAL_KEYS: '1'
+          BEDROCK_ENABLE_SYSTEM_PHYSICAL_WRITER: ${{ inputs.protected_writer_acceptance && 'I_ACCEPT_REAL_SYSTEM_DISK_DATA_LOSS' || '' }}
+          BEDROCK_REQUIRE_PRODUCTION_TRUST: ${{ inputs.protected_writer_acceptance && '1' || '0' }}
         run: |
           SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$GITHUB_SHA")
           export SOURCE_DATE_EPOCH
@@ -48,6 +56,8 @@ jobs:
             --workdir /workspace \
             --env BEDROCK_BUILD_RAW \
             --env BEDROCK_ALLOW_EPHEMERAL_KEYS \
+            --env BEDROCK_ENABLE_SYSTEM_PHYSICAL_WRITER \
+            --env BEDROCK_REQUIRE_PRODUCTION_TRUST \
             --env SOURCE_DATE_EPOCH \
             --env BEDROCK_SOURCE_COMMIT \
             debian:13.6-slim \

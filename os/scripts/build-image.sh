@@ -25,6 +25,15 @@ trap cleanup_installer_stage EXIT INT TERM
 SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git -C "$ROOT" log -1 --format=%ct 2>/dev/null || date +%s)}
 BEDROCK_SOURCE_COMMIT=${BEDROCK_SOURCE_COMMIT:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || printf unknown)}
 export SOURCE_DATE_EPOCH TZ=UTC LC_ALL=C.UTF-8
+protected_writer_enabled=false
+if [ -n "${BEDROCK_ENABLE_SYSTEM_PHYSICAL_WRITER:-}" ]; then
+  [ "$BEDROCK_ENABLE_SYSTEM_PHYSICAL_WRITER" = I_ACCEPT_REAL_SYSTEM_DISK_DATA_LOSS ] && \
+    [ "${BEDROCK_REQUIRE_PRODUCTION_TRUST:-0}" = 1 ] || {
+    printf 'error: protected writer image mode requires the exact acceptance token and production-trust gate\n' >&2
+    exit 1
+  }
+  protected_writer_enabled=true
+fi
 
 mkdir -p "$OUT_DIR"
 cd "$OS_DIR"
@@ -40,6 +49,7 @@ ISO_SOURCE="$OS_DIR/${BEDROCK_IMAGE_NAME}.hybrid.iso"
 [ -s "$ISO_SOURCE" ] || { printf 'error: live-build did not produce %s\n' "$ISO_SOURCE" >&2; exit 1; }
 ISO_OUT="$OUT_DIR/${BEDROCK_IMAGE_NAME}.iso"
 mv "$ISO_SOURCE" "$ISO_OUT"
+"$OS_DIR/scripts/verify-live-installer-package.sh" "$ISO_OUT" "$protected_writer_enabled"
 
 cd "$OUT_DIR"
 sha256sum "$(basename "$ISO_OUT")" > "$(basename "$ISO_OUT").sha256"
@@ -58,7 +68,8 @@ jq -n \
   --arg source_date_epoch "$SOURCE_DATE_EPOCH" \
   --arg commit "$BEDROCK_SOURCE_COMMIT" \
   --arg live_build "$(lb --version 2>/dev/null | head -n1)" \
-  '{schema:1,product:"Bedrock Server OS",version:$version,distribution:$distribution,architecture:$architecture,source_date_epoch:($source_date_epoch|tonumber),commit:$commit,live_build:$live_build}' \
+  --argjson protected_writer_enabled "$protected_writer_enabled" \
+  '{schema:1,product:"Bedrock Server OS",version:$version,distribution:$distribution,architecture:$architecture,source_date_epoch:($source_date_epoch|tonumber),commit:$commit,live_build:$live_build,protected_system_writer_enabled:$protected_writer_enabled}' \
   > bedrock-build-manifest.json
 
 "$OS_DIR/scripts/verify-artifacts.sh" "$OUT_DIR"
