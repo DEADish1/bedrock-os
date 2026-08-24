@@ -35,6 +35,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Added macOS 13+ SMAppService launch-daemon registration and privileged XPC request transport with mutual signing-identifier/Team-ID requirements, a production Team-ID gate, and fixed-identifier helper signing before staging.
 - Added a fail-closed whole-device open gate: Linux rejects partitions through sysfs and uses exclusive no-follow block-device access, Windows opens exact physical drives with no sharing, and macOS takes an exclusive raw-disk lock; every platform confirms capacity and closes the handle without writing.
 - Added a platform finalization layer that requires successful cache synchronization before eject, supports Windows storage eject and macOS disk eject, and reports synchronized Linux or unsupported eject media as safe for manual removal without claiming automatic ejection.
+- Added an end-to-end virtual-device pipeline covering verified ISO and compressed-raw writing, progress, reread identity, cache synchronization, eject/manual-removal outcomes, and fail-closed checksum and synchronization errors without accessing host media.
 
 ### Next starting point
 

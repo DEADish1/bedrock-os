@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 mod media_writer;
 mod device_finalizer;
+mod write_pipeline;
 
 const RELEASE_TRUST_CERT_PEM: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/bedrock-release-trust.pem"));
