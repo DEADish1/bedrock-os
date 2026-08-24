@@ -68,14 +68,29 @@ jobs:
             cargo check --manifest-path installer/desktop/src-tauri/Cargo.toml --lib
       - name: Compile gated Windows physical writer without running it
         if: runner.os == 'Windows'
-        shell: bash
+        shell: pwsh
         run: |
-          work=$(mktemp -d)
-          trap 'rm -rf "$work"' EXIT
-          MSYS2_ARG_CONV_EXCL='/CN=*' BEDROCK_ALLOW_EPHEMERAL_KEYS=1 \
-            sh os/scripts/generate-development-keys.sh "$work/keys" >/dev/null
-          trust_cert=$(cygpath -w "$work/keys/DO-NOT-SHIP-development.crt")
-          BEDROCK_INSTALLER_TRUST_CERT="$trust_cert" \
-          BEDROCK_REQUIRE_PRODUCTION_TRUST=1 \
-          BEDROCK_ENABLE_PHYSICAL_WRITER=I_ACCEPT_REAL_DEVICE_DATA_LOSS \
+          $trustCert = Join-Path $env:RUNNER_TEMP "bedrock-physical-writer-ci.crt"
+          $rsa = [System.Security.Cryptography.RSA]::Create(3072)
+          $certificate = $null
+          try {
+            $request = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
+              "CN=Bedrock ephemeral CI development key",
+              $rsa,
+              [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+              [System.Security.Cryptography.RSASignaturePadding]::Pkcs1
+            )
+            $certificate = $request.CreateSelfSigned(
+              [DateTimeOffset]::UtcNow.AddMinutes(-5),
+              [DateTimeOffset]::UtcNow.AddDays(7)
+            )
+            [System.IO.File]::WriteAllText($trustCert, $certificate.ExportCertificatePem())
+            $env:BEDROCK_INSTALLER_TRUST_CERT = $trustCert
+            $env:BEDROCK_REQUIRE_PRODUCTION_TRUST = "1"
+            $env:BEDROCK_ENABLE_PHYSICAL_WRITER = "I_ACCEPT_REAL_DEVICE_DATA_LOSS"
             cargo check --manifest-path installer/desktop/src-tauri/Cargo.toml --lib
+          } finally {
+            if ($certificate) { $certificate.Dispose() }
+            $rsa.Dispose()
+            Remove-Item -LiteralPath $trustCert -Force -ErrorAction SilentlyContinue
+          }
