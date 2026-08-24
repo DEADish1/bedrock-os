@@ -121,13 +121,13 @@ impl DeviceFinalizer for PlatformFinalizer {
 
         let mut returned = 0_u32;
         let allow_removal = PREVENT_MEDIA_REMOVAL {
-            PreventMediaRemoval: 0,
+            PreventMediaRemoval: false,
         };
         let allowed = unsafe {
             DeviceIoControl(
                 self.handle,
                 IOCTL_STORAGE_MEDIA_REMOVAL,
-                std::addr_of!(allow_removal).cast(),
+                std::ptr::addr_of!(allow_removal).cast(),
                 std::mem::size_of::<PREVENT_MEDIA_REMOVAL>() as u32,
                 std::ptr::null_mut(),
                 0,
