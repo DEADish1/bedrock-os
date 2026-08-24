@@ -5,9 +5,11 @@ cryptsetup-initramfs
 curl
 dmidecode
 dracut-core
+e2fsprogs
 efibootmgr
 erofs-utils
 ethtool
+gdisk
 iproute2
 iputils-ping
 jq

@@ -4,18 +4,32 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 builder="$ROOT/os/installer/build-protected-system-writer.sh"
 launcher="$ROOT/os/installer/write-protected-install.sh"
+finalizer="$ROOT/os/installer/finalize-protected-layout.sh"
 source_file="$ROOT/os/installer/protected-system-writer.rs"
 
 sh -n "$builder"
 sh -n "$launcher"
+sh -n "$finalizer"
 grep -q 'O_EXCL | O_NONBLOCK | O_NOFOLLOW' "$source_file"
 grep -q 'BLKGETSIZE64' "$source_file"
 grep -q 'sync_all()' "$source_file"
 grep -q 'failed full reread verification' "$source_file"
 grep -q 'layout_finalized.*false' "$source_file"
+grep -q 'mknod.*target.*major.*minor' "$finalizer"
+grep -q 'blockdev --rereadpt' "$finalizer"
+grep -q 'blockdev --flushbufs' "$finalizer"
+grep -q 'udevadm settle --timeout=30' "$finalizer"
+grep -q 'e2fsck -f -y' "$finalizer"
+grep -q 'resize2fs' "$finalizer"
+grep -q 'persistent_state_checked: true' "$finalizer"
 
 if BEDROCK_INSTALLER_TEST_MODE=1 sh "$launcher" /does/not/exist >/dev/null 2>&1; then
   printf 'error: physical system writer accepted installer test mode\n' >&2
+  exit 1
+fi
+
+if BEDROCK_INSTALLER_TEST_MODE=1 sh "$finalizer" 8 0 4096 >/dev/null 2>&1; then
+  printf 'error: protected layout finalizer accepted installer test mode\n' >&2
   exit 1
 fi
 

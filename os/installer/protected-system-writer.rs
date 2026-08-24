@@ -100,7 +100,7 @@ fn open_verified_source(path: &Path, expected_size: u64, expected_hash: &str) ->
 }
 
 #[cfg(bedrock_system_physical_writer)]
-fn open_exclusive_target(path: &Path, expected_capacity: u64) -> Result<File, String> {
+fn open_exclusive_target(path: &Path, expected_capacity: u64) -> Result<(File, u64, u64), String> {
     let target = OpenOptions::new()
         .read(true)
         .write(true)
@@ -128,7 +128,11 @@ fn open_exclusive_target(path: &Path, expected_capacity: u64) -> Result<File, St
     {
         return Err("the exclusively opened disk capacity no longer matches confirmation".into());
     }
-    Ok(target)
+    Ok((
+        target,
+        linux_major(metadata.rdev()),
+        linux_minor(metadata.rdev()),
+    ))
 }
 
 fn copy_flush_and_reread(
@@ -213,10 +217,11 @@ fn run_physical_writer() -> Result<(), String> {
     }
 
     let mut source = open_verified_source(source_path, expected_size, &expected_hash)?;
-    let mut target = open_exclusive_target(&target_path, expected_capacity)?;
+    let (mut target, device_major, device_minor) =
+        open_exclusive_target(&target_path, expected_capacity)?;
     copy_flush_and_reread(&mut source, &mut target, expected_size)?;
     println!(
-        "{{\"schema\":1,\"raw_write_complete\":true,\"reread_verified\":true,\"layout_finalized\":false}}"
+        "{{\"schema\":1,\"raw_write_complete\":true,\"reread_verified\":true,\"device_major\":{device_major},\"device_minor\":{device_minor},\"layout_finalized\":false}}"
     );
     Ok(())
 }

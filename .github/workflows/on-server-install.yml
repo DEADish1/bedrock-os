@@ -11,6 +11,7 @@ on:
       - "os/tests/install-targets.json"
       - "os/tests/test-install-plan.sh"
       - "os/tests/test-protected-system-writer.sh"
+      - "os/tests/test-protected-loop-install.sh"
   workflow_dispatch:
 
 permissions:
@@ -31,3 +32,4 @@ jobs:
           sh os/tests/test-install-image-simulator.sh
           sh os/tests/test-protected-install-request.sh
           sh os/tests/test-protected-system-writer.sh
+          sudo env BEDROCK_RUN_LOOP_INSTALL_TEST=1 sh os/tests/test-protected-loop-install.sh
