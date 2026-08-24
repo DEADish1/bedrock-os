@@ -32,4 +32,7 @@ jobs:
           sh os/tests/test-install-image-simulator.sh
           sh os/tests/test-protected-install-request.sh
           sh os/tests/test-protected-system-writer.sh
-          sudo env "PATH=$PATH" BEDROCK_RUN_LOOP_INSTALL_TEST=1 sh os/tests/test-protected-loop-install.sh
+          RUSTUP_HOME=$(rustup show home)
+          CARGO_HOME=$(dirname "$(command -v cargo)")
+          sudo env "PATH=$PATH" "RUSTUP_HOME=$RUSTUP_HOME" "CARGO_HOME=$CARGO_HOME" \
+            BEDROCK_RUN_LOOP_INSTALL_TEST=1 sh os/tests/test-protected-loop-install.sh
