@@ -38,9 +38,9 @@ Exit: a repeatable image boots, identifies hardware, persists configuration, upd
 ## 0.3.0 — Installer and first-run setup
 
 - [ ] Build Bedrock Installer for Windows, macOS, and Linux.
-- [ ] Safely enumerate removable drives with model, path, and capacity.
-- [ ] Verify downloaded image signatures and checksums before writing.
-- [ ] Require destructive confirmation naming the exact target drive.
+- [x] Safely enumerate removable drives with model, path, and capacity.
+- [x] Verify downloaded image signatures and checksums before writing.
+- [x] Require destructive confirmation naming the exact target drive.
 - [ ] Write and verify USB media; provide ISO download and DVD guidance.
 - [ ] Implement on-server installation to a selected system drive.
 - [ ] Add first-run wizard for hostname, administrator, network, time, and updates.

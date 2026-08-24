@@ -16,6 +16,8 @@ Platform adapters must provide stable target IDs and refresh the inventory immed
 
 `core/write-verified-image.sh` revalidates the exact target and confirmation, requires a whole block device and administrator privileges in production, writes a verified hybrid ISO or expands a signed raw Zstandard image, flushes it, rereads the written byte range, and requires the signed expanded SHA-256 before reporting success.
 
+The desktop package now also contains a platform-neutral native streaming engine for the protected helper. It writes ISO or compressed raw content, reports byte progress, rejects short or oversized streams, flushes, rereads the exact signed range, and requires the signed expanded SHA-256. It is not connected to a physical target until the OS-specific elevation and whole-disk opening layer is complete.
+
 ## Platform adapters
 
 - `adapters/linux-list-targets.sh` reads Linux block-device metadata without elevation, identifies the disk containing `/`, and emits the shared schema. If the system disk cannot be identified, every target is marked as a system disk and writing remains blocked.

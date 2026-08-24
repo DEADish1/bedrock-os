@@ -60,6 +60,7 @@ grep -q 'This development build has no release trust certificate' "$LIB"
 grep -q 'tauri-plugin-dialog = "2"' "$TAURI/Cargo.toml"
 grep -q 'openssl = { version = "0.10", features = \["vendored"\] }' "$TAURI/Cargo.toml"
 grep -q 'uuid = { version = "1", features = \["v4"\] }' "$TAURI/Cargo.toml"
+grep -q 'zstd = "0.13"' "$TAURI/Cargo.toml"
 grep -q 'production installer builds require BEDROCK_INSTALLER_TRUST_CERT' "$TAURI/build.rs"
 grep -q 'session_id: String' "$LIB"
 grep -q 'struct InstallerState' "$LIB"
@@ -67,6 +68,9 @@ grep -q 'manage(InstallerState::default())' "$LIB"
 grep -q 'verify_signed_release(&session.image_path' "$LIB"
 grep -q 'let targets = scan_targets(&handle)' "$LIB"
 grep -q 'fn validate_write_target' "$LIB"
+grep -q 'mod media_writer;' "$LIB"
+grep -q 'fn write_verified_media' "$TAURI/src/media_writer.rs"
+grep -q 'The written media checksum does not match the signed release' "$TAURI/src/media_writer.rs"
 
 if grep -q 'dialog:' "$TAURI/capabilities/default.json"; then
   printf 'error: the frontend must not receive direct dialog-plugin permission\n' >&2

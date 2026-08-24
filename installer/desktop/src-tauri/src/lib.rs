@@ -9,6 +9,8 @@ use tauri::{path::BaseDirectory, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
+mod media_writer;
+
 const RELEASE_TRUST_CERT_PEM: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/bedrock-release-trust.pem"));
 
