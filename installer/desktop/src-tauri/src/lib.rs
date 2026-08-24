@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use std::fs::File;
 #[cfg(target_os = "linux")]
 use std::fs::OpenOptions;
-use std::io::{BufRead, Read, Write as _};
+use std::io::{BufRead, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -930,12 +930,13 @@ fn launch_protected_writer(
         CloseHandle, GetLastError, ERROR_IO_PENDING, ERROR_PIPE_CONNECTED,
         INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
     };
-    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OVERLAPPED;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_OVERLAPPED, PIPE_ACCESS_INBOUND,
+    };
     use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
     use windows_sys::Win32::System::Pipes::{
         ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId,
-        PIPE_ACCESS_INBOUND, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
-        PIPE_TYPE_BYTE, PIPE_WAIT,
+        PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
     };
     use windows_sys::Win32::System::Threading::{
         CreateEventW, GetExitCodeProcess, GetProcessId, WaitForMultipleObjects,
