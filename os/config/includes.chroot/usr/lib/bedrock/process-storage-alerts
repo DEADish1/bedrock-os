@@ -1,0 +1,152 @@
+#!/bin/sh
+set -eu
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+LC_ALL=C
+export PATH LC_ALL
+if [ "${BEDROCK_STORAGE_ALERT_TEST_MODE:-0}" = 1 ]; then
+  [ "$#" -eq 2 ] || { printf 'usage: %s HEALTH.json ALERTS.json\n' "$0" >&2; exit 2; }
+  health=$1
+  alerts=$2
+  now=${BEDROCK_STORAGE_ALERT_TEST_NOW:-0}
+else
+  [ "$#" -eq 0 ] || { printf 'usage: %s\n' "$0" >&2; exit 2; }
+  [ "$(id -u)" -eq 0 ] || { printf 'error: storage alert processing requires root\n' >&2; exit 1; }
+  health=/var/lib/bedrock/storage/health.json
+  alerts=/var/lib/bedrock/storage/alerts.json
+  now=$(date +%s)
+fi
+
+command -v jq >/dev/null 2>&1 || { printf 'error: storage alert processing requires jq\n' >&2; exit 2; }
+[ -s "$health" ] && [ ! -L "$health" ] || {
+  printf 'error: storage health input is missing or indirect\n' >&2
+  exit 1
+}
+jq -e '
+  .schema == 1 and .read_only == true and
+  (.generated_unix | type == "number" and floor == . and . >= 0) and
+  (.disks | type == "array") and
+  (.software_raid.md_arrays | type == "array") and
+  (.software_raid.zfs.pools | type == "array") and
+  (.hardware_raid.controllers | type == "array") and
+  all(.disks[];
+    (.path | type == "string" and test("^/dev/[A-Za-z0-9._/-]+$") and (test("(^|/)\\.\\.(/|$)") | not)) and
+    (.smart | type == "object") and
+    (.smart.health == "healthy" or .smart.health == "failing" or .smart.health == "standby" or .smart.health == "unknown") and
+    ((.smart.temperature_c == null) or (.smart.temperature_c | type == "number"))) and
+  all(.software_raid.md_arrays[];
+    (.name | type == "string") and (.path | type == "string") and
+    (.health == "healthy" or .health == "degraded" or .health == "unknown") and
+    (.active_members | type == "number") and (.expected_members | type == "number")) and
+  all(.software_raid.zfs.pools[];
+    (.name | type == "string") and (.health | type == "string") and
+    (.status == "healthy" or .status == "degraded" or .status == "failing" or .status == "unknown")) and
+  all(.hardware_raid.controllers[];
+    (.address | type == "string") and (.member_health_available | type == "boolean")) and
+  ([.disks[].path] | length == (unique | length)) and
+  ([.software_raid.md_arrays[].name] | length == (unique | length)) and
+  ([.software_raid.zfs.pools[].name] | length == (unique | length)) and
+  ([.hardware_raid.controllers[].address] | length == (unique | length))
+' "$health" >/dev/null || { printf 'error: storage health input schema is invalid\n' >&2; exit 1; }
+
+work=$(mktemp -d)
+temporary=
+cleanup() {
+  rm -rf "$work"
+  [ -z "$temporary" ] || rm -f "$temporary"
+}
+trap cleanup EXIT INT TERM
+
+jq -S '
+  ([.disks[] |
+    if .smart.health == "failing" then
+      {id:("disk-smart:" + .path),kind:"disk-smart",resource:.path,severity:"critical",
+       title:"Disk health failure",explanation:"SMART reports that this disk is failing. Protect data and plan replacement."}
+    else empty end] +
+   [.disks[] | select((.smart.temperature_c // 0) >= 55) |
+      {id:("disk-temperature:" + .path),kind:"disk-temperature",resource:.path,
+       severity:(if .smart.temperature_c >= 65 then "critical" else "warning" end),
+       title:"High disk temperature",
+       explanation:("Disk temperature is " + (.smart.temperature_c | tostring) + "°C. Check airflow and cooling.")}] +
+   [.software_raid.md_arrays[] | select(.health == "degraded") |
+      {id:("md-degraded:" + .name),kind:"md-degraded",resource:.path,severity:"critical",
+       title:"Software RAID is degraded",
+       explanation:("Only " + (.active_members | tostring) + " of " + (.expected_members | tostring) +
+         " expected members are active. Avoid additional disk changes and review recovery guidance.")}] +
+   [.software_raid.zfs.pools[] | select(.status == "degraded" or .status == "failing") |
+      {id:("zfs-health:" + .name),kind:"zfs-health",resource:.name,
+       severity:(if .status == "failing" then "critical" else "warning" end),
+       title:"ZFS pool needs attention",
+       explanation:("Pool health is " + .health + ". Review pool status before changing disks.")}] +
+   [.hardware_raid.controllers[] | select(.member_health_available == false) |
+      {id:("hardware-raid-visibility:" + .address),kind:"hardware-raid-visibility",resource:.address,severity:"warning",
+       title:"Hardware RAID health is limited",
+       explanation:"Bedrock detected a RAID controller but cannot yet verify member disks, cache/battery, or rebuild health."}]) |
+  sort_by(.id) | unique_by(.id)
+' "$health" > "$work/desired.json"
+
+if [ -e "$alerts" ]; then
+  [ -s "$alerts" ] && [ ! -L "$alerts" ] || {
+    printf 'error: existing storage alerts are empty or indirect\n' >&2
+    exit 1
+  }
+  cp "$alerts" "$work/previous.json"
+else
+  printf '%s\n' '{"schema":1,"generated_unix":0,"source_generated_unix":0,"attention_required":false,"active_count":0,"active":[],"events":[]}' > "$work/previous.json"
+fi
+jq -e '
+  (keys | sort) == (["active","active_count","attention_required","events","generated_unix","schema","source_generated_unix"] | sort) and
+  .schema == 1 and (.active | type == "array") and (.events | type == "array") and
+  (.attention_required | type == "boolean") and .active_count == (.active | length) and
+  ([.active[].id] | length == (unique | length)) and
+  ([.events[].event_id] | length == (unique | length)) and
+  all(.active[];
+    (keys | sort) == (["explanation","first_seen_unix","id","kind","last_seen_unix","resource","severity","title"] | sort) and
+    (.id | type == "string") and (.kind | type == "string") and (.resource | type == "string") and
+    (.title | type == "string") and (.explanation | type == "string") and
+    (.severity == "warning" or .severity == "critical") and
+    (.first_seen_unix | type == "number") and (.last_seen_unix | type == "number")) and
+  all(.events[];
+    (keys | sort) == (["action","alert_id","event_id","kind","occurred_unix","previous_severity","resource","severity"] | sort) and
+    (.event_id | type == "string") and (.alert_id | type == "string") and
+    (.kind | type == "string") and (.resource | type == "string") and
+    (.severity == "warning" or .severity == "critical") and
+    (.previous_severity == null or .previous_severity == "warning" or .previous_severity == "critical") and
+    (.action == "opened" or .action == "severity-changed" or .action == "resolved") and
+    (.occurred_unix | type == "number"))
+' "$work/previous.json" >/dev/null || { printf 'error: existing storage alert history is invalid\n' >&2; exit 1; }
+
+directory=$(dirname -- "$alerts")
+mkdir -p "$directory"
+[ ! -L "$alerts" ] || { printf 'error: storage alert output cannot be a symbolic link\n' >&2; exit 1; }
+temporary=$(mktemp "$directory/.storage-alerts.XXXXXX")
+jq -S -n --argjson now "$now" --slurpfile health "$health" \
+  --slurpfile previous "$work/previous.json" --slurpfile desired "$work/desired.json" '
+  $previous[0] as $old | $desired[0] as $wanted |
+  (if $now < $old.generated_unix then $old.generated_unix else $now end) as $effective_now |
+  def prior($id): first($old.active[] | select(.id == $id)) // null;
+  def wanted($id): first($wanted[] | select(.id == $id)) // null;
+  [$wanted[] | . as $alert | prior($alert.id) as $before |
+    $alert + {first_seen_unix:(if $before == null then $effective_now else $before.first_seen_unix end),last_seen_unix:$effective_now}
+  ] as $active |
+  ([ $wanted[] | . as $alert | prior($alert.id) as $before |
+      if $before == null then
+        {event_id:("opened:" + $alert.id + ":" + ($effective_now | tostring)),action:"opened",alert_id:$alert.id,
+         kind:$alert.kind,resource:$alert.resource,severity:$alert.severity,previous_severity:null,occurred_unix:$effective_now}
+      elif $before.severity != $alert.severity then
+        {event_id:("severity-changed:" + $alert.id + ":" + ($effective_now | tostring)),action:"severity-changed",alert_id:$alert.id,
+         kind:$alert.kind,resource:$alert.resource,severity:$alert.severity,previous_severity:$before.severity,occurred_unix:$effective_now}
+      else empty end ] +
+   [ $old.active[] | . as $before | select(wanted($before.id) == null) |
+      {event_id:("resolved:" + $before.id + ":" + ($effective_now | tostring)),action:"resolved",alert_id:$before.id,
+       kind:$before.kind,resource:$before.resource,severity:$before.severity,previous_severity:$before.severity,occurred_unix:$effective_now} ]) as $changes |
+  ($old.events + $changes) as $history |
+  {schema:1,generated_unix:$effective_now,source_generated_unix:$health[0].generated_unix,
+   attention_required:any($active[]; .severity == "warning" or .severity == "critical"),
+   active_count:($active | length),active:$active,
+   events:(if ($history | length) > 1000 then $history[-1000:] else $history end)}
+' > "$temporary"
+chmod 0644 "$temporary"
+mv "$temporary" "$alerts"
+temporary=
+printf 'BEDROCK_STORAGE_ALERTS_READY path=%s active=%s\n' "$alerts" "$(jq -r .active_count "$alerts")" > /dev/console 2>/dev/null || true

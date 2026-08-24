@@ -57,11 +57,12 @@ This file records completed work, decisions, validation, and the next starting p
 - Added an explicit manual protected-writer acceptance-image mode. The completed ISO is inspected to verify its embedded installer manifest and build mode, and the top-level build manifest records whether the system writer is enabled. Acceptance artifacts retain development signing and cannot be represented as release-eligible.
 - Added the first functional first-run preference step for software updates. Users can enable scheduled signed-metadata checks or choose manual-only operation, change that choice later, and run Check now even while automatic checks are off. The persistent policy defaults off until a choice is recorded; disabled timer runs make no network request, checks never install automatically, and invalid or tampered metadata cannot replace the last verified result.
 - Added a periodic, read-only storage health foundation covering non-waking SMART status and temperatures, Linux MD health and recovery progress, imported ZFS pool status when tooling is available, and hardware RAID controller discovery. Hardware member/cache/battery health is reported as limited until a supported vendor adapter exists, and fixture tests cover healthy and degraded arrays, a failing disk, ZFS degradation, and symbolic-link output rejection.
+- Added atomic storage alert and audit state for SMART failure, high temperature, degraded MD/ZFS storage, and limited hardware RAID visibility. Repeated scans are deduplicated, first-seen time is retained, severity changes and resolutions are recorded, history is bounded to 1,000 events, and invalid or indirect state is rejected.
 
 ### Next starting point
 
 - Boot-test the v0.2 image on physical Intel and AMD systems and the remaining common VM platforms.
-- Extend the v0.4 storage-health foundation with supported hardware-vendor adapters and alert/audit delivery, then add review-only array/pool creation plans before enabling any mutating RAID control.
+- Extend the v0.4 storage-health foundation with supported hardware-vendor adapters and UI/notification delivery, then add review-only array/pool creation plans before enabling any mutating RAID control.
 - Add update download/resume transport, release-channel policy, and certificate-rotation handling.
 
 ### Bootable foundation work
