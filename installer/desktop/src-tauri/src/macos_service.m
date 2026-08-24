@@ -19,7 +19,16 @@ enum {
     BRWriterConnectionFailed = 6,
 };
 
-extern int32_t bedrock_macos_handle_writer_request(const uint8_t *bytes, uintptr_t length);
+typedef void (*BRProgressCallback)(
+    const uint8_t *bytes,
+    uintptr_t length,
+    void *context);
+
+extern int32_t bedrock_macos_handle_writer_request(
+    const uint8_t *bytes,
+    uintptr_t length,
+    BRProgressCallback progress,
+    void *context);
 
 static int32_t bedrock_macos_open_validated_disk(const char *path, uint64_t expected_size)
 {
@@ -83,17 +92,53 @@ int32_t bedrock_macos_eject_disk(int32_t descriptor)
     return 0;
 }
 
-@protocol BRWriterProtocol
-- (void)preflightRequest:(NSData *)request withReply:(void (^)(NSInteger result))reply;
+@protocol BRProgressProtocol
+- (void)reportProgress:(NSData *)update;
 @end
+
+@protocol BRWriterProtocol
+- (void)preflightRequest:(NSData *)request
+    progress:(id<BRProgressProtocol>)progress
+    withReply:(void (^)(NSInteger result))reply;
+@end
+
+static NSXPCInterface *bedrock_writer_interface(void)
+{
+    NSXPCInterface *writer = [NSXPCInterface interfaceWithProtocol:@protocol(BRWriterProtocol)];
+    NSXPCInterface *progress = [NSXPCInterface interfaceWithProtocol:@protocol(BRProgressProtocol)];
+    [writer setInterface:progress
+        forSelector:@selector(preflightRequest:progress:withReply:)
+        argumentIndex:1
+        ofReply:NO];
+    return writer;
+}
+
+static void bedrock_forward_progress(
+    const uint8_t *bytes,
+    uintptr_t length,
+    void *context)
+{
+    if (bytes == NULL || length == 0 || context == NULL) {
+        return;
+    }
+    id<BRProgressProtocol> progress = (__bridge id<BRProgressProtocol>)context;
+    NSData *update = [NSData dataWithBytes:bytes length:length];
+    [progress reportProgress:update];
+}
 
 @interface BRWriterService : NSObject <BRWriterProtocol>
 @end
 
 @implementation BRWriterService
-- (void)preflightRequest:(NSData *)request withReply:(void (^)(NSInteger result))reply
+- (void)preflightRequest:(NSData *)request
+    progress:(id<BRProgressProtocol>)progress
+    withReply:(void (^)(NSInteger result))reply
 {
-    const int32_t result = bedrock_macos_handle_writer_request(request.bytes, request.length);
+    const int32_t result = bedrock_macos_handle_writer_request(
+        request.bytes,
+        request.length,
+        bedrock_forward_progress,
+        (__bridge void *)progress);
     reply(result);
 }
 @end
@@ -106,7 +151,7 @@ int32_t bedrock_macos_eject_disk(int32_t descriptor)
     shouldAcceptNewConnection:(NSXPCConnection *)connection
 {
     (void)listener;
-    connection.exportedInterface = [NSXPCInterface interfaceWithProtocol:@protocol(BRWriterProtocol)];
+    connection.exportedInterface = bedrock_writer_interface();
     connection.exportedObject = [BRWriterService new];
     [connection activate];
     return YES;
@@ -138,10 +183,49 @@ int32_t bedrock_macos_run_writer_service(const char *client_requirement)
     }
 }
 
+@interface BRProgressReceiver : NSObject <BRProgressProtocol>
+- (instancetype)initWithCallback:(BRProgressCallback)callback context:(void *)context;
+- (void)invalidate;
+@end
+
+@implementation BRProgressReceiver {
+    BRProgressCallback _callback;
+    void *_context;
+    NSLock *_lock;
+}
+- (instancetype)initWithCallback:(BRProgressCallback)callback context:(void *)context
+{
+    self = [super init];
+    if (self != nil) {
+        _callback = callback;
+        _context = context;
+        _lock = [NSLock new];
+    }
+    return self;
+}
+- (void)reportProgress:(NSData *)update
+{
+    [_lock lock];
+    if (_callback != NULL && _context != NULL) {
+        _callback(update.bytes, update.length, _context);
+    }
+    [_lock unlock];
+}
+- (void)invalidate
+{
+    [_lock lock];
+    _callback = NULL;
+    _context = NULL;
+    [_lock unlock];
+}
+@end
+
 int32_t bedrock_macos_send_writer_request(
     const uint8_t *bytes,
     uintptr_t length,
-    const char *helper_requirement)
+    const char *helper_requirement,
+    BRProgressCallback progress_callback,
+    void *progress_context)
 {
     @autoreleasepool {
         if (bytes == NULL || length == 0 || helper_requirement == NULL) {
@@ -173,8 +257,7 @@ int32_t bedrock_macos_send_writer_request(
             NSXPCConnection *connection = [[NSXPCConnection alloc]
                 initWithMachServiceName:BRWriterServiceName
                 options:NSXPCConnectionPrivileged];
-            connection.remoteObjectInterface =
-                [NSXPCInterface interfaceWithProtocol:@protocol(BRWriterProtocol)];
+            connection.remoteObjectInterface = bedrock_writer_interface();
             [connection setCodeSigningRequirement:requirement];
             [connection activate];
             id<BRWriterProtocol> proxy = [connection remoteObjectProxyWithErrorHandler:^(NSError *error) {
@@ -182,7 +265,10 @@ int32_t bedrock_macos_send_writer_request(
                 dispatch_semaphore_signal(completed);
             }];
             NSData *request = [NSData dataWithBytes:bytes length:length];
-            [proxy preflightRequest:request withReply:^(NSInteger reply) {
+            BRProgressReceiver *progress = [[BRProgressReceiver alloc]
+                initWithCallback:progress_callback
+                context:progress_context];
+            [proxy preflightRequest:request progress:progress withReply:^(NSInteger reply) {
                 result = (int32_t)reply;
                 dispatch_semaphore_signal(completed);
             }];
@@ -196,6 +282,7 @@ int32_t bedrock_macos_send_writer_request(
             if (dispatch_semaphore_wait(completed, deadline) != 0) {
                 result = BRWriterConnectionFailed;
             }
+            [progress invalidate];
             [connection invalidate];
         } @catch (NSException *exception) {
             (void)exception;

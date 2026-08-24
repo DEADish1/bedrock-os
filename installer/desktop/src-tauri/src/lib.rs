@@ -873,11 +873,20 @@ fn launch_protected_writer(
 }
 
 #[cfg(target_os = "macos")]
+type MacProgressCallback = unsafe extern "C" fn(
+    bytes: *const u8,
+    length: usize,
+    context: *mut core::ffi::c_void,
+);
+
+#[cfg(target_os = "macos")]
 unsafe extern "C" {
     fn bedrock_macos_send_writer_request(
         bytes: *const u8,
         length: usize,
         helper_requirement: *const core::ffi::c_char,
+        progress: Option<MacProgressCallback>,
+        progress_context: *mut core::ffi::c_void,
     ) -> i32;
     fn bedrock_macos_run_writer_service(
         client_requirement: *const core::ffi::c_char,
@@ -885,17 +894,72 @@ unsafe extern "C" {
 }
 
 #[cfg(target_os = "macos")]
-fn launch_protected_writer(
+struct MacProgressContext<F> {
+    tracker: crate::write_progress::ProgressTracker,
+    progress: F,
+}
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" fn receive_macos_progress<F>(
+    bytes: *const u8,
+    length: usize,
+    context: *mut core::ffi::c_void,
+) where
+    F: FnMut(crate::write_progress::WriteProgress) + Send,
+{
+    if bytes.is_null()
+        || context.is_null()
+        || length == 0
+        || length > MAX_PROGRESS_LINE_BYTES
+    {
+        return;
+    }
+    let context = unsafe { &mut *context.cast::<MacProgressContext<F>>() };
+    let encoded = unsafe { std::slice::from_raw_parts(bytes, length) };
+    let Ok(update) = serde_json::from_slice::<crate::write_progress::WriteProgress>(encoded)
+    else {
+        return;
+    };
+    if matches!(
+        update.phase,
+        crate::write_progress::WritePhase::Complete
+            | crate::write_progress::WritePhase::Failed
+    ) {
+        return;
+    }
+    if context.tracker.accept(update.clone()).is_ok() {
+        (context.progress)(update);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn launch_protected_writer<F>(
     request: &PrivilegedWriteRequest,
-    _total_bytes: u64,
-    _progress: impl FnMut(crate::write_progress::WriteProgress),
-) -> Result<ProtectedWriterResult, String> {
+    total_bytes: u64,
+    progress: F,
+) -> Result<ProtectedWriterResult, String>
+where
+    F: FnMut(crate::write_progress::WriteProgress) + Send,
+{
     let bytes = helper_request_bytes(request)?;
     let requirement = macos_peer_requirement(MACOS_HELPER_IDENTIFIER, APPLE_TEAM_ID)?;
     let requirement = std::ffi::CString::new(requirement)
         .map_err(|_| "The trusted macOS helper requirement is invalid.".to_string())?;
+    let mut progress_context = MacProgressContext {
+        tracker: crate::write_progress::ProgressTracker::new(
+            &request.session_id,
+            total_bytes,
+        )?,
+        progress,
+    };
     let result = unsafe {
-        bedrock_macos_send_writer_request(bytes.as_ptr(), bytes.len(), requirement.as_ptr())
+        bedrock_macos_send_writer_request(
+            bytes.as_ptr(),
+            bytes.len(),
+            requirement.as_ptr(),
+            Some(receive_macos_progress::<F>),
+            std::ptr::addr_of_mut!(progress_context).cast(),
+        )
     };
     match result {
         HELPER_WRITE_COMPLETE_EXIT => Ok(ProtectedWriterResult::WriteComplete),
@@ -1324,7 +1388,11 @@ pub fn run_protected_writer_helper() -> i32 {
 }
 
 #[cfg(target_os = "macos")]
-fn macos_writer_request(bytes: &[u8]) -> i32 {
+fn macos_writer_request(
+    bytes: &[u8],
+    progress: Option<MacProgressCallback>,
+    progress_context: *mut core::ffi::c_void,
+) -> i32 {
     if let Err(error) = validate_elevated_identity(platform_is_elevated()) {
         eprintln!("{error}");
         return 1;
@@ -1347,7 +1415,19 @@ fn macos_writer_request(bytes: &[u8]) -> i32 {
         std::io::Cursor::new(bytes),
         &executable,
         now,
-        |_| {},
+        |update| {
+            let Some(progress) = progress else {
+                return;
+            };
+            let Ok(encoded) = serde_json::to_vec(&update) else {
+                return;
+            };
+            if encoded.len() <= MAX_PROGRESS_LINE_BYTES {
+                unsafe {
+                    progress(encoded.as_ptr(), encoded.len(), progress_context);
+                }
+            }
+        },
     ) {
         Ok(ProtectedWriterResult::WriteComplete) => HELPER_WRITE_COMPLETE_EXIT,
         Ok(ProtectedWriterResult::PreflightOnly) => HELPER_PREFLIGHT_ONLY_EXIT,
@@ -1363,11 +1443,17 @@ fn macos_writer_request(bytes: &[u8]) -> i32 {
 pub unsafe extern "C" fn bedrock_macos_handle_writer_request(
     bytes: *const u8,
     length: usize,
+    progress: Option<MacProgressCallback>,
+    progress_context: *mut core::ffi::c_void,
 ) -> i32 {
     if bytes.is_null() || length == 0 || length as u64 > MAX_HELPER_REQUEST_BYTES {
         return 1;
     }
-    macos_writer_request(unsafe { std::slice::from_raw_parts(bytes, length) })
+    macos_writer_request(
+        unsafe { std::slice::from_raw_parts(bytes, length) },
+        progress,
+        progress_context,
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -1637,6 +1723,47 @@ mod tests {
         });
 
         assert_eq!(accepted, [first, second]);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_progress_callback_accepts_only_valid_nonterminal_updates() {
+        use crate::write_progress::{ProgressTracker, WritePhase};
+
+        unsafe fn deliver<F>(
+            context: &mut super::MacProgressContext<F>,
+            bytes: &[u8],
+        ) where
+            F: FnMut(crate::write_progress::WriteProgress) + Send,
+        {
+            unsafe {
+                super::receive_macos_progress::<F>(
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    std::ptr::from_mut(context).cast(),
+                );
+            }
+        }
+
+        let session = "5d776cd0-c6b8-44d2-a8e0-8e3b56f0fb7d";
+        let mut sender = ProgressTracker::new(session, 100).unwrap();
+        let writing = sender.update(WritePhase::Writing, 25).unwrap();
+        let complete = sender.update(WritePhase::Complete, 100).unwrap();
+        let writing_bytes = serde_json::to_vec(&writing).unwrap();
+        let complete_bytes = serde_json::to_vec(&complete).unwrap();
+        let mut accepted = Vec::new();
+        let mut context = super::MacProgressContext {
+            tracker: ProgressTracker::new(session, 100).unwrap(),
+            progress: |update| accepted.push(update),
+        };
+        unsafe {
+            deliver(&mut context, &writing_bytes);
+            deliver(&mut context, b"not-json");
+            deliver(&mut context, &complete_bytes);
+        }
+        drop(context);
+
+        assert_eq!(accepted, [writing]);
     }
 
     #[cfg(target_os = "windows")]

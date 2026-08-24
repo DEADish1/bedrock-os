@@ -44,6 +44,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Added a versioned, session-bound, monotonic installer progress contract, real write/reread/finalization pipeline phases, and truthful graphical preparation/approval/completion states; privileged byte-progress relay remains fail-closed pending authenticated per-platform channels.
 - Connected Linux protected-helper byte progress through a one-way pipe from the exact policy-bound executable, with strict session, size, sequence, phase, byte, and line validation; invalid display updates cannot affect the write and completion still requires a successful helper exit.
 - Connected Windows protected-helper byte progress through a local-only inbound named pipe authenticated against the elevated helper process ID, with an interruptible connection wait, exact session-derived pipe identity, the shared strict progress validation, and successful helper exit still required for completion.
+- Connected macOS protected-helper byte progress through a progress-only proxy object on the existing mutually code-signed XPC connection, with bounded messages, locked callback invalidation, shared session/size/sequence/phase validation, and successful protected-service completion still required.
 
 ### Next starting point
 
