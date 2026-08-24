@@ -447,6 +447,51 @@ fn decode_helper_request(encoded: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+fn validate_elevated_identity(elevated: bool) -> Result<(), String> {
+    if elevated {
+        Ok(())
+    } else {
+        Err(
+            "The protected writer is not running with administrator authority. No disk operation was attempted."
+                .into(),
+        )
+    }
+}
+
+#[cfg(unix)]
+fn platform_is_elevated() -> bool {
+    unsafe { libc::geteuid() == 0 }
+}
+
+#[cfg(target_os = "windows")]
+fn platform_is_elevated() -> bool {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::Security::{
+        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    let mut token = std::ptr::null_mut();
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return false;
+    }
+    let mut elevation = TOKEN_ELEVATION::default();
+    let mut returned_size = 0_u32;
+    let result = unsafe {
+        GetTokenInformation(
+            token,
+            TokenElevation,
+            std::ptr::addr_of_mut!(elevation).cast::<core::ffi::c_void>(),
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut returned_size,
+        )
+    };
+    unsafe { CloseHandle(token) };
+    result != 0
+        && returned_size == std::mem::size_of::<TOKEN_ELEVATION>() as u32
+        && elevation.TokenIsElevated != 0
+}
+
 #[cfg(all(unix, not(target_os = "macos")))]
 fn linux_helper_command(encoded: &str) -> Command {
     let mut command = Command::new("/usr/bin/pkexec");
@@ -592,6 +637,10 @@ fn protected_writer_preflight<R: Read>(
 }
 
 pub fn run_protected_writer_helper() -> i32 {
+    if let Err(error) = validate_elevated_identity(platform_is_elevated()) {
+        eprintln!("{error}");
+        return 1;
+    }
     let now = match unix_time_seconds() {
         Ok(now) => now,
         Err(error) => {
@@ -645,8 +694,8 @@ pub fn run() {
 mod tests {
     use super::{
         decode_helper_request, encode_helper_request, is_sha256, parse_inventory,
-        protected_writer_preflight, validate_helper_request, validate_write_target,
-        verify_cms_signature, InstallTarget, PrivilegedWriteRequest,
+        protected_writer_preflight, validate_elevated_identity, validate_helper_request,
+        validate_write_target, verify_cms_signature, InstallTarget, PrivilegedWriteRequest,
     };
     use openssl::asn1::Asn1Time;
     use openssl::bn::BigNum;
@@ -763,6 +812,14 @@ mod tests {
         assert_eq!(restored.session_id, request.session_id);
         assert_eq!(restored.target_id, request.target_id);
         assert!(decode_helper_request("not base64!").is_err());
+    }
+
+    #[test]
+    fn helper_requires_elevated_process_identity() {
+        assert!(validate_elevated_identity(true).is_ok());
+        let error = validate_elevated_identity(false).unwrap_err();
+        assert!(error.contains("administrator authority"));
+        assert!(error.contains("No disk operation was attempted"));
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]

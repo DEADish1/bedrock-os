@@ -31,6 +31,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Added a separate fail-closed media-writer helper entry point with bounded, strict, time-limited requests, independent signed-image verification, packaged-scanner resolution, fresh inventory, and repeated target validation.
 - Added release-only helper staging with target-triple naming and SHA-256 copy verification, helper-only Windows UAC metadata, exact-path Linux polkit policy, and macOS 13+ signed-bundle launch-daemon placement.
 - Connected bounded protected-helper requests through exact-path Linux `pkexec` and native Windows `runas`, including process completion and a dedicated preflight-only exit code; macOS remains fail-closed pending signed SMAppService/XPC peer validation.
+- Required the protected helper to prove effective UID 0 on Unix/macOS or an elevated Windows process token before reading any request.
 
 ### Next starting point
 
