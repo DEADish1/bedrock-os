@@ -5,9 +5,11 @@ on:
     paths:
       - ".github/workflows/installer-desktop.yml"
       - "installer/desktop/**"
+      - "installer/acceptance/**"
       - "installer/ui/**"
       - "installer/tests/test-desktop-shell.sh"
       - "installer/tests/test-ui-shell.sh"
+      - "installer/tests/test-real-device-acceptance.sh"
   workflow_dispatch:
 
 permissions:
@@ -22,6 +24,7 @@ jobs:
         run: |
           sh installer/tests/test-desktop-shell.sh
           sh installer/tests/test-ui-shell.sh
+          sh installer/tests/test-real-device-acceptance.sh
 
   compile:
     strategy:

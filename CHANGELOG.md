@@ -36,6 +36,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Added a fail-closed whole-device open gate: Linux rejects partitions through sysfs and uses exclusive no-follow block-device access, Windows opens exact physical drives with no sharing, and macOS takes an exclusive raw-disk lock; every platform confirms capacity and closes the handle without writing.
 - Added a platform finalization layer that requires successful cache synchronization before eject, supports Windows storage eject and macOS disk eject, and reports synchronized Linux or unsupported eject media as safe for manual removal without claiming automatic ejection.
 - Added an end-to-end virtual-device pipeline covering verified ISO and compressed-raw writing, progress, reread identity, cache synchronization, eject/manual-removal outcomes, and fail-closed checksum and synchronization errors without accessing host media.
+- Added an explicitly destructive Linux disposable-drive acceptance runner with fresh inventory, whole/removable-device checks, exact path/capacity attestations, conservative large-drive protection, and privacy-safe evidence that cannot be confused with fixture results.
 
 ### Next starting point
 
