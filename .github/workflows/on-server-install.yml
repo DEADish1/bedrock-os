@@ -32,4 +32,4 @@ jobs:
           sh os/tests/test-install-image-simulator.sh
           sh os/tests/test-protected-install-request.sh
           sh os/tests/test-protected-system-writer.sh
-          sudo env BEDROCK_RUN_LOOP_INSTALL_TEST=1 sh os/tests/test-protected-loop-install.sh
+          sudo env "PATH=$PATH" BEDROCK_RUN_LOOP_INSTALL_TEST=1 sh os/tests/test-protected-loop-install.sh
