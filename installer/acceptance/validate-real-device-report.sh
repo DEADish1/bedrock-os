@@ -8,13 +8,18 @@ command -v jq >/dev/null 2>&1 || { printf 'error: jq is required\n' >&2; exit 2;
 required_mode=physical
 [ "${BEDROCK_ALLOW_FIXTURE_ACCEPTANCE_REPORT:-0}" = 1 ] && required_mode=fixture
 jq -e --arg mode "$required_mode" '
-  .schema == 1 and .mode == $mode and .platform == "linux" and
+  .schema == 1 and .mode == $mode and
+  (.platform == "linux" or .platform == "macos" or .platform == "windows") and
   (.completed_at | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T")) and
   (.image_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
   (.target.id | type == "string" and length > 0) and
   (.target.path | type == "string" and length > 0) and
   (.target.model | type == "string" and length > 0) and
   (.target.size_bytes | type == "number" and . >= 8589934592 and floor == .) and
+  (.mode == "fixture" or
+    (.platform == "linux" and (.target.path | test("^/dev/[A-Za-z0-9._-]+$"))) or
+    (.platform == "macos" and (.target.path | test("^/dev/disk[0-9]+$"))) or
+    (.platform == "windows" and (.target.path | test("^\\\\\\\\\\.\\\\PhysicalDrive[0-9]+$")))) and
   .target.disposable == true and
   .checks.fresh_inventory == true and .checks.exact_confirmation == true and
   .checks.write_completed == true and .checks.reread_checksum == true and

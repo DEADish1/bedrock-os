@@ -45,6 +45,23 @@ fi
 BEDROCK_ALLOW_FIXTURE_ACCEPTANCE_REPORT=1 \
   sh "$validator" "$work/fixture-report.json" >/dev/null
 
+jq '.platform = "macos" | .target.path = "/dev/disk8"' \
+  "$work/fixture-report.json" > "$work/macos-fixture-report.json"
+BEDROCK_ALLOW_FIXTURE_ACCEPTANCE_REPORT=1 \
+  sh "$validator" "$work/macos-fixture-report.json" >/dev/null
+jq '.platform = "windows" | .target.path = "\\\\.\\PhysicalDrive2"' \
+  "$work/fixture-report.json" > "$work/windows-fixture-report.json"
+BEDROCK_ALLOW_FIXTURE_ACCEPTANCE_REPORT=1 \
+  sh "$validator" "$work/windows-fixture-report.json" >/dev/null
+
+jq '.mode = "physical" | .target.path = "/dev/sdz"' \
+  "$work/fixture-report.json" > "$work/linux-physical-shape.json"
+sh "$validator" "$work/linux-physical-shape.json" >/dev/null
+jq '.mode = "physical"' "$work/macos-fixture-report.json" > "$work/macos-physical-shape.json"
+sh "$validator" "$work/macos-physical-shape.json" >/dev/null
+jq '.mode = "physical"' "$work/windows-fixture-report.json" > "$work/windows-physical-shape.json"
+sh "$validator" "$work/windows-physical-shape.json" >/dev/null
+
 jq '.checks.reread_checksum = false' "$work/fixture-report.json" > "$work/failed-report.json"
 if BEDROCK_ALLOW_FIXTURE_ACCEPTANCE_REPORT=1 \
   sh "$validator" "$work/failed-report.json" >/dev/null 2>&1; then
