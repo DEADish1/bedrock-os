@@ -41,7 +41,7 @@ disk_sysfs=$(readlink -f "/sys/dev/block/$major:$minor")
 }
 
 umask 077
-work=$(mktemp -d /run/bedrock-install.XXXXXX)
+work=$(mktemp -d /dev/bedrock-install.XXXXXX)
 cleanup() {
   rm -f "$work/state" "$work/target"
   rmdir "$work" 2>/dev/null || true
