@@ -2,19 +2,21 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
-use tauri::{path::BaseDirectory, Manager};
+use std::sync::Mutex;
+use tauri::{path::BaseDirectory, Manager, State};
 use tauri_plugin_dialog::DialogExt;
+use uuid::Uuid;
 
 const RELEASE_TRUST_CERT_PEM: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/bedrock-release-trust.pem"));
 
 const BRIDGE_UNAVAILABLE: &str =
     "The protected disk service is not connected. No disk operation was attempted.";
+const MINIMUM_TARGET_SIZE: u64 = 8 * 1024 * 1024 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 struct InstallTarget {
     id: String,
     path: String,
@@ -32,9 +34,10 @@ struct TargetInventory {
     targets: Vec<InstallTarget>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct VerifiedImage {
+    session_id: String,
     name: String,
     version: String,
     size_bytes: u64,
@@ -42,7 +45,7 @@ struct VerifiedImage {
     image_type: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReleaseManifest {
     schema: u8,
@@ -52,7 +55,7 @@ struct ReleaseManifest {
     artifact: ReleaseArtifact,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReleaseArtifact {
     name: String,
@@ -64,8 +67,26 @@ struct ReleaseArtifact {
     write_size: u64,
 }
 
+#[derive(Clone)]
+struct VerifiedSession {
+    image_path: PathBuf,
+    public: VerifiedImage,
+}
+
+#[derive(Default)]
+struct InstallerState {
+    verified: Mutex<Option<VerifiedSession>>,
+}
+
 #[tauri::command]
-fn choose_and_verify_image(handle: tauri::AppHandle) -> Result<VerifiedImage, String> {
+fn choose_and_verify_image(
+    handle: tauri::AppHandle,
+    state: State<'_, InstallerState>,
+) -> Result<VerifiedImage, String> {
+    *state
+        .verified
+        .lock()
+        .map_err(|_| "The verified-image session could not be reset.".to_string())? = None;
     let selection = handle
         .dialog()
         .file()
@@ -76,13 +97,23 @@ fn choose_and_verify_image(handle: tauri::AppHandle) -> Result<VerifiedImage, St
         .into_path()
         .map_err(|_| "The selected image is not a local file.".to_string())?;
     let manifest = verify_signed_release(&image_path, RELEASE_TRUST_CERT_PEM)?;
-    Ok(VerifiedImage {
+    let verified = VerifiedImage {
+        session_id: Uuid::new_v4().to_string(),
         name: manifest.artifact.name,
         version: manifest.version,
         size_bytes: manifest.artifact.size,
         sha256: manifest.artifact.sha256,
         image_type: manifest.artifact.image_type,
-    })
+    };
+    let mut session = state
+        .verified
+        .lock()
+        .map_err(|_| "The verified-image session could not be stored.".to_string())?;
+    *session = Some(VerifiedSession {
+        image_path,
+        public: verified.clone(),
+    });
+    Ok(verified)
 }
 
 fn verify_signed_release(image_path: &Path, trust_cert_pem: &[u8]) -> Result<ReleaseManifest, String> {
@@ -195,6 +226,10 @@ fn hash_file(path: &Path) -> Result<(u64, String), String> {
 
 #[tauri::command]
 fn list_targets(handle: tauri::AppHandle) -> Result<Vec<InstallTarget>, String> {
+    scan_targets(&handle)
+}
+
+fn scan_targets(handle: &tauri::AppHandle) -> Result<Vec<InstallTarget>, String> {
     let relative_path = platform_adapter_path();
     let script = handle
         .path()
@@ -272,16 +307,73 @@ fn parse_inventory(bytes: &[u8]) -> Result<Vec<InstallTarget>, String> {
 
 #[tauri::command]
 fn write_verified_image(
-    _image: VerifiedImage,
-    _target_id: String,
-    _confirmation: String,
+    handle: tauri::AppHandle,
+    state: State<'_, InstallerState>,
+    image: VerifiedImage,
+    target_id: String,
+    confirmation: String,
 ) -> Result<(), String> {
+    let session = state
+        .verified
+        .lock()
+        .map_err(|_| "The verified-image session could not be read.".to_string())?
+        .clone()
+        .ok_or_else(|| "Choose and verify the Bedrock image again before writing.".to_string())?;
+    if session.public != image {
+        return Err("The verified-image session does not match. Choose the image again.".into());
+    }
+
+    let manifest = verify_signed_release(&session.image_path, RELEASE_TRUST_CERT_PEM)?;
+    if manifest.artifact.name != image.name
+        || manifest.version != image.version
+        || manifest.artifact.size != image.size_bytes
+        || manifest.artifact.sha256 != image.sha256
+        || manifest.artifact.image_type != image.image_type
+    {
+        return Err("The selected image changed after verification. Choose it again.".into());
+    }
+
+    let targets = scan_targets(&handle)?;
+    validate_write_target(
+        &targets,
+        &target_id,
+        &confirmation,
+        manifest.artifact.write_size,
+    )?;
     Err(BRIDGE_UNAVAILABLE.into())
+}
+
+fn validate_write_target<'a>(
+    targets: &'a [InstallTarget],
+    target_id: &str,
+    confirmation: &str,
+    required_size: u64,
+) -> Result<&'a InstallTarget, String> {
+    let matches: Vec<_> = targets.iter().filter(|target| target.id == target_id).collect();
+    if matches.len() != 1 {
+        return Err("The selected drive is missing or no longer uniquely identified.".into());
+    }
+    let target = matches[0];
+    if !target.removable || target.system || target.mounted || target.read_only {
+        return Err("The selected drive is no longer safe to erase.".into());
+    }
+    if target.size_bytes < MINIMUM_TARGET_SIZE || target.size_bytes < required_size {
+        return Err("The selected drive is too small for this image.".into());
+    }
+    let expected = format!(
+        "ERASE {} — {} — {}",
+        target.model, target.path, target.size_bytes
+    );
+    if confirmation != expected {
+        return Err("The erase confirmation does not match the freshly inspected drive.".into());
+    }
+    Ok(target)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(InstallerState::default())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             choose_and_verify_image,
@@ -294,7 +386,9 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_sha256, parse_inventory, verify_cms_signature};
+    use super::{
+        is_sha256, parse_inventory, validate_write_target, verify_cms_signature, InstallTarget,
+    };
     use openssl::asn1::Asn1Time;
     use openssl::bn::BigNum;
     use openssl::cms::{CmsContentInfo, CMSOptions};
@@ -306,14 +400,14 @@ mod tests {
 
     #[test]
     fn accepts_shared_inventory_contract() {
-        let targets = parse_inventory(br#"{"schema":1,"targets":[{"id":"linux:test","path":"/dev/test","model":"Test USB","sizeBytes":8589934592,"removable":true,"system":false,"mounted":false,"readOnly":false}]}"#).unwrap();
+        let targets = parse_inventory(br#"{"schema":1,"targets":[{"id":"linux:test","path":"/dev/test","model":"Test USB","size_bytes":8589934592,"removable":true,"system":false,"mounted":false,"read_only":false}]}"#).unwrap();
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].model, "Test USB");
     }
 
     #[test]
     fn rejects_incomplete_inventory() {
-        let error = parse_inventory(br#"{"schema":1,"targets":[{"id":"","path":"/dev/test","model":"Test USB","sizeBytes":8589934592,"removable":true,"system":false,"mounted":false,"readOnly":false}]}"#).unwrap_err();
+        let error = parse_inventory(br#"{"schema":1,"targets":[{"id":"","path":"/dev/test","model":"Test USB","size_bytes":8589934592,"removable":true,"system":false,"mounted":false,"read_only":false}]}"#).unwrap_err();
         assert!(error.contains("incomplete"));
     }
 
@@ -323,6 +417,43 @@ mod tests {
         assert!(!is_sha256(&"A".repeat(64)));
         assert!(!is_sha256(&"g".repeat(64)));
         assert!(!is_sha256(&"a".repeat(63)));
+    }
+
+    fn safe_target() -> InstallTarget {
+        InstallTarget {
+            id: "linux:test".into(),
+            path: "/dev/test".into(),
+            model: "Test USB".into(),
+            size_bytes: 8 * 1024 * 1024 * 1024,
+            removable: true,
+            system: false,
+            mounted: false,
+            read_only: false,
+        }
+    }
+
+    #[test]
+    fn requires_exact_confirmation_for_fresh_target() {
+        let target = safe_target();
+        let phrase = format!("ERASE Test USB — /dev/test — {}", target.size_bytes);
+        assert!(validate_write_target(&[target.clone()], "linux:test", &phrase, 1).is_ok());
+        assert!(validate_write_target(&[target], "linux:test", "ERASE stale", 1).is_err());
+    }
+
+    #[test]
+    fn rejects_system_target_and_insufficient_capacity() {
+        let mut target = safe_target();
+        let phrase = format!("ERASE Test USB — /dev/test — {}", target.size_bytes);
+        target.system = true;
+        assert!(validate_write_target(&[target.clone()], "linux:test", &phrase, 1).is_err());
+        target.system = false;
+        assert!(validate_write_target(
+            &[target],
+            "linux:test",
+            &phrase,
+            9 * 1024 * 1024 * 1024,
+        )
+        .is_err());
     }
 
     fn temporary_signer() -> (PKey<openssl::pkey::Private>, X509) {

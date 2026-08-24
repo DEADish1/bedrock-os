@@ -22,6 +22,9 @@ This file records completed work, decisions, validation, and the next starting p
 - Added native detached-CMS validation backed by a build-injected public release certificate.
 - Made certificate-free development builds reject every image and production-mode builds fail at compile time when the trust certificate is missing.
 - Added generated in-memory signature tests proving trusted manifests pass while changed manifests and missing trust anchors fail.
+- Kept verified image paths inside native memory and exposed only opaque verification-session IDs to the interface.
+- Added a pre-writer gate that repeats signed-image verification, refreshes removable-drive inventory, and revalidates safety, capacity, identity, and the exact erase phrase. The privileged writer remains disabled.
+- Aligned the native drive response with the shared snake-case inventory contract so the interface reliably filters read-only media and displays exact capacity.
 
 ### Next starting point
 
