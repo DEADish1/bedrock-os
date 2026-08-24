@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::File;
@@ -18,8 +19,9 @@ const RELEASE_TRUST_CERT_PEM: &[u8] =
 const BRIDGE_UNAVAILABLE: &str =
     "The protected disk service is not connected. No disk operation was attempted.";
 const MINIMUM_TARGET_SIZE: u64 = 8 * 1024 * 1024 * 1024;
-const MAX_HELPER_REQUEST_BYTES: u64 = 64 * 1024;
+const MAX_HELPER_REQUEST_BYTES: u64 = 16 * 1024;
 const HELPER_REQUEST_LIFETIME_SECONDS: u64 = 120;
+const HELPER_PREFLIGHT_ONLY_EXIT: i32 = 3;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct InstallTarget {
@@ -83,7 +85,7 @@ struct InstallerState {
     verified: Mutex<Option<VerifiedSession>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct PrivilegedWriteRequest {
     schema: u8,
@@ -356,6 +358,15 @@ fn write_verified_image(
         &confirmation,
         manifest.artifact.write_size,
     )?;
+    let request = PrivilegedWriteRequest {
+        schema: 1,
+        session_id: session.public.session_id,
+        requested_at: unix_time_seconds()?,
+        image_path: session.image_path,
+        target_id,
+        confirmation,
+    };
+    launch_protected_writer(&request)?;
     Err(BRIDGE_UNAVAILABLE.into())
 }
 
@@ -390,6 +401,7 @@ fn validate_helper_request(request: &PrivilegedWriteRequest, now: u64) -> Result
     if request.schema != 1
         || Uuid::parse_str(&request.session_id).is_err()
         || !request.image_path.is_absolute()
+        || request.image_path.to_string_lossy().len() > 4096
         || request.target_id.is_empty()
         || request.target_id.len() > 512
         || request.confirmation.is_empty()
@@ -403,6 +415,129 @@ fn validate_helper_request(request: &PrivilegedWriteRequest, now: u64) -> Result
         return Err("The protected writer request has expired.".into());
     }
     Ok(())
+}
+
+fn unix_time_seconds() -> Result<u64, String> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|_| "The protected writer could not validate the system clock.".to_string())
+}
+
+fn encode_helper_request(request: &PrivilegedWriteRequest) -> Result<String, String> {
+    let bytes = serde_json::to_vec(request)
+        .map_err(|_| "The protected writer request could not be encoded.".to_string())?;
+    if bytes.len() as u64 > MAX_HELPER_REQUEST_BYTES {
+        return Err("The protected writer request is too large.".into());
+    }
+    Ok(BASE64.encode(bytes))
+}
+
+fn decode_helper_request(encoded: &str) -> Result<Vec<u8>, String> {
+    let maximum_encoded = (MAX_HELPER_REQUEST_BYTES as usize).div_ceil(3) * 4;
+    if encoded.len() > maximum_encoded {
+        return Err("The protected writer request is too large.".into());
+    }
+    let bytes = BASE64
+        .decode(encoded)
+        .map_err(|_| "The protected writer request encoding is invalid.".to_string())?;
+    if bytes.len() as u64 > MAX_HELPER_REQUEST_BYTES {
+        return Err("The protected writer request is too large.".into());
+    }
+    Ok(bytes)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn linux_helper_command(encoded: &str) -> Command {
+    let mut command = Command::new("/usr/bin/pkexec");
+    command
+        .arg("/usr/bin/bedrock-media-writer")
+        .arg("--request-base64")
+        .arg(encoded);
+    command
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn launch_protected_writer(request: &PrivilegedWriteRequest) -> Result<(), String> {
+    let encoded = encode_helper_request(request)?;
+    let status = linux_helper_command(&encoded)
+        .status()
+        .map_err(|_| "The Linux administrator approval service could not start.".to_string())?;
+    match status.code() {
+        Some(HELPER_PREFLIGHT_ONLY_EXIT) => Ok(()),
+        Some(126) | Some(127) => {
+            Err("Administrator approval was cancelled or unavailable.".into())
+        }
+        _ => Err(
+            "The protected writer rejected the request. No disk operation was attempted.".into(),
+        ),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn launch_protected_writer(_request: &PrivilegedWriteRequest) -> Result<(), String> {
+    Err(
+        "The signed macOS protected service is not registered yet. No disk operation was attempted."
+            .into(),
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn launch_protected_writer(request: &PrivilegedWriteRequest) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, WaitForSingleObject, INFINITE,
+    };
+    use windows_sys::Win32::UI::Shell::{
+        ShellExecuteExW, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    fn wide(value: &std::ffi::OsStr) -> Vec<u16> {
+        value.encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    let encoded = encode_helper_request(request)?;
+    let executable = std::env::current_exe()
+        .map_err(|_| "The installer executable location is unavailable.".to_string())?;
+    let helper = executable
+        .parent()
+        .ok_or_else(|| "The installer executable location is invalid.".to_string())?
+        .join("bedrock-media-writer.exe");
+    if !helper.is_file() {
+        return Err(
+            "The protected Windows writer is not installed. No disk operation was attempted."
+                .into(),
+        );
+    }
+
+    let verb = wide(std::ffi::OsStr::new("runas"));
+    let helper = wide(helper.as_os_str());
+    let parameters = wide(std::ffi::OsStr::new(&format!("--request-base64 {encoded}")));
+    let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+    info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
+    info.lpVerb = verb.as_ptr();
+    info.lpFile = helper.as_ptr();
+    info.lpParameters = parameters.as_ptr();
+    info.nShow = SW_SHOWNORMAL;
+
+    if unsafe { ShellExecuteExW(&mut info) } == 0 || info.hProcess.is_null() {
+        return Err("Windows administrator approval was cancelled or unavailable.".into());
+    }
+    let wait = unsafe { WaitForSingleObject(info.hProcess, INFINITE) };
+    let mut exit_code = 1_u32;
+    let read_exit = unsafe { GetExitCodeProcess(info.hProcess, &mut exit_code) };
+    unsafe { CloseHandle(info.hProcess) };
+    if wait != WAIT_OBJECT_0 || read_exit == 0 {
+        return Err("The protected Windows writer did not finish safely.".into());
+    }
+    if exit_code == HELPER_PREFLIGHT_ONLY_EXIT as u32 {
+        Ok(())
+    } else {
+        Err("The protected writer rejected the request. No disk operation was attempted.".into())
+    }
 }
 
 fn helper_adapter_path(executable: &Path) -> Result<PathBuf, String> {
@@ -457,10 +592,10 @@ fn protected_writer_preflight<R: Read>(
 }
 
 pub fn run_protected_writer_helper() -> i32 {
-    let now = match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(duration) => duration.as_secs(),
-        Err(_) => {
-            eprintln!("The protected writer could not validate the system clock.");
+    let now = match unix_time_seconds() {
+        Ok(now) => now,
+        Err(error) => {
+            eprintln!("{error}");
             return 1;
         }
     };
@@ -471,10 +606,19 @@ pub fn run_protected_writer_helper() -> i32 {
             return 1;
         }
     };
-    match protected_writer_preflight(std::io::stdin().lock(), &executable, now) {
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    let result = match arguments.as_slice() {
+        [] => protected_writer_preflight(std::io::stdin().lock(), &executable, now),
+        [flag, encoded] if flag == "--request-base64" => decode_helper_request(encoded)
+            .and_then(|bytes| {
+                protected_writer_preflight(std::io::Cursor::new(bytes), &executable, now)
+            }),
+        _ => Err("The protected writer command line is invalid.".into()),
+    };
+    match result {
         Ok(()) => {
             eprintln!("{BRIDGE_UNAVAILABLE}");
-            1
+            HELPER_PREFLIGHT_ONLY_EXIT
         }
         Err(error) => {
             eprintln!("{error}");
@@ -500,8 +644,9 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_sha256, parse_inventory, protected_writer_preflight, validate_helper_request,
-        validate_write_target, verify_cms_signature, InstallTarget, PrivilegedWriteRequest,
+        decode_helper_request, encode_helper_request, is_sha256, parse_inventory,
+        protected_writer_preflight, validate_helper_request, validate_write_target,
+        verify_cms_signature, InstallTarget, PrivilegedWriteRequest,
     };
     use openssl::asn1::Asn1Time;
     use openssl::bn::BigNum;
@@ -610,8 +755,35 @@ mod tests {
     }
 
     #[test]
+    fn helper_transport_round_trips_bounded_json() {
+        let request = helper_request(1_000);
+        let encoded = encode_helper_request(&request).unwrap();
+        let decoded = decode_helper_request(&encoded).unwrap();
+        let restored: PrivilegedWriteRequest = serde_json::from_slice(&decoded).unwrap();
+        assert_eq!(restored.session_id, request.session_id);
+        assert_eq!(restored.target_id, request.target_id);
+        assert!(decode_helper_request("not base64!").is_err());
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn linux_transport_uses_only_exact_protected_paths() {
+        let command = super::linux_helper_command("encoded-request");
+        assert_eq!(command.get_program(), "/usr/bin/pkexec");
+        let arguments: Vec<_> = command.get_args().collect();
+        assert_eq!(
+            arguments,
+            [
+                "/usr/bin/bedrock-media-writer",
+                "--request-base64",
+                "encoded-request"
+            ]
+        );
+    }
+
+    #[test]
     fn rejects_oversized_helper_input_before_processing() {
-        let input = Cursor::new(vec![b'x'; 64 * 1024 + 1]);
+        let input = Cursor::new(vec![b'x'; 16 * 1024 + 1]);
         let error = protected_writer_preflight(input, Path::new("/bedrock/helper"), 1_000)
             .unwrap_err();
         assert!(error.contains("too large"));
