@@ -10,6 +10,7 @@ on:
       - "os/layout/**"
       - "os/tests/install-targets.json"
       - "os/tests/test-install-plan.sh"
+      - "os/tests/test-protected-system-writer.sh"
   workflow_dispatch:
 
 permissions:
@@ -29,3 +30,4 @@ jobs:
           sh os/tests/test-install-plan.sh
           sh os/tests/test-install-image-simulator.sh
           sh os/tests/test-protected-install-request.sh
+          sh os/tests/test-protected-system-writer.sh

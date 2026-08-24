@@ -105,6 +105,6 @@ jq -n -c \
     target_id: $target_id,
     preflight_complete: true,
     ready_for_writer: false,
-    blocked_reason: "The protected physical system-disk writer is not connected. No disk was opened."
+    blocked_reason: "Preflight cannot authorize physical writing by itself. No disk was opened."
   }
 '

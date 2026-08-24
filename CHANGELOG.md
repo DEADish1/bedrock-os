@@ -51,6 +51,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Added a focused pull-request safety gate for Linux live-media discovery, the canonical system-disk layout, and non-writing installation-plan validation.
 - Added a test-only on-server installation simulator that verifies the source, writes and rereads a confined sparse file, relocates GPT metadata, expands and checks persistent state, preserves fixed system content, and rejects interruption, corruption, outside-directory targets, and all non-test use.
 - Added a bounded, expiring protected system-install request and independent preflight that fixes artifact/package/layout discovery, refreshes target inventory, rejects schema and identity changes, rechecks packaged image integrity and capacity, and still refuses to open a disk or claim writer readiness.
+- Added a disabled-by-default Linux physical system-writer stage with an exact production-trust build gate, root and direct-whole-device enforcement, exclusive no-follow opening, kernel capacity recheck, opened-source SHA-256 verification, synchronized raw writing, and full byte-for-byte reread. CI compiles the gated branch but never executes or opens it; GPT/state finalization and real-device acceptance remain unfinished.
 
 ### Next starting point
 
