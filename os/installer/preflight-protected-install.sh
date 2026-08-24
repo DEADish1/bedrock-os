@@ -1,7 +1,10 @@
 #!/bin/sh
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+LC_ALL=C
+export PATH LC_ALL
 [ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
 request=$1
 [ -f "$request" ] && [ ! -L "$request" ] || { printf 'error: protected request is missing or indirect\n' >&2; exit 1; }
@@ -13,7 +16,18 @@ for tool in jq sha256sum; do
   command -v "$tool" >/dev/null 2>&1 || { printf 'error: %s is required\n' "$tool" >&2; exit 2; }
 done
 
-layout="$ROOT/os/layout/bedrock-amd64.json"
+if [ "$SCRIPT_DIR" = /usr/lib/bedrock/installer ]; then
+  layout=/usr/share/bedrock/installer/bedrock-amd64.json
+  adapter="$SCRIPT_DIR/linux-list-targets.sh"
+  validator="$SCRIPT_DIR/validate-install-target.sh"
+  verifier="$SCRIPT_DIR/verify-disk-image.sh"
+else
+  ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
+  layout="$ROOT/os/layout/bedrock-amd64.json"
+  adapter="$ROOT/installer/adapters/linux-list-targets.sh"
+  validator="$ROOT/os/installer/validate-install-target.sh"
+  verifier="$ROOT/os/scripts/verify-disk-image.sh"
+fi
 package_dir=/run/live/medium/bedrock
 inventory=
 inventory_is_temporary=0
@@ -31,9 +45,12 @@ if [ "${BEDROCK_INSTALLER_TEST_MODE:-0}" = 1 ]; then
   now=$BEDROCK_TEST_NOW_UNIX
 else
   [ "$(id -u)" -eq 0 ] || { printf 'error: protected installation preflight requires root\n' >&2; exit 1; }
+  unset BEDROCK_LSBLK_JSON BEDROCK_ROOT_PARENT BEDROCK_TEST_LAYOUT \
+    BEDROCK_TEST_PACKAGE_DIR BEDROCK_TEST_INVENTORY BEDROCK_TEST_NOW_UNIX \
+    BEDROCK_TEST_SKIP_GPT
   inventory=$(mktemp)
   inventory_is_temporary=1
-  sh "$ROOT/installer/adapters/linux-list-targets.sh" > "$inventory"
+  sh "$adapter" > "$inventory"
   now=$(date +%s)
 fi
 
@@ -61,7 +78,7 @@ request_layout_hash=$(jq -r .layout_sha256 "$request")
 
 target_id=$(jq -r .target_id "$request")
 confirmation=$(jq -r .confirmation "$request")
-fresh_target=$(sh "$ROOT/os/installer/validate-install-target.sh" "$inventory" "$target_id" "$confirmation" "$layout")
+fresh_target=$(sh "$validator" "$inventory" "$target_id" "$confirmation" "$layout")
 request_target=$(jq -c .target_snapshot "$request")
 [ "$(printf '%s' "$fresh_target" | jq -S -c .)" = "$(printf '%s' "$request_target" | jq -S -c .)" ] || {
   printf 'error: selected system disk changed after confirmation\n' >&2
@@ -91,9 +108,12 @@ capacity=$(printf '%s' "$fresh_target" | jq -r .size_bytes)
   printf 'error: packaged image size is incompatible with the selected system disk\n' >&2
   exit 1
 }
-if [ "${BEDROCK_TEST_SKIP_GPT:-0}" != 1 ]; then
-  BEDROCK_INSTALLER_TEST_MODE=${BEDROCK_INSTALLER_TEST_MODE:-0} \
-    sh "$ROOT/os/scripts/verify-disk-image.sh" "$image" ${BEDROCK_INSTALLER_TEST_MODE:+"$layout"} >/dev/null
+if [ "${BEDROCK_INSTALLER_TEST_MODE:-0}" = 1 ] && [ "${BEDROCK_TEST_SKIP_GPT:-0}" = 1 ]; then
+  : # Tests use a deliberately small fixture image that cannot contain the production GPT.
+elif [ "${BEDROCK_INSTALLER_TEST_MODE:-0}" = 1 ]; then
+  BEDROCK_INSTALLER_TEST_MODE=1 sh "$verifier" "$image" "$layout" >/dev/null
+else
+  sh "$verifier" "$image" >/dev/null
 fi
 
 jq -n -c \

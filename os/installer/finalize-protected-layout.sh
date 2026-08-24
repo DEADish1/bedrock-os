@@ -4,7 +4,7 @@ set -eu
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 LC_ALL=C
 export PATH LC_ALL
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 [ "$#" -eq 3 ] || { printf 'usage: %s DEVICE_MAJOR DEVICE_MINOR CAPACITY\n' "$0" >&2; exit 2; }
 [ "${BEDROCK_INSTALLER_TEST_MODE:-0}" != 1 ] || {
   printf 'error: protected layout finalization cannot run in installer test mode\n' >&2
@@ -24,7 +24,12 @@ esac
   exit 1
 }
 
-layout="$ROOT/os/layout/bedrock-amd64.json"
+if [ "$SCRIPT_DIR" = /usr/lib/bedrock/installer ]; then
+  layout=/usr/share/bedrock/installer/bedrock-amd64.json
+else
+  ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
+  layout="$ROOT/os/layout/bedrock-amd64.json"
+fi
 for tool in blockdev e2fsck jq lsblk mknod readlink resize2fs sgdisk sync udevadm; do
   command -v "$tool" >/dev/null 2>&1 || { printf 'error: %s is required\n' "$tool" >&2; exit 2; }
 done

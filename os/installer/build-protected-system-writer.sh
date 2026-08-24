@@ -23,6 +23,7 @@ if [ -n "${BEDROCK_ENABLE_SYSTEM_PHYSICAL_WRITER:-}" ]; then
 fi
 
 # shellcheck disable=SC2086
-rustc --edition=2021 -C opt-level=2 -C strip=symbols $cfg \
+rustc --edition=2021 -C opt-level=2 -C strip=symbols \
+  --remap-path-prefix="$ROOT=/usr/src/bedrock-os" $cfg \
   "$ROOT/os/installer/protected-system-writer.rs" -o "$output"
 chmod 0755 "$output"

@@ -4,7 +4,7 @@ set -eu
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 LC_ALL=C
 export PATH LC_ALL
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 [ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
 [ "${BEDROCK_INSTALLER_TEST_MODE:-0}" != 1 ] || {
   printf 'error: the physical system writer cannot run in installer test mode\n' >&2
@@ -14,7 +14,16 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 
 request=$1
 writer=/usr/lib/bedrock/bedrock-system-writer
-finalizer="$ROOT/os/installer/finalize-protected-layout.sh"
+if [ "$SCRIPT_DIR" = /usr/sbin ]; then
+  installer_dir=/usr/lib/bedrock/installer
+  package_manifest=/usr/share/bedrock/installer/package-manifest.sha256
+  package_metadata=/usr/share/bedrock/installer/package.json
+else
+  ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
+  installer_dir="$ROOT/os/installer"
+fi
+preflight_script="$installer_dir/preflight-protected-install.sh"
+finalizer="$installer_dir/finalize-protected-layout.sh"
 package_dir=/run/live/medium/bedrock
 image="$package_dir/bedrock-os-amd64.raw"
 checksum="$package_dir/bedrock-os-amd64.raw.sha256"
@@ -22,9 +31,27 @@ checksum="$package_dir/bedrock-os-amd64.raw.sha256"
 for tool in jq sha256sum stat; do
   command -v "$tool" >/dev/null 2>&1 || { printf 'error: %s is required\n' "$tool" >&2; exit 2; }
 done
-for file in "$request" "$writer" "$finalizer" "$image" "$checksum"; do
+for file in "$request" "$writer" "$preflight_script" "$finalizer" "$image" "$checksum"; do
   [ -f "$file" ] && [ ! -L "$file" ] || { printf 'error: protected writer component is missing or indirect\n' >&2; exit 1; }
 done
+if [ "$SCRIPT_DIR" = /usr/sbin ]; then
+  for file in "$package_manifest" "$package_metadata"; do
+    file_mode=$(stat -c %a "$file" 2>/dev/null || printf 777)
+    [ -f "$file" ] && [ ! -L "$file" ] && [ "$(stat -c %u "$file")" -eq 0 ] && \
+      [ $((0$file_mode & 022)) -eq 0 ] || {
+      printf 'error: installed protected installer metadata is missing, indirect, or untrusted\n' >&2
+      exit 1
+    }
+  done
+  (cd / && sha256sum -c "${package_manifest#/}" >/dev/null) || {
+    printf 'error: installed protected installer package failed integrity verification\n' >&2
+    exit 1
+  }
+  jq -e '.schema == 1 and .writer_enabled == true' "$package_metadata" >/dev/null || {
+    printf 'error: this Bedrock image was not built with the production system writer enabled\n' >&2
+    exit 1
+  }
+fi
 for component in "$writer" "$finalizer"; do
   component_mode=$(stat -c %a "$component")
   [ "$(stat -c %u "$component")" -eq 0 ] && [ $((0$component_mode & 022)) -eq 0 ] || {
@@ -34,7 +61,7 @@ for component in "$writer" "$finalizer"; do
 done
 [ -x "$writer" ] || { printf 'error: protected system writer is not executable\n' >&2; exit 1; }
 
-preflight=$(sh "$ROOT/os/installer/preflight-protected-install.sh" "$request")
+preflight=$(sh "$preflight_script" "$request")
 printf '%s' "$preflight" | jq -e '
   .schema == 1 and .preflight_complete == true and .ready_for_writer == false
 ' >/dev/null || { printf 'error: protected system installation preflight did not complete\n' >&2; exit 1; }

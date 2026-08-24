@@ -9,6 +9,13 @@ OUT_DIR="$OS_DIR/out"
 command -v lb >/dev/null 2>&1 || { printf 'error: live-build is required\n' >&2; exit 1; }
 command -v jq >/dev/null 2>&1 || { printf 'error: jq is required\n' >&2; exit 1; }
 
+installer_staged=0
+cleanup_installer_stage() {
+  [ "$installer_staged" -eq 0 ] || \
+    "$OS_DIR/installer/stage-protected-installer.sh" remove "$OS_DIR/config/includes.chroot"
+}
+trap cleanup_installer_stage EXIT INT TERM
+
 "$OS_DIR/scripts/validate-config.sh"
 "$OS_DIR/tests/test-update-bundle.sh"
 "$OS_DIR/tests/test-hardware-inventory.sh"
@@ -23,7 +30,11 @@ mkdir -p "$OUT_DIR"
 cd "$OS_DIR"
 lb clean --purge
 lb config
+"$OS_DIR/installer/stage-protected-installer.sh" stage "$OS_DIR/config/includes.chroot"
+installer_staged=1
 lb build 2>&1 | tee "$OUT_DIR/build.log"
+"$OS_DIR/installer/stage-protected-installer.sh" remove "$OS_DIR/config/includes.chroot"
+installer_staged=0
 
 ISO_SOURCE="$OS_DIR/${BEDROCK_IMAGE_NAME}.hybrid.iso"
 [ -s "$ISO_SOURCE" ] || { printf 'error: live-build did not produce %s\n' "$ISO_SOURCE" >&2; exit 1; }

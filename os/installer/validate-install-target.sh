@@ -1,11 +1,17 @@
 #!/bin/sh
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ "$SCRIPT_DIR" = /usr/lib/bedrock/installer ]; then
+  default_layout=/usr/share/bedrock/installer/bedrock-amd64.json
+else
+  ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
+  default_layout="$ROOT/os/layout/bedrock-amd64.json"
+fi
 inventory=${1:-}
 target_id=${2:-}
 confirmation=${3:-}
-layout=${4:-$ROOT/os/layout/bedrock-amd64.json}
+layout=${4:-$default_layout}
 
 [ -f "$inventory" ] && [ -f "$layout" ] && [ -n "$target_id" ] || {
   printf 'usage: %s INVENTORY.json TARGET_ID CONFIRMATION [LAYOUT.json]\n' "$0" >&2

@@ -51,7 +51,7 @@ jobs:
             --env SOURCE_DATE_EPOCH \
             --env BEDROCK_SOURCE_COMMIT \
             debian:13.6-slim \
-            bash -lc 'apt-get update && apt-get install --yes --no-install-recommends ca-certificates cryptsetup-bin dosfstools e2fsprogs erofs-utils gdisk git jq live-build mtools openssl ovmf qemu-system-x86 sbsigntool systemd-boot-efi systemd-ukify xorriso xxd zstd squashfs-tools grub-efi-amd64-bin shim-signed && ./os/scripts/build-image.sh'
+            bash -lc 'apt-get update && apt-get install --yes --no-install-recommends ca-certificates cryptsetup-bin dosfstools e2fsprogs erofs-utils gdisk git jq live-build mtools openssl ovmf qemu-system-x86 rustc sbsigntool systemd-boot-efi systemd-ukify xorriso xxd zstd squashfs-tools grub-efi-amd64-bin shim-signed && ./os/scripts/build-image.sh'
       - name: Upload image and metadata
         uses: actions/upload-artifact@v4
         with:

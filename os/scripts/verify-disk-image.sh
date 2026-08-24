@@ -1,8 +1,13 @@
 #!/bin/sh
 set -eu
 
-ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
-LAYOUT="$ROOT/os/layout/bedrock-amd64.json"
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ "$SCRIPT_DIR" = /usr/lib/bedrock/installer ]; then
+  LAYOUT=/usr/share/bedrock/installer/bedrock-amd64.json
+else
+  ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
+  LAYOUT="$ROOT/os/layout/bedrock-amd64.json"
+fi
 [ "$#" -ge 1 ] && [ "$#" -le 2 ] || { printf 'usage: %s IMAGE.raw [TEST-LAYOUT.json]\n' "$0" >&2; exit 2; }
 image=$1
 if [ "$#" -eq 2 ]; then

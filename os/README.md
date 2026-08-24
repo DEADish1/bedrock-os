@@ -43,6 +43,7 @@ CI runs two clean ISO replicas and `scripts/compare-reproducible-builds.sh` requ
 - `installer/simulate-install-image.sh`: exercises verified image writing, GPT relocation, persistent-state growth, and final validation only on a confined disposable regular file; it refuses block devices.
 - `installer/protected-system-writer.rs`: disabled-by-default Linux writer stage that can exclusively open one freshly confirmed whole disk, recheck the exact packaged image, write, synchronize, and fully reread it only in an explicit production-trust build.
 - `installer/finalize-protected-layout.sh`: identity-bound Linux finalizer that relocates GPT, grows and checks persistent state, and verifies the canonical partition contract after a successful protected raw write.
+- `installer/stage-protected-installer.sh`: reproducibly stages or removes the complete protected installer package, fixed layout/scanner, integrity manifest, build-mode metadata, and gated helper for live-image construction.
 - `installer/create-protected-install-request.sh` and `installer/preflight-protected-install.sh`: create and independently revalidate a bounded, expiring request with no caller-selected source or device path; preflight alone remains strictly non-writing.
 - `config/includes.chroot/usr/lib/bedrock/mark-boot-healthy`: validates persistent state, records the healthy slot, and tells systemd-boot to bless it.
 - `tests/test-uefi-boot.sh`: boots the raw image with OVMF/QEMU and requires an exact healthy-slot serial marker.

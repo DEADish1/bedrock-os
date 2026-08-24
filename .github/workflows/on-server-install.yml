@@ -12,6 +12,7 @@ on:
       - "os/tests/test-install-plan.sh"
       - "os/tests/test-protected-system-writer.sh"
       - "os/tests/test-protected-loop-install.sh"
+      - "os/tests/test-protected-installer-package.sh"
   workflow_dispatch:
 
 permissions:
@@ -32,6 +33,7 @@ jobs:
           sh os/tests/test-install-image-simulator.sh
           sh os/tests/test-protected-install-request.sh
           sh os/tests/test-protected-system-writer.sh
+          sh os/tests/test-protected-installer-package.sh
           RUSTUP_HOME=$(rustup show home)
           CARGO_HOME=$(dirname "$(command -v cargo)")
           sudo env "PATH=$PATH" "RUSTUP_HOME=$RUSTUP_HOME" "CARGO_HOME=$CARGO_HOME" \
