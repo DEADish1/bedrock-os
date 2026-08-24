@@ -55,6 +55,7 @@ jq -n --arg path /dev/test-system '{
     id:"linux:test-system",path:$path,model:"Disposable System Image",size_bytes:83886080,
     removable:false,system:false,mounted:false,read_only:false
   }]
+  }
 ' > "$work/inventory.json"
 confirmation='INSTALL BEDROCK — Disposable System Image — /dev/test-system — 83886080'
 BEDROCK_INSTALLER_TEST_MODE=1 BEDROCK_TEST_LAYOUT="$work/layout.json" \
