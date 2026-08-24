@@ -1,0 +1,27 @@
+name: On-server install plan
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/on-server-install.yml"
+      - "installer/adapters/linux-list-targets.sh"
+      - "installer/tests/linux-lsblk.json"
+      - "os/installer/**"
+      - "os/layout/**"
+      - "os/tests/install-targets.json"
+      - "os/tests/test-install-plan.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  safety-contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate live-media protection and installation planning
+        run: |
+          sh installer/tests/test-linux-list-targets.sh
+          sh os/scripts/validate-layout.sh
+          sh os/tests/test-install-plan.sh

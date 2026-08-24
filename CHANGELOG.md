@@ -48,6 +48,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Added tested installer recovery guidance for insufficient space, interrupted writes, checksum failure, unavailable media, administrator approval, malformed progress, and unknown failures; failed media remains visibly untrusted and can be restarted safely.
 - Added in-app and written USB/DVD guidance that distinguishes verified image burning from copying an ISO file and makes clear that optical writing and physical-hardware acceptance are not yet complete.
 - Added the non-writing on-server installation foundation: live-media source protection, exact internal-drive confirmation, system/removable/mounted/read-only/undersized/ambiguous rejection, canonical-layout checksum binding, and a review-only plan that cannot claim writer readiness.
+- Added a focused pull-request safety gate for Linux live-media discovery, the canonical system-disk layout, and non-writing installation-plan validation.
 
 ### Next starting point
 
