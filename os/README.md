@@ -57,6 +57,7 @@ CI runs two clean ISO replicas and `scripts/compare-reproducible-builds.sh` requ
 - `config/includes.chroot/usr/sbin/bedrock-update-settings`: shows or changes automatic checks and provides the manual `check-now` path; `bedrock-setup-updates` exposes the same choice to first-run setup.
 - `config/includes.chroot/usr/lib/bedrock/collect-storage-health`: performs read-only SMART, Linux MD, ZFS, and hardware RAID discovery without waking standby disks; unsupported hardware-controller details are explicitly reported as limited.
 - `config/includes.chroot/usr/lib/bedrock/process-storage-alerts`: converts storage-health changes into a bounded, deduplicated active-alert and audit history without repeating unchanged events.
+- `config/includes.chroot/usr/lib/bedrock/create-storage-plan`: validates destructive ZFS mirror/RAID-Z and Linux RAID 1/5/6/10 proposals, explains capacity and resilience, and emits a review-only result containing no execution material.
 - `scripts/build-raw-image.sh`: joins root-image, UKI, disk assembly, signing classification, and VM-test inputs into one guarded pipeline.
 - `scripts/generate-development-keys.sh`: creates short-lived, clearly marked CI-only keys; artifacts made with them are never release eligible.
 - `scripts/build-installed-initrd.sh`: creates the systemd/dracut initramfs used for slot-bound dm-verity activation; the ISO retains its separate live-media initramfs.

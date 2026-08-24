@@ -58,11 +58,12 @@ This file records completed work, decisions, validation, and the next starting p
 - Added the first functional first-run preference step for software updates. Users can enable scheduled signed-metadata checks or choose manual-only operation, change that choice later, and run Check now even while automatic checks are off. The persistent policy defaults off until a choice is recorded; disabled timer runs make no network request, checks never install automatically, and invalid or tampered metadata cannot replace the last verified result.
 - Added a periodic, read-only storage health foundation covering non-waking SMART status and temperatures, Linux MD health and recovery progress, imported ZFS pool status when tooling is available, and hardware RAID controller discovery. Hardware member/cache/battery health is reported as limited until a supported vendor adapter exists, and fixture tests cover healthy and degraded arrays, a failing disk, ZFS degradation, and symbolic-link output rejection.
 - Added atomic storage alert and audit state for SMART failure, high temperature, degraded MD/ZFS storage, and limited hardware RAID visibility. Repeated scans are deduplicated, first-seen time is retained, severity changes and resolutions are recorded, history is bounded to 1,000 events, and invalid or indirect state is rejected.
+- Added fail-closed, review-only creation plans for ZFS mirror/RAID-Z1/RAID-Z2 and Linux MD RAID 1/5/6/10. Planning enforces unique eligible disks, exact destructive confirmation, minimum disk counts, matching sector sizes, bounded numeric capacity, usable-capacity and resilience explanations, hardware/software RAID stacking rules, and advanced limited-visibility acknowledgement without emitting a command or authorization token.
 
 ### Next starting point
 
 - Boot-test the v0.2 image on physical Intel and AMD systems and the remaining common VM platforms.
-- Extend the v0.4 storage-health foundation with supported hardware-vendor adapters and UI/notification delivery, then add review-only array/pool creation plans before enabling any mutating RAID control.
+- Connect review-only storage planning to a fresh read-only eligibility inventory, then add an independently revalidated privileged preflight that remains disabled before any mutating RAID control.
 - Add update download/resume transport, release-channel policy, and certificate-rotation handling.
 
 ### Bootable foundation work
