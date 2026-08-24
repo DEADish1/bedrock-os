@@ -1,7 +1,12 @@
 #import <Foundation/Foundation.h>
 #import <ServiceManagement/ServiceManagement.h>
 #import <dispatch/dispatch.h>
+#include <fcntl.h>
 #include <stdint.h>
+#include <sys/disk.h>
+#include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 static NSString *const BRWriterServiceName = @"com.bedrock.server.installer.writer";
 static NSString *const BRWriterPlistName = @"com.bedrock.server.installer.writer.plist";
@@ -15,6 +20,31 @@ enum {
 };
 
 extern int32_t bedrock_macos_handle_writer_request(const uint8_t *bytes, uintptr_t length);
+
+int32_t bedrock_macos_probe_exclusive_disk(const char *path, uint64_t expected_size)
+{
+    if (path == NULL || expected_size == 0) {
+        return BRWriterRejected;
+    }
+    const int descriptor = open(
+        path,
+        O_RDWR | O_EXCL | O_EXLOCK | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    if (descriptor < 0) {
+        return BRWriterRejected;
+    }
+    struct stat identity = {0};
+    uint32_t block_size = 0;
+    uint64_t block_count = 0;
+    const int valid = fstat(descriptor, &identity) == 0
+        && S_ISCHR(identity.st_mode)
+        && ioctl(descriptor, DKIOCGETBLOCKSIZE, &block_size) == 0
+        && ioctl(descriptor, DKIOCGETBLOCKCOUNT, &block_count) == 0
+        && block_size > 0
+        && block_count <= UINT64_MAX / block_size
+        && block_count * block_size == expected_size;
+    close(descriptor);
+    return valid ? 0 : BRWriterRejected;
+}
 
 @protocol BRWriterProtocol
 - (void)preflightRequest:(NSData *)request withReply:(void (^)(NSInteger result))reply;

@@ -1,7 +1,7 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -98,6 +98,11 @@ struct PrivilegedWriteRequest {
     image_path: PathBuf,
     target_id: String,
     confirmation: String,
+}
+
+#[derive(Debug)]
+struct PreparedWrite {
+    target: InstallTarget,
 }
 
 #[tauri::command]
@@ -485,6 +490,158 @@ fn validate_elevated_identity(elevated: bool) -> Result<(), String> {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn whole_device_open_path(target: &InstallTarget) -> Result<PathBuf, String> {
+    let path = Path::new(&target.path);
+    if path.parent() != Some(Path::new("/dev"))
+        || path.file_name().and_then(|name| name.to_str()).is_none()
+    {
+        return Err("The confirmed Linux target is not a direct device path.".into());
+    }
+    Ok(path.to_path_buf())
+}
+
+#[cfg(target_os = "macos")]
+fn whole_device_open_path(target: &InstallTarget) -> Result<PathBuf, String> {
+    let name = target
+        .path
+        .strip_prefix("/dev/disk")
+        .filter(|suffix| !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()))
+        .ok_or_else(|| "The confirmed macOS target is not a whole disk.".to_string())?;
+    Ok(PathBuf::from(format!("/dev/rdisk{name}")))
+}
+
+#[cfg(target_os = "windows")]
+fn whole_device_open_path(target: &InstallTarget) -> Result<PathBuf, String> {
+    let number = target
+        .path
+        .strip_prefix(r"\\.\PhysicalDrive")
+        .filter(|suffix| !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()))
+        .ok_or_else(|| "The confirmed Windows target is not a whole physical drive.".to_string())?;
+    Ok(PathBuf::from(format!(r"\\.\PhysicalDrive{number}")))
+}
+
+#[cfg(target_os = "linux")]
+fn open_exclusive_whole_device(target: &InstallTarget) -> Result<File, String> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
+
+    const BLKGETSIZE64: libc::c_ulong = 0x8008_1272;
+    let path = whole_device_open_path(target)?;
+    let device = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(&path)
+        .map_err(|_| "The confirmed Linux disk could not be opened exclusively.".to_string())?;
+    let metadata = device
+        .metadata()
+        .map_err(|_| "The opened Linux disk identity could not be inspected.".to_string())?;
+    if !metadata.file_type().is_block_device() {
+        return Err("The confirmed Linux target is not a block device.".into());
+    }
+    let sysfs = PathBuf::from(format!(
+        "/sys/dev/block/{}:{}",
+        libc::major(metadata.rdev()),
+        libc::minor(metadata.rdev())
+    ));
+    if !sysfs.is_dir()
+        || sysfs
+            .join("partition")
+            .try_exists()
+            .map_err(|_| "The Linux disk partition state could not be checked.".to_string())?
+    {
+        return Err(
+            "The confirmed Linux target is a partition or has unknown device identity.".into(),
+        );
+    }
+    let mut opened_size = 0_u64;
+    if unsafe { libc::ioctl(device.as_raw_fd(), BLKGETSIZE64, &mut opened_size) } != 0
+        || opened_size != target.size_bytes
+    {
+        return Err("The opened Linux disk capacity no longer matches the confirmed drive.".into());
+    }
+    Ok(device)
+}
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn bedrock_macos_probe_exclusive_disk(path: *const core::ffi::c_char, size: u64) -> i32;
+}
+
+#[cfg(target_os = "macos")]
+fn open_exclusive_whole_device(target: &InstallTarget) -> Result<(), String> {
+    let path = whole_device_open_path(target)?;
+    let path = std::ffi::CString::new(path.to_string_lossy().as_bytes())
+        .map_err(|_| "The confirmed macOS disk path is invalid.".to_string())?;
+    if unsafe { bedrock_macos_probe_exclusive_disk(path.as_ptr(), target.size_bytes) } != 0 {
+        return Err(
+            "The confirmed macOS disk could not be exclusively opened with the same capacity."
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn open_exclusive_whole_device(target: &InstallTarget) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_FLAG_WRITE_THROUGH, OPEN_EXISTING,
+    };
+    use windows_sys::Win32::System::IO::DeviceIoControl;
+    use windows_sys::Win32::System::Ioctl::{
+        GET_LENGTH_INFORMATION, IOCTL_DISK_GET_LENGTH_INFO,
+    };
+
+    let path = whole_device_open_path(target)?;
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let handle = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_WRITE_THROUGH,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err("The confirmed Windows disk could not be opened exclusively.".into());
+    }
+    let mut length = GET_LENGTH_INFORMATION::default();
+    let mut returned = 0_u32;
+    let inspected = unsafe {
+        DeviceIoControl(
+            handle,
+            IOCTL_DISK_GET_LENGTH_INFO,
+            std::ptr::null(),
+            0,
+            std::ptr::addr_of_mut!(length).cast(),
+            std::mem::size_of::<GET_LENGTH_INFORMATION>() as u32,
+            &mut returned,
+            std::ptr::null_mut(),
+        )
+    };
+    unsafe { CloseHandle(handle) };
+    if inspected == 0
+        || returned != std::mem::size_of::<GET_LENGTH_INFORMATION>() as u32
+        || length.Length < 0
+        || length.Length as u64 != target.size_bytes
+    {
+        return Err("The opened Windows disk capacity no longer matches the confirmed drive.".into());
+    }
+    Ok(())
+}
+
 #[cfg(unix)]
 fn platform_is_elevated() -> bool {
     unsafe { libc::geteuid() == 0 }
@@ -672,7 +829,7 @@ fn protected_writer_preflight<R: Read>(
     input: R,
     executable: &Path,
     now: u64,
-) -> Result<(), String> {
+) -> Result<PreparedWrite, String> {
     let mut request_bytes = Vec::new();
     input
         .take(MAX_HELPER_REQUEST_BYTES + 1)
@@ -687,12 +844,19 @@ fn protected_writer_preflight<R: Read>(
 
     let manifest = verify_signed_release(&request.image_path, RELEASE_TRUST_CERT_PEM)?;
     let targets = parse_inventory(&run_inventory_adapter(&helper_adapter_path(executable)?)?)?;
-    validate_write_target(
+    let target = validate_write_target(
         &targets,
         &request.target_id,
         &request.confirmation,
         manifest.artifact.write_size,
-    )?;
+    )?
+    .clone();
+    Ok(PreparedWrite { target })
+}
+
+fn protected_writer_open_gate<R: Read>(input: R, executable: &Path, now: u64) -> Result<(), String> {
+    let prepared = protected_writer_preflight(input, executable, now)?;
+    let _exclusive_device = open_exclusive_whole_device(&prepared.target)?;
     Ok(())
 }
 
@@ -718,10 +882,10 @@ pub fn run_protected_writer_helper() -> i32 {
     };
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let result = match arguments.as_slice() {
-        [] => protected_writer_preflight(std::io::stdin().lock(), &executable, now),
+        [] => protected_writer_open_gate(std::io::stdin().lock(), &executable, now),
         [flag, encoded] if flag == "--request-base64" => decode_helper_request(encoded)
             .and_then(|bytes| {
-                protected_writer_preflight(std::io::Cursor::new(bytes), &executable, now)
+                protected_writer_open_gate(std::io::Cursor::new(bytes), &executable, now)
             }),
         _ => Err("The protected writer command line is invalid.".into()),
     };
@@ -757,7 +921,7 @@ fn macos_preflight_request(bytes: &[u8]) -> i32 {
             return 1;
         }
     };
-    match protected_writer_preflight(std::io::Cursor::new(bytes), &executable, now) {
+    match protected_writer_open_gate(std::io::Cursor::new(bytes), &executable, now) {
         Ok(()) => HELPER_PREFLIGHT_ONLY_EXIT,
         Err(error) => {
             eprintln!("{error}");
@@ -817,8 +981,9 @@ mod tests {
     use super::{
         decode_helper_request, encode_helper_request, is_sha256, parse_inventory,
         macos_peer_requirement, protected_writer_preflight, validate_elevated_identity,
-        validate_helper_request, validate_write_target, verify_cms_signature, InstallTarget,
-        PrivilegedWriteRequest, MACOS_APP_IDENTIFIER, MACOS_HELPER_IDENTIFIER,
+        validate_helper_request, validate_write_target, verify_cms_signature,
+        whole_device_open_path, InstallTarget, PrivilegedWriteRequest, MACOS_APP_IDENTIFIER,
+        MACOS_HELPER_IDENTIFIER,
     };
     use openssl::asn1::Asn1Time;
     use openssl::bn::BigNum;
@@ -888,6 +1053,39 @@ mod tests {
             9 * 1024 * 1024 * 1024,
         )
         .is_err());
+    }
+
+    #[test]
+    fn derives_only_platform_whole_device_paths() {
+        let mut target = safe_target();
+        #[cfg(target_os = "linux")]
+        {
+            target.path = "/dev/sdz".into();
+            assert_eq!(
+                whole_device_open_path(&target).unwrap(),
+                PathBuf::from("/dev/sdz")
+            );
+            target.path = "/dev/disk/by-id/untrusted".into();
+        }
+        #[cfg(target_os = "macos")]
+        {
+            target.path = "/dev/disk42".into();
+            assert_eq!(
+                whole_device_open_path(&target).unwrap(),
+                PathBuf::from("/dev/rdisk42")
+            );
+            target.path = "/dev/disk42s1".into();
+        }
+        #[cfg(target_os = "windows")]
+        {
+            target.path = r"\\.\PhysicalDrive42".into();
+            assert_eq!(
+                whole_device_open_path(&target).unwrap(),
+                PathBuf::from(r"\\.\PhysicalDrive42")
+            );
+            target.path = r"\\.\C:".into();
+        }
+        assert!(whole_device_open_path(&target).is_err());
     }
 
     fn helper_request(requested_at: u64) -> PrivilegedWriteRequest {

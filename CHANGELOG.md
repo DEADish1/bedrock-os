@@ -33,6 +33,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Connected bounded protected-helper requests through exact-path Linux `pkexec` and native Windows `runas`, including process completion and a dedicated preflight-only exit code; macOS remains fail-closed pending signed SMAppService/XPC peer validation.
 - Required the protected helper to prove effective UID 0 on Unix/macOS or an elevated Windows process token before reading any request.
 - Added macOS 13+ SMAppService launch-daemon registration and privileged XPC request transport with mutual signing-identifier/Team-ID requirements, a production Team-ID gate, and fixed-identifier helper signing before staging.
+- Added a fail-closed whole-device open gate: Linux rejects partitions through sysfs and uses exclusive no-follow block-device access, Windows opens exact physical drives with no sharing, and macOS takes an exclusive raw-disk lock; every platform confirms capacity and closes the handle without writing.
 
 ### Next starting point
 
