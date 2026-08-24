@@ -3,6 +3,19 @@ use std::io::{Read, Seek, SeekFrom, Write};
 
 const BUFFER_SIZE: usize = 1024 * 1024;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MediaPhase {
+    Writing,
+    Verifying,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MediaProgress {
+    pub phase: MediaPhase,
+    pub completed_bytes: u64,
+    pub total_bytes: u64,
+}
+
 pub fn write_verified_media<R, T, F>(
     image_type: &str,
     source: &mut R,
@@ -14,7 +27,7 @@ pub fn write_verified_media<R, T, F>(
 where
     R: Read,
     T: Read + Write + Seek,
-    F: FnMut(u64, u64),
+    F: FnMut(MediaProgress),
 {
     if expected_size == 0 || !is_sha256(expected_sha256) {
         return Err("The signed write identity is invalid.".into());
@@ -52,7 +65,7 @@ fn write_stream<R, T, F>(
 where
     R: Read,
     T: Read + Write + Seek,
-    F: FnMut(u64, u64),
+    F: FnMut(MediaProgress),
 {
     target
         .seek(SeekFrom::Start(0))
@@ -75,7 +88,11 @@ where
         target
             .write_all(&buffer[..read])
             .map_err(|_| "The media write was interrupted or incomplete.".to_string())?;
-        progress(written, expected_size);
+        progress(MediaProgress {
+            phase: MediaPhase::Writing,
+            completed_bytes: written,
+            total_bytes: expected_size,
+        });
     }
     if written != expected_size {
         return Err("The image ended before its signed write size.".into());
@@ -88,6 +105,7 @@ where
         .seek(SeekFrom::Start(0))
         .map_err(|_| "The written media could not be reopened for verification.".to_string())?;
     let mut remaining = expected_size;
+    let mut verified = 0_u64;
     let mut digest = Sha256::new();
     while remaining > 0 {
         let limit = remaining.min(BUFFER_SIZE as u64) as usize;
@@ -99,6 +117,12 @@ where
         }
         digest.update(&buffer[..read]);
         remaining -= read as u64;
+        verified += read as u64;
+        progress(MediaProgress {
+            phase: MediaPhase::Verifying,
+            completed_bytes: verified,
+            total_bytes: expected_size,
+        });
     }
     if format!("{:x}", digest.finalize()) != expected_sha256 {
         return Err("The written media checksum does not match the signed release.".into());
@@ -167,7 +191,7 @@ mod tests {
             &mut target,
             image.len() as u64,
             &sha256(&image),
-            |written, total| last_progress = (written, total),
+            |update| last_progress = (update.completed_bytes, update.total_bytes),
         )
         .unwrap();
         assert_eq!(&target.into_inner()[..image.len()], image);
@@ -186,7 +210,7 @@ mod tests {
             &mut target,
             image.len() as u64,
             &sha256(&image),
-            |_, _| {},
+            |_| {},
         )
         .unwrap();
         assert_eq!(&target.into_inner()[..image.len()], image);
@@ -205,7 +229,7 @@ mod tests {
             &mut short_target,
             image.len() as u64 + 1,
             &hash,
-            |_, _| {},
+            |_| {},
         )
         .is_err());
 
@@ -217,7 +241,7 @@ mod tests {
             &mut large_target,
             image.len() as u64 - 1,
             &hash,
-            |_, _| {},
+            |_| {},
         )
         .is_err());
 
@@ -229,7 +253,7 @@ mod tests {
             &mut changed_target,
             image.len() as u64,
             &"0".repeat(64),
-            |_, _| {},
+            |_| {},
         )
         .is_err());
     }
@@ -248,7 +272,7 @@ mod tests {
             &mut target,
             image.len() as u64,
             &sha256(&image),
-            |_, _| {},
+            |_| {},
         )
         .unwrap_err();
         assert!(error.contains("interrupted or incomplete"));

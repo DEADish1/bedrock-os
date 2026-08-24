@@ -9,13 +9,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{path::BaseDirectory, Manager, State};
+use tauri::{path::BaseDirectory, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
 mod media_writer;
 mod device_finalizer;
 mod write_pipeline;
+mod write_progress;
 #[cfg(any(
     target_os = "linux",
     target_os = "macos",
@@ -392,6 +393,22 @@ fn write_verified_image(
         &confirmation,
         manifest.artifact.write_size,
     )?;
+    let mut progress = crate::write_progress::ProgressTracker::new(
+        &session.public.session_id,
+        manifest.artifact.write_size,
+    )?;
+    let publish = |tracker: &mut crate::write_progress::ProgressTracker,
+                   phase: crate::write_progress::WritePhase,
+                   completed_bytes: u64| {
+        if let Ok(update) = tracker.update(phase, completed_bytes) {
+            let _ = handle.emit(crate::write_progress::INSTALLER_PROGRESS_EVENT, update);
+        }
+    };
+    publish(
+        &mut progress,
+        crate::write_progress::WritePhase::Preparing,
+        0,
+    );
     let request = PrivilegedWriteRequest {
         schema: 1,
         session_id: session.public.session_id,
@@ -400,9 +417,36 @@ fn write_verified_image(
         target_id,
         confirmation,
     };
-    match launch_protected_writer(&request)? {
-        ProtectedWriterResult::WriteComplete => Ok(()),
-        ProtectedWriterResult::PreflightOnly => Err(BRIDGE_UNAVAILABLE.into()),
+    publish(
+        &mut progress,
+        crate::write_progress::WritePhase::AwaitingApproval,
+        0,
+    );
+    match launch_protected_writer(&request) {
+        Ok(ProtectedWriterResult::WriteComplete) => {
+            publish(
+                &mut progress,
+                crate::write_progress::WritePhase::Complete,
+                manifest.artifact.write_size,
+            );
+            Ok(())
+        }
+        Ok(ProtectedWriterResult::PreflightOnly) => {
+            publish(
+                &mut progress,
+                crate::write_progress::WritePhase::Failed,
+                0,
+            );
+            Err(BRIDGE_UNAVAILABLE.into())
+        }
+        Err(error) => {
+            publish(
+                &mut progress,
+                crate::write_progress::WritePhase::Failed,
+                0,
+            );
+            Err(error)
+        }
     }
 }
 
@@ -957,7 +1001,7 @@ fn protected_writer_operation<R: Read>(
         &mut device,
         prepared.write_size,
         &prepared.write_sha256,
-        |_, _| {},
+        |_| {},
     )?;
     Ok(ProtectedWriterResult::WriteComplete)
 }

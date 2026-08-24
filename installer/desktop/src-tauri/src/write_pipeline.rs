@@ -1,5 +1,6 @@
 use crate::device_finalizer::{finalize_written_device, DeviceFinalizer, RemovalOutcome};
-use crate::media_writer::write_verified_media;
+use crate::media_writer::{write_verified_media, MediaPhase};
+use crate::write_progress::{PipelineProgress, WritePhase};
 use std::io::{Read, Seek, Write};
 
 pub trait MediaDevice: Read + Write + Seek + DeviceFinalizer {}
@@ -12,12 +13,12 @@ pub fn write_verify_and_finalize<R, D, F>(
     device: &mut D,
     expected_size: u64,
     expected_sha256: &str,
-    progress: F,
+    mut progress: F,
 ) -> Result<RemovalOutcome, String>
 where
     R: Read,
     D: MediaDevice,
-    F: FnMut(u64, u64),
+    F: FnMut(PipelineProgress),
 {
     write_verified_media(
         image_type,
@@ -25,15 +26,37 @@ where
         device,
         expected_size,
         expected_sha256,
-        progress,
+        |update| {
+            let phase = match update.phase {
+                MediaPhase::Writing => WritePhase::Writing,
+                MediaPhase::Verifying => WritePhase::Verifying,
+            };
+            progress(PipelineProgress {
+                phase,
+                completed_bytes: update.completed_bytes,
+                total_bytes: update.total_bytes,
+            });
+        },
     )?;
-    finalize_written_device(device)
+    progress(PipelineProgress {
+        phase: WritePhase::Finalizing,
+        completed_bytes: expected_size,
+        total_bytes: expected_size,
+    });
+    let outcome = finalize_written_device(device)?;
+    progress(PipelineProgress {
+        phase: WritePhase::Complete,
+        completed_bytes: expected_size,
+        total_bytes: expected_size,
+    });
+    Ok(outcome)
 }
 
 #[cfg(test)]
 mod tests {
     use super::write_verify_and_finalize;
     use crate::device_finalizer::{DeviceFinalizer, RemovalOutcome};
+    use crate::write_progress::WritePhase;
     use sha2::{Digest, Sha256};
     use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 
@@ -102,19 +125,25 @@ mod tests {
         let image = b"Bedrock end-to-end virtual ISO".repeat(4096);
         let mut source = Cursor::new(image.clone());
         let mut device = VirtualDevice::new(image.len());
-        let mut progress = (0, 0);
+        let mut progress = Vec::new();
         let outcome = write_verify_and_finalize(
             "iso",
             &mut source,
             &mut device,
             image.len() as u64,
             &sha256(&image),
-            |written, total| progress = (written, total),
+            |update| progress.push(update),
         )
         .unwrap();
 
         assert_eq!(outcome, RemovalOutcome::Ejected);
-        assert_eq!(progress, (image.len() as u64, image.len() as u64));
+        assert!(progress.iter().any(|update| update.phase == WritePhase::Writing));
+        assert!(progress.iter().any(|update| update.phase == WritePhase::Verifying));
+        assert_eq!(progress[progress.len() - 2].phase, WritePhase::Finalizing);
+        assert_eq!(progress.last().unwrap().phase, WritePhase::Complete);
+        assert!(progress
+            .iter()
+            .all(|update| update.total_bytes == image.len() as u64));
         assert_eq!(&device.bytes.get_ref()[..image.len()], image);
         assert_eq!(device.finalization, ["synchronize", "eject"]);
     }
@@ -132,7 +161,7 @@ mod tests {
             &mut device,
             image.len() as u64,
             &sha256(&image),
-            |_, _| {},
+            |_| {},
         )
         .unwrap();
 
@@ -152,7 +181,7 @@ mod tests {
             &mut device,
             image.len() as u64,
             &"0".repeat(64),
-            |_, _| {},
+            |_| {},
         )
         .unwrap_err();
 
@@ -172,7 +201,7 @@ mod tests {
             &mut device,
             image.len() as u64,
             &sha256(&image),
-            |_, _| {},
+            |_| {},
         )
         .unwrap_err();
 

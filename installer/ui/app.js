@@ -17,6 +17,27 @@
   };
   const error = message => { $("alert").textContent = message; $("alert").hidden = !message; };
   const formatBytes = value => (value / 1073741824).toFixed(1) + " GB";
+  const renderProgress = update => {
+    const completed = Number(update.completedBytes || 0), total = Number(update.totalBytes || 0);
+    const ratio = total > 0 ? Math.max(0, Math.min(1, completed / total)) : 0;
+    const presentation = {
+      preparing: [3, "Rechecking signed image and target…"],
+      awaitingApproval: [8, "Waiting for administrator approval…"],
+      writing: [8 + ratio * 70, `Writing verified image… ${Math.round(ratio * 100)}%`],
+      verifying: [78 + ratio * 17, `Rereading and verifying media… ${Math.round(ratio * 100)}%`],
+      finalizing: [97, "Synchronizing and preparing safe removal…"],
+      complete: [100, "Verified media is complete."],
+      failed: [0, "The protected write did not complete."],
+    }[update.phase];
+    if (!presentation) return;
+    $("progress").hidden = false;
+    $("progress").querySelector("i").style.width = presentation[0] + "%";
+    $("progress").querySelector("span").textContent = presentation[1];
+  };
+  const progressListener = globalThis.__TAURI__?.event?.listen;
+  if (progressListener) {
+    progressListener("bedrock://installer-progress", event => renderProgress(event.payload)).catch(() => {});
+  }
   const loadDrives = async () => {
     error("");
     const targets = await invoke("list_targets");
@@ -57,10 +78,9 @@
     try {
       error("");
       $("write-button").disabled = true;
-      $("progress").hidden = false;
-      $("progress").querySelector("i").style.width = "15%";
+      renderProgress({ phase: "preparing", completedBytes: 0, totalBytes: state.image.sizeBytes });
       await invoke("write_verified_image", { image: state.image, targetId: state.target.id, confirmation: $("confirmation").value });
-      $("progress").querySelector("i").style.width = "100%";
+      renderProgress({ phase: "complete", completedBytes: state.image.sizeBytes, totalBytes: state.image.sizeBytes });
       show("done");
     } catch (e) {
       $("progress").hidden = true;
