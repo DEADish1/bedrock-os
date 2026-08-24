@@ -19,7 +19,8 @@ done
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
 mkdir -p "$work/root"
-sh "$stager" stage "$work/root"
+BEDROCK_ENABLE_SYSTEM_PHYSICAL_WRITER= BEDROCK_REQUIRE_PRODUCTION_TRUST=0 \
+  sh "$stager" stage "$work/root"
 
 manifest="$work/root/usr/share/bedrock/installer/package-manifest.sha256"
 (cd "$work/root" && sha256sum -c usr/share/bedrock/installer/package-manifest.sha256 >/dev/null)
@@ -45,7 +46,8 @@ sh "$stager" remove "$work/root"
 }
 
 mkdir -p "$work/tampered-root"
-sh "$stager" stage "$work/tampered-root"
+BEDROCK_ENABLE_SYSTEM_PHYSICAL_WRITER= BEDROCK_REQUIRE_PRODUCTION_TRUST=0 \
+  sh "$stager" stage "$work/tampered-root"
 printf '\n' >> "$work/tampered-root/usr/share/bedrock/installer/package.json"
 if sh "$stager" remove "$work/tampered-root" >/dev/null 2>&1; then
   printf 'error: staging cleanup accepted a package that differed from its manifest\n' >&2
