@@ -24,6 +24,11 @@
     "active": true,
     "targets": "all",
     "icon": ["icons/icon.png", "icons/icon.ico"],
+    "resources": {
+      "../../adapters/linux-list-targets.sh": "adapters/linux-list-targets.sh",
+      "../../adapters/macos-list-targets.sh": "adapters/macos-list-targets.sh",
+      "../../adapters/windows-list-targets.ps1": "adapters/windows-list-targets.ps1"
+    },
     "category": "Utility",
     "shortDescription": "Safely create Bedrock OS installation media"
   }

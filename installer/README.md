@@ -26,4 +26,4 @@ Platform adapters must provide stable target IDs and refresh the inventory immed
 
 `ui/` contains the shared responsive installer interface. It exposes no direct disk commands and can only request `choose_and_verify_image`, `list_targets`, and `write_verified_image` through the desktop bridge. The confirmation button remains disabled until the exact generated phrase matches.
 
-`desktop/` packages that interface with Tauri 2 for Windows, macOS, and Linux. Its capability file grants only core window permissions, its content-security policy blocks unapproved web content, and it contains no general shell or process runner. The three native bridge handlers deliberately fail closed until the protected platform services are implemented.
+`desktop/` packages that interface with Tauri 2 for Windows, macOS, and Linux. Its capability file grants only core window permissions and its content-security policy blocks unapproved web content. Read-only drive discovery calls only the packaged platform adapter; image selection and writing remain fail-closed until their protected services are implemented.

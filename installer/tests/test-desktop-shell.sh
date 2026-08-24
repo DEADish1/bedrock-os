@@ -25,6 +25,11 @@ assert capability["permissions"] == ["core:default"]
 assert config["bundle"]["icon"] == ["icons/icon.png", "icons/icon.ico"]
 assert (root / "icons/icon.png").stat().st_size > 0
 assert (root / "icons/icon.ico").stat().st_size > 0
+assert config["bundle"]["resources"] == {
+    "../../adapters/linux-list-targets.sh": "adapters/linux-list-targets.sh",
+    "../../adapters/macos-list-targets.sh": "adapters/macos-list-targets.sh",
+    "../../adapters/windows-list-targets.ps1": "adapters/windows-list-targets.ps1",
+}
 PY
 
 grep -Eq '^tauri = \{ version = "2", features = \[\] \}$' "$TAURI/Cargo.toml"
@@ -38,10 +43,14 @@ for command in choose_and_verify_image list_targets write_verified_image; do
   grep -q "fn $command" "$LIB"
 done
 
-if grep -Eq 'std::process|Command::new|tauri_plugin_shell|plugin\(.*shell' "$LIB"; then
-  printf 'error: desktop bridge contains a general process or shell escape\n' >&2
+if grep -Eq 'tauri_plugin_shell|plugin\(.*shell' "$LIB"; then
+  printf 'error: desktop bridge contains a general shell escape\n' >&2
   exit 1
 fi
+
+grep -q 'Command::new("/bin/sh")' "$LIB"
+grep -q 'Command::new("powershell.exe")' "$LIB"
+grep -q 'fn parse_inventory' "$LIB"
 
 grep -q 'No disk operation was attempted' "$LIB"
 for field in 'size_bytes: u64' 'system: bool' 'name: String' 'version: String'; do

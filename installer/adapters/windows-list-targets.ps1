@@ -41,7 +41,12 @@ $targets = @($disks | ForEach-Object {
     $model = if ([string]::IsNullOrWhiteSpace($_.model)) { "Unknown removable drive" } else { $_.model.Trim() }
     $identity = "$path|$model|$($_.size_bytes)"
     $bytes = [Text.Encoding]::UTF8.GetBytes($identity)
-    $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $hash = ([BitConverter]::ToString($sha256.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $sha256.Dispose()
+    }
     $removable = @("USB", "SD", "MMC") -contains ([string]$_.bus_type).ToUpperInvariant()
     [ordered]@{
         id = "windows:$hash"

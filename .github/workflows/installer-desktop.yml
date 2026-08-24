@@ -42,4 +42,4 @@ jobs:
             librsvg2-dev \
             libwebkit2gtk-4.1-dev
       - name: Compile native bridge
-        run: cargo check --manifest-path installer/desktop/src-tauri/Cargo.toml
+        run: cargo test --manifest-path installer/desktop/src-tauri/Cargo.toml

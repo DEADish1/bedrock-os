@@ -13,6 +13,9 @@ This file records completed work, decisions, validation, and the next starting p
 - Added independent Windows, macOS, and Linux compile checks for the desktop package.
 - Added the official Bedrock application icon required by native package compilation.
 - Added a multi-resolution Windows icon resource generated from the same approved Bedrock artwork.
+- Connected the desktop client to bundled read-only Windows, macOS, and Linux removable-drive inventory adapters.
+- Added native inventory schema validation and Rust tests that reject malformed or incomplete drive records.
+- Replaced the Windows adapter's modern-only hashing calls with Windows PowerShell 5.1-compatible cryptography APIs.
 
 ### Next starting point
 
