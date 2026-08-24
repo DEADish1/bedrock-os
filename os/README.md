@@ -41,6 +41,7 @@ CI runs two clean ISO replicas and `scripts/compare-reproducible-builds.sh` requ
 - `installer/validate-install-target.sh`: validates one exact internal system-disk selection against fresh Linux inventory and the canonical minimum size without opening a disk.
 - `installer/create-install-plan.sh`: creates a checksum-bound, review-only partition plan that remains explicitly disconnected from privileged writing.
 - `installer/simulate-install-image.sh`: exercises verified image writing, GPT relocation, persistent-state growth, and final validation only on a confined disposable regular file; it refuses block devices.
+- `installer/create-protected-install-request.sh` and `installer/preflight-protected-install.sh`: create and independently revalidate a bounded, expiring request with no caller-selected source or device path while keeping physical writing disconnected.
 - `config/includes.chroot/usr/lib/bedrock/mark-boot-healthy`: validates persistent state, records the healthy slot, and tells systemd-boot to bless it.
 - `tests/test-uefi-boot.sh`: boots the raw image with OVMF/QEMU and requires an exact healthy-slot serial marker.
 - `tests/validate-boot-test-report.sh`: validates privacy-safe acceptance evidence from VMware, Hyper-V, and physical Intel/AMD systems.

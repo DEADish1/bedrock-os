@@ -28,3 +28,4 @@ jobs:
           sh os/scripts/validate-layout.sh
           sh os/tests/test-install-plan.sh
           sh os/tests/test-install-image-simulator.sh
+          sh os/tests/test-protected-install-request.sh

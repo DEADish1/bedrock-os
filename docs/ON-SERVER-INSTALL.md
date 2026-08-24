@@ -28,3 +28,9 @@ This checkpoint implements only selection validation and a reviewable plan. It d
 `os/installer/simulate-install-image.sh` exercises the next installation stage only against a regular file directly inside a declared temporary directory. It requires explicit test mode and refuses block devices. The simulator verifies the source checksum and GPT, writes and rereads the planned image, relocates the backup GPT to the simulated disk end, expands partition 8 while preserving its identity and type, grows and checks its ext4 filesystem, and validates the final eight-partition structure.
 
 CI uses a reduced-size layout with the same eight roles and standard partition type GUIDs. It proves successful installation, fixed-system-content preservation, state growth, interruption rejection, corruption rejection, and target-directory confinement without touching host media. This is evidence for the write engine, not physical-installation acceptance.
+
+## Protected request preflight
+
+`create-protected-install-request.sh` converts an approved review plan into a bounded schema-1 request containing a fresh UUID, two-minute timestamp, fixed packaged artifact name, plan/layout checksums, exact target ID and snapshot, and the complete confirmation phrase. It cannot carry a caller-selected image path, package directory, layout path, inventory path, or device path outside that exact target snapshot.
+
+`preflight-protected-install.sh` rejects unknown fields, oversized/stale/future requests, invalid sessions, artifact-name changes, altered layouts, changed target identity or capacity, newly mounted targets, bad packaged checksums, and incompatible image sizes. In normal operation it uses the fixed live-media package directory, canonical layout, current clock, and a fresh result from the packaged Linux inventory adapter. Test substitutions require explicit test mode. Even after every check passes, it returns `ready_for_writer: false` and does not open the target disk.
