@@ -52,9 +52,11 @@ Exit: a new user can create media and install Bedrock without using a terminal.
 ## 0.4.0 — Storage and NAS
 
 - [ ] Implement disk inventory, SMART/health, temperatures, and alerts.
+  - Read-only disk, SMART health/temperature, software RAID, ZFS, and controller discovery implemented; alert delivery remains open.
 - [ ] Create, expand, scrub, export, and import storage pools.
 - [ ] Support OpenZFS mirrors/RAID-Z and Linux software RAID (`mdadm`) with single-/dual-drive failure protection where valid.
 - [ ] Detect supported hardware RAID controllers and logical volumes; surface controller, cache/battery, disk, and rebuild health when vendor tooling permits.
+  - Controller discovery and limited-health reporting implemented; vendor member/cache/battery adapters remain open.
 - [ ] Add guided RAID creation, degraded-array, replacement, rebuild-progress, scrub/check, and safe import workflows.
 - [ ] Implement datasets/shares, quotas, snapshots, recycle behavior, and permissions.
 - [ ] Add SMB; evaluate NFS and optional Time Machine support.

@@ -1,0 +1,176 @@
+#!/bin/sh
+set -eu
+
+LC_ALL=C
+export LC_ALL
+if [ "${BEDROCK_STORAGE_TEST_MODE:-0}" = 1 ]; then
+  [ "$#" -eq 1 ] || { printf 'usage: %s OUTPUT.json\n' "$0" >&2; exit 2; }
+  output=$1
+  proc_root=${BEDROCK_STORAGE_PROC_ROOT:?test mode requires BEDROCK_STORAGE_PROC_ROOT}
+  PATH=${BEDROCK_STORAGE_TEST_PATH:?test mode requires BEDROCK_STORAGE_TEST_PATH}:/usr/bin:/bin
+  now=${BEDROCK_STORAGE_TEST_NOW:-0}
+else
+  [ "$#" -eq 0 ] || { printf 'usage: %s\n' "$0" >&2; exit 2; }
+  [ "$(id -u)" -eq 0 ] || { printf 'error: storage health collection requires root\n' >&2; exit 1; }
+  output=/var/lib/bedrock/storage/health.json
+  proc_root=/proc
+  PATH=/usr/sbin:/usr/bin:/sbin:/bin
+  now=$(date +%s)
+fi
+export PATH
+
+for tool in jq lsblk smartctl; do
+  command -v "$tool" >/dev/null 2>&1 || {
+    printf 'error: storage health collection requires %s\n' "$tool" >&2
+    exit 2
+  }
+done
+
+work=$(mktemp -d)
+temporary=
+cleanup() {
+  rm -rf "$work"
+  [ -z "$temporary" ] || rm -f "$temporary"
+}
+trap cleanup EXIT INT TERM
+
+lsblk -J -b -d -o PATH,TYPE,SIZE,MODEL,SERIAL,TRAN > "$work/lsblk.json"
+jq -e '.blockdevices | type == "array"' "$work/lsblk.json" >/dev/null || {
+  printf 'error: block-device inventory is invalid\n' >&2
+  exit 1
+}
+
+disks='[]'
+jq -c '.blockdevices[] | select(.type == "disk")' "$work/lsblk.json" > "$work/disks.jsonl"
+while IFS= read -r disk; do
+  path=$(printf '%s' "$disk" | jq -r .path)
+  printf '%s' "$path" | grep -Eq '^/dev/[A-Za-z0-9._/-]+$' &&
+    ! printf '%s' "$path" | grep -Eq '(^|/)\.\.(/|$)' || {
+    printf 'error: unsafe disk path in inventory\n' >&2
+    exit 1
+  }
+  smart_file="$work/smart.$(printf '%s' "$path" | tr '/ ' '__').json"
+  smart_exit=0
+  smartctl -n standby -j -H -A -- "$path" > "$smart_file" 2>/dev/null || smart_exit=$?
+  if jq -e 'type == "object"' "$smart_file" >/dev/null 2>&1; then
+    smart=$(jq -c --argjson smart_exit "$smart_exit" '
+      (if (.smart_status | type) == "object" and (.smart_status | has("passed"))
+       then .smart_status.passed else null end) as $passed |
+      (.temperature.current // .nvme_smart_health_information_log.temperature // null) as $temperature |
+      (.power_on_time.hours // null) as $hours |
+      (.power_mode // "active") as $power_mode |
+      {available:true,passed:$passed,temperature_c:$temperature,power_on_hours:$hours,
+       power_mode:$power_mode,command_exit:$smart_exit,
+       health:(if $passed == true then "healthy" elif $passed == false then "failing"
+               elif ($power_mode | ascii_upcase) == "STANDBY" then "standby" else "unknown" end)}
+    ' "$smart_file")
+  else
+    smart=$(jq -n -c --argjson smart_exit "$smart_exit" \
+      '{available:false,passed:null,temperature_c:null,power_on_hours:null,power_mode:"unknown",command_exit:$smart_exit,health:"unknown"}')
+  fi
+  disks=$(printf '%s' "$disks" | jq -c --argjson disk "$disk" --argjson smart "$smart" '
+    . + [{path:$disk.path,size_bytes:$disk.size,
+          model:(($disk.model // "unknown") | gsub("^[[:space:]]+|[[:space:]]+$";"")),
+          serial:(($disk.serial // null) | if . == null then null else gsub("^[[:space:]]+|[[:space:]]+$";"") end),
+          transport:($disk.tran // "unknown"),smart:$smart}]
+  ')
+done < "$work/disks.jsonl"
+
+md_arrays='[]'
+if [ -r "$proc_root/mdstat" ]; then
+  awk '/^md[[:alnum:]_.-]+[[:space:]]*:/ {print $1}' "$proc_root/mdstat" > "$work/md-names"
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    header=$(awk -v name="$name" '$1 == name && $2 == ":" {print; exit}' "$proc_root/mdstat")
+    level=$(printf '%s\n' "$header" | awk '{print $4}')
+    state=$(printf '%s\n' "$header" | awk '{print $3}')
+    summary=$(awk -v name="$name" '
+      $1 == name && $2 == ":" {inside=1; next}
+      inside && /^[^[:space:]]/ {exit}
+      inside && /\[[0-9]+\/[0-9]+\][[:space:]]+\[[U_]+\]/ {print; exit}
+    ' "$proc_root/mdstat")
+    pattern=$(printf '%s\n' "$summary" | sed -n 's/.*\[[0-9][0-9]*\/[0-9][0-9]*\][[:space:]]*\[\([U_][U_]*\)\].*/\1/p')
+    expected=$(printf '%s\n' "$summary" | sed -n 's/.*\[\([0-9][0-9]*\)\/[0-9][0-9]*\].*/\1/p')
+    active=$(printf '%s\n' "$summary" | sed -n 's/.*\[[0-9][0-9]*\/\([0-9][0-9]*\)\].*/\1/p')
+    progress_line=$(awk -v name="$name" '
+      $1 == name && $2 == ":" {inside=1; next}
+      inside && /^[^[:space:]]/ {exit}
+      inside && /(recovery|resync|reshape|check)[[:space:]]*=/ {print; exit}
+    ' "$proc_root/mdstat")
+    sync_action=$(printf '%s\n' "$progress_line" | awk '
+      { for (i = 1; i <= NF; i++)
+          if ($i == "recovery" || $i == "resync" || $i == "reshape" || $i == "check") { print $i; exit } }
+    ')
+    sync_percent=$(printf '%s\n' "$progress_line" | sed -n 's/.*=[[:space:]]*\([0-9][0-9.]*\)%.*/\1/p')
+    health=unknown
+    case $pattern in *_*) health=degraded ;; U*) health=healthy ;; esac
+    [ -n "$expected" ] || expected=0
+    [ -n "$active" ] || active=0
+    [ -n "$sync_action" ] || sync_action=none
+    [ -n "$sync_percent" ] || sync_percent=0
+    md_arrays=$(printf '%s' "$md_arrays" | jq -c \
+      --arg name "$name" --arg level "$level" --arg state "$state" --arg pattern "$pattern" \
+      --arg health "$health" --arg sync_action "$sync_action" --argjson expected "$expected" \
+      --argjson active "$active" --argjson sync_percent "$sync_percent" \
+      '. + [{name:$name,path:("/dev/" + $name),level:$level,state:$state,member_pattern:$pattern,
+              expected_members:$expected,active_members:$active,health:$health,
+              sync:{action:(if $sync_action == "none" then null else $sync_action end),percent:$sync_percent}}]')
+  done < "$work/md-names"
+fi
+
+zfs_available=false
+zfs_pools='[]'
+if command -v zpool >/dev/null 2>&1; then
+  zfs_available=true
+  if zpool list -Hp -o name,size,alloc,free,health > "$work/zpools" 2>/dev/null; then
+    while IFS="$(printf '\t')" read -r name size allocated free health; do
+      [ -n "$name" ] || continue
+      normalized=$(printf '%s' "$health" | tr '[:upper:]' '[:lower:]')
+      case $normalized in online) status=healthy ;; degraded) status=degraded ;; faulted|unavail|removed) status=failing ;; *) status=unknown ;; esac
+      zfs_pools=$(printf '%s' "$zfs_pools" | jq -c \
+        --arg name "$name" --arg health "$health" --arg status "$status" \
+        --argjson size "$size" --argjson allocated "$allocated" --argjson free "$free" \
+        '. + [{name:$name,size_bytes:$size,allocated_bytes:$allocated,free_bytes:$free,health:$health,status:$status}]')
+    done < "$work/zpools"
+  fi
+fi
+
+hardware_controllers='[]'
+if command -v lspci >/dev/null 2>&1; then
+  hardware_controllers=$(lspci -Dnn | awk '
+    /RAID bus controller/ { address=$1; print address "\t" $0 }
+  ' | jq -Rsc 'split("\n") | map(select(length > 0) | split("\t") |
+    {address:.[0],description:.[1],health_visibility:"limited",member_health_available:false})')
+fi
+management_tools='[]'
+for candidate in storcli64 storcli perccli64 perccli ssacli arcconf; do
+  if command -v "$candidate" >/dev/null 2>&1; then
+    management_tools=$(printf '%s' "$management_tools" | jq -c --arg tool "$candidate" '. + [$tool]')
+  fi
+done
+
+overall=healthy
+if printf '%s' "$disks" | jq -e 'any(.[]; .smart.health == "failing")' >/dev/null ||
+   printf '%s' "$md_arrays" | jq -e 'any(.[]; .health == "degraded")' >/dev/null ||
+   printf '%s' "$zfs_pools" | jq -e 'any(.[]; .status == "degraded" or .status == "failing")' >/dev/null; then
+  overall=attention
+elif [ "$(printf '%s' "$hardware_controllers" | jq 'length')" -gt 0 ]; then
+  overall=limited
+fi
+
+directory=$(dirname -- "$output")
+mkdir -p "$directory"
+[ ! -L "$output" ] || { printf 'error: storage health output cannot be a symbolic link\n' >&2; exit 1; }
+temporary=$(mktemp "$directory/.storage-health.XXXXXX")
+jq -S -n --argjson generated_unix "$now" --arg overall "$overall" \
+  --argjson disks "$disks" --argjson md_arrays "$md_arrays" \
+  --argjson zfs_available "$zfs_available" --argjson zfs_pools "$zfs_pools" \
+  --argjson hardware_controllers "$hardware_controllers" --argjson management_tools "$management_tools" \
+  '{schema:1,generated_unix:$generated_unix,overall:$overall,read_only:true,disks:$disks,
+    software_raid:{md_arrays:$md_arrays,zfs:{available:$zfs_available,pools:$zfs_pools}},
+    hardware_raid:{controllers:$hardware_controllers,management_tools:$management_tools,
+      explanation:"Hardware RAID member and rebuild health is limited until a supported vendor tool is detected and integrated."}}' > "$temporary"
+chmod 0644 "$temporary"
+mv "$temporary" "$output"
+temporary=
+printf 'BEDROCK_STORAGE_HEALTH_READY path=%s overall=%s\n' "$output" "$overall" > /dev/console 2>/dev/null || true

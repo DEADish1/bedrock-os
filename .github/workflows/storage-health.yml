@@ -1,0 +1,24 @@
+name: Storage health
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/storage-health.yml"
+      - "os/config/includes.chroot/etc/systemd/system/timers.target.wants/bedrock-storage-health.timer"
+      - "os/config/includes.chroot/usr/lib/bedrock/collect-storage-health"
+      - "os/config/includes.chroot/usr/lib/systemd/system/bedrock-storage-health.service"
+      - "os/config/includes.chroot/usr/lib/systemd/system/bedrock-storage-health.timer"
+      - "os/tests/fixtures/storage/**"
+      - "os/tests/test-storage-health.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  read-only-contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate SMART and RAID health collection
+        run: sh os/tests/test-storage-health.sh

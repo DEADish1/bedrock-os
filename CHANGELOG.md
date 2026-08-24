@@ -56,11 +56,12 @@ This file records completed work, decisions, validation, and the next starting p
 - Added reproducible protected-installer staging for the live OS with fixed installed paths, scanner-fixture environment clearing, exact component checksums, build-mode metadata, cleanup after `live-build`, and runtime package-integrity/production-enabled checks. Development images remain fail-closed; production helper builds still require the exact destructive token and production-trust gate.
 - Added an explicit manual protected-writer acceptance-image mode. The completed ISO is inspected to verify its embedded installer manifest and build mode, and the top-level build manifest records whether the system writer is enabled. Acceptance artifacts retain development signing and cannot be represented as release-eligible.
 - Added the first functional first-run preference step for software updates. Users can enable scheduled signed-metadata checks or choose manual-only operation, change that choice later, and run Check now even while automatic checks are off. The persistent policy defaults off until a choice is recorded; disabled timer runs make no network request, checks never install automatically, and invalid or tampered metadata cannot replace the last verified result.
+- Added a periodic, read-only storage health foundation covering non-waking SMART status and temperatures, Linux MD health and recovery progress, imported ZFS pool status when tooling is available, and hardware RAID controller discovery. Hardware member/cache/battery health is reported as limited until a supported vendor adapter exists, and fixture tests cover healthy and degraded arrays, a failing disk, ZFS degradation, and symbolic-link output rejection.
 
 ### Next starting point
 
 - Boot-test the v0.2 image on physical Intel and AMD systems and the remaining common VM platforms.
-- Implement the v0.4 RAID management service: safe array/pool creation, health adapters, rebuild progress, replacement, and recovery tests.
+- Extend the v0.4 storage-health foundation with supported hardware-vendor adapters and alert/audit delivery, then add review-only array/pool creation plans before enabling any mutating RAID control.
 - Add update download/resume transport, release-channel policy, and certificate-rotation handling.
 
 ### Bootable foundation work

@@ -55,6 +55,7 @@ CI runs two clean ISO replicas and `scripts/compare-reproducible-builds.sh` requ
 - `config/includes.chroot/usr/sbin/bedrock-update`: writes a verified bundle only to the inactive root/verity/signature slots, verifies each device write, and arms its UKI for three health-gated attempts.
 - `config/includes.chroot/usr/lib/bedrock/check-for-updates`: honors the persistent automatic-check preference, downloads only bounded HTTPS metadata, verifies its CMS signature and schema, and records availability without installing anything.
 - `config/includes.chroot/usr/sbin/bedrock-update-settings`: shows or changes automatic checks and provides the manual `check-now` path; `bedrock-setup-updates` exposes the same choice to first-run setup.
+- `config/includes.chroot/usr/lib/bedrock/collect-storage-health`: performs read-only SMART, Linux MD, ZFS, and hardware RAID discovery without waking standby disks; unsupported hardware-controller details are explicitly reported as limited.
 - `scripts/build-raw-image.sh`: joins root-image, UKI, disk assembly, signing classification, and VM-test inputs into one guarded pipeline.
 - `scripts/generate-development-keys.sh`: creates short-lived, clearly marked CI-only keys; artifacts made with them are never release eligible.
 - `scripts/build-installed-initrd.sh`: creates the systemd/dracut initramfs used for slot-bound dm-verity activation; the ISO retains its separate live-media initramfs.
