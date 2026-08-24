@@ -52,9 +52,12 @@ grep -q 'Command::new("/bin/sh")' "$LIB"
 grep -q 'Command::new("powershell.exe")' "$LIB"
 grep -q 'fn parse_inventory' "$LIB"
 grep -q 'blocking_pick_file' "$LIB"
-grep -q 'fn preflight_signed_release' "$LIB"
-grep -q 'production release trust certificate is not installed' "$LIB"
+grep -q 'fn verify_signed_release' "$LIB"
+grep -q 'fn verify_cms_signature' "$LIB"
+grep -q 'This development build has no release trust certificate' "$LIB"
 grep -q 'tauri-plugin-dialog = "2"' "$TAURI/Cargo.toml"
+grep -q 'openssl = { version = "0.10", features = \["vendored"\] }' "$TAURI/Cargo.toml"
+grep -q 'production installer builds require BEDROCK_INSTALLER_TRUST_CERT' "$TAURI/build.rs"
 
 if grep -q 'dialog:' "$TAURI/capabilities/default.json"; then
   printf 'error: the frontend must not receive direct dialog-plugin permission\n' >&2

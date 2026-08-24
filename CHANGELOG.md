@@ -19,6 +19,9 @@ This file records completed work, decisions, validation, and the next starting p
 - Added native image selection without granting direct filesystem or dialog permissions to the web interface.
 - Added fail-closed manifest, filename, signature-presence, exact-size, and streaming SHA-256 preflight validation.
 - Kept image acceptance disabled until the production trust certificate and native CMS validation are installed.
+- Added native detached-CMS validation backed by a build-injected public release certificate.
+- Made certificate-free development builds reject every image and production-mode builds fail at compile time when the trust certificate is missing.
+- Added generated in-memory signature tests proving trusted manifests pass while changed manifests and missing trust anchors fail.
 
 ### Next starting point
 

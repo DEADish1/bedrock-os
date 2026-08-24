@@ -7,6 +7,9 @@ use std::process::Command;
 use tauri::{path::BaseDirectory, Manager};
 use tauri_plugin_dialog::DialogExt;
 
+const RELEASE_TRUST_CERT_PEM: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/bedrock-release-trust.pem"));
+
 const BRIDGE_UNAVAILABLE: &str =
     "The protected disk service is not connected. No disk operation was attempted.";
 
@@ -72,11 +75,17 @@ fn choose_and_verify_image(handle: tauri::AppHandle) -> Result<VerifiedImage, St
     let image_path = selection
         .into_path()
         .map_err(|_| "The selected image is not a local file.".to_string())?;
-    preflight_signed_release(&image_path)?;
-    Err("The image passed local checks, but the production release trust certificate is not installed. No image was accepted.".into())
+    let manifest = verify_signed_release(&image_path, RELEASE_TRUST_CERT_PEM)?;
+    Ok(VerifiedImage {
+        name: manifest.artifact.name,
+        version: manifest.version,
+        size_bytes: manifest.artifact.size,
+        sha256: manifest.artifact.sha256,
+        image_type: manifest.artifact.image_type,
+    })
 }
 
-fn preflight_signed_release(image_path: &Path) -> Result<ReleaseManifest, String> {
+fn verify_signed_release(image_path: &Path, trust_cert_pem: &[u8]) -> Result<ReleaseManifest, String> {
     let release_dir = image_path
         .parent()
         .ok_or_else(|| "The selected image has no release folder.".to_string())?;
@@ -84,10 +93,9 @@ fn preflight_signed_release(image_path: &Path) -> Result<ReleaseManifest, String
     let signature_path = release_dir.join("manifest.p7s");
     let manifest_bytes = std::fs::read(&manifest_path)
         .map_err(|_| "The signed release manifest is missing.".to_string())?;
-    let signature_size = std::fs::metadata(&signature_path)
-        .map_err(|_| "The release signature is missing.".to_string())?
-        .len();
-    if signature_size == 0 {
+    let signature = std::fs::read(&signature_path)
+        .map_err(|_| "The release signature is missing.".to_string())?;
+    if signature.is_empty() {
         return Err("The release signature is empty.".into());
     }
     let manifest: ReleaseManifest = serde_json::from_slice(&manifest_bytes)
@@ -100,7 +108,36 @@ fn preflight_signed_release(image_path: &Path) -> Result<ReleaseManifest, String
     if sha256 != manifest.artifact.sha256 {
         return Err("The selected image checksum does not match its signed manifest.".into());
     }
+    verify_cms_signature(&manifest_bytes, &signature, trust_cert_pem)?;
     Ok(manifest)
+}
+
+fn verify_cms_signature(
+    manifest: &[u8],
+    signature_der: &[u8],
+    trust_cert_pem: &[u8],
+) -> Result<(), String> {
+    if trust_cert_pem.is_empty() {
+        return Err("This development build has no release trust certificate. No image was accepted.".into());
+    }
+    let certificate = X509::from_pem(trust_cert_pem)
+        .map_err(|_| "The embedded release trust certificate is invalid.".to_string())?;
+    let mut store = X509StoreBuilder::new()
+        .map_err(|_| "The release trust store could not be created.".to_string())?;
+    store
+        .add_cert(certificate)
+        .map_err(|_| "The release trust certificate could not be loaded.".to_string())?;
+    let store = store.build();
+    let mut cms = CmsContentInfo::from_der(signature_der)
+        .map_err(|_| "The release signature format is invalid.".to_string())?;
+    cms.verify(
+        None,
+        Some(&store),
+        Some(manifest),
+        None,
+        CMSOptions::BINARY,
+    )
+    .map_err(|_| "The release manifest signature is not trusted or has been changed.".to_string())
 }
 
 fn validate_manifest(manifest: &ReleaseManifest, image_path: &Path) -> Result<(), String> {
@@ -257,7 +294,15 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_sha256, parse_inventory};
+    use super::{is_sha256, parse_inventory, verify_cms_signature};
+    use openssl::asn1::Asn1Time;
+    use openssl::bn::BigNum;
+    use openssl::cms::{CmsContentInfo, CMSOptions};
+    use openssl::hash::MessageDigest;
+    use openssl::pkey::PKey;
+    use openssl::rsa::Rsa;
+    use openssl::x509::extension::{BasicConstraints, ExtendedKeyUsage, KeyUsage};
+    use openssl::x509::{X509NameBuilder, X509};
 
     #[test]
     fn accepts_shared_inventory_contract() {
@@ -279,4 +324,52 @@ mod tests {
         assert!(!is_sha256(&"g".repeat(64)));
         assert!(!is_sha256(&"a".repeat(63)));
     }
+
+    fn temporary_signer() -> (PKey<openssl::pkey::Private>, X509) {
+        let key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+        let mut name = X509NameBuilder::new().unwrap();
+        name.append_entry_by_text("CN", "Bedrock temporary test signer").unwrap();
+        let name = name.build();
+        let mut certificate = X509::builder().unwrap();
+        certificate.set_version(2).unwrap();
+        let serial = BigNum::from_u32(1).unwrap().to_asn1_integer().unwrap();
+        certificate.set_serial_number(&serial).unwrap();
+        certificate.set_subject_name(&name).unwrap();
+        certificate.set_issuer_name(&name).unwrap();
+        certificate.set_pubkey(&key).unwrap();
+        certificate.set_not_before(&Asn1Time::days_from_now(0).unwrap()).unwrap();
+        certificate.set_not_after(&Asn1Time::days_from_now(1).unwrap()).unwrap();
+        certificate
+            .append_extension(BasicConstraints::new().critical().ca().build().unwrap())
+            .unwrap();
+        certificate
+            .append_extension(KeyUsage::new().digital_signature().key_cert_sign().build().unwrap())
+            .unwrap();
+        certificate
+            .append_extension(ExtendedKeyUsage::new().email_protection().build().unwrap())
+            .unwrap();
+        certificate.sign(&key, MessageDigest::sha256()).unwrap();
+        (key, certificate.build())
+    }
+
+    #[test]
+    fn accepts_trusted_cms_and_rejects_changed_manifest() {
+        let manifest = br#"{"schema":1}"#;
+        let (key, certificate) = temporary_signer();
+        let cms = CmsContentInfo::sign(
+            Some(&certificate),
+            Some(&key),
+            None,
+            Some(manifest),
+            CMSOptions::BINARY | CMSOptions::DETACHED,
+        )
+        .unwrap();
+        let signature = cms.to_der().unwrap();
+        let trust = certificate.to_pem().unwrap();
+        verify_cms_signature(manifest, &signature, &trust).unwrap();
+        assert!(verify_cms_signature(b"changed", &signature, &trust).is_err());
+        assert!(verify_cms_signature(manifest, &signature, b"").is_err());
+    }
 }
+use openssl::cms::{CmsContentInfo, CMSOptions};
+use openssl::x509::{store::X509StoreBuilder, X509};
