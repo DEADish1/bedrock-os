@@ -84,7 +84,16 @@ state_new_sectors=$(sgdisk --info=8 "$target_node" | awk '/Partition size:/{prin
 
 sync
 blockdev --flushbufs "$target_node"
-blockdev --rereadpt "$target_node"
+reread_attempt=1
+while ! blockdev --rereadpt "$target_node" 2>/dev/null; do
+  [ "$reread_attempt" -lt 10 ] || {
+    printf 'error: kernel kept the finalized system-disk partition table busy\n' >&2
+    exit 1
+  }
+  udevadm settle --timeout=5
+  sleep 1
+  reread_attempt=$((reread_attempt + 1))
+done
 udevadm settle --timeout=30
 
 state_identity=
