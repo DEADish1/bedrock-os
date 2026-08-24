@@ -18,6 +18,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Replaced the Windows adapter's modern-only hashing calls with Windows PowerShell 5.1-compatible cryptography APIs.
 - Added native image selection without granting direct filesystem or dialog permissions to the web interface.
 - Added fail-closed manifest, filename, signature-presence, exact-size, and streaming SHA-256 preflight validation.
+- Corrected Windows helper elevation packaging so its UAC manifest replaces the helper resource after linking without conflicting with the unprivileged desktop-app manifest.
 - Kept image acceptance disabled until the production trust certificate and native CMS validation are installed.
 - Added native detached-CMS validation backed by a build-injected public release certificate.
 - Made certificate-free development builds reject every image and production-mode builds fail at compile time when the trust certificate is missing.

@@ -107,7 +107,9 @@ assert bundle["macOS"]["minimumSystemVersion"] == "13.0"
 assert "/usr/share/polkit-1/actions/com.bedrock.server.installer.write.policy" in bundle["linux"]["deb"]["files"]
 PY
 
-grep -q 'rustc-link-arg-bin=bedrock-media-writer=/MANIFEST:EMBED' "$TAURI/build.rs"
+! grep -q 'rustc-link-arg-bin=bedrock-media-writer' "$TAURI/build.rs"
+grep -q 'process.env.MT || "mt.exe"' "$ROOT/installer/desktop/scripts/prepare-release-sidecar.mjs"
+grep -q '\-outputresource:${source};#1' "$ROOT/installer/desktop/scripts/prepare-release-sidecar.mjs"
 grep -q 'requestedExecutionLevel level="requireAdministrator"' "$TAURI/elevation/windows/bedrock-media-writer.exe.manifest"
 grep -q '<allow_active>auth_admin</allow_active>' "$TAURI/elevation/linux/com.bedrock.server.installer.write.policy"
 grep -q 'org.freedesktop.policykit.exec.path' "$TAURI/elevation/linux/com.bedrock.server.installer.write.policy"

@@ -38,6 +38,19 @@ const targetRoot = process.env.CARGO_TARGET_DIR
 const source = join(targetRoot, "release", `bedrock-media-writer${extension}`);
 const destination = join(tauriDir, "binaries", `bedrock-media-writer-${triple}${extension}`);
 if (!existsSync(source)) throw new Error("the protected writer helper output is missing");
+
+// Tauri's build resource gives every Windows binary the unprivileged app manifest.
+// Replace resource 1 only in the separately built helper after linking so the main
+// desktop application remains unprivileged and the helper alone requests UAC.
+if (process.platform === "win32") {
+  const mt = process.env.MT || "mt.exe";
+  const helperManifest = join(tauriDir, "elevation", "windows", "bedrock-media-writer.exe.manifest");
+  execFileSync(mt, ["-nologo", "-manifest", helperManifest, `-outputresource:${source};#1`], {
+    cwd: tauriDir,
+    stdio: "inherit",
+  });
+}
+
 mkdirSync(dirname(destination), { recursive: true });
 copyFileSync(source, destination);
 if (process.platform !== "win32") chmodSync(destination, 0o755);

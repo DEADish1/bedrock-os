@@ -2,20 +2,6 @@ fn main() {
     println!("cargo:rerun-if-env-changed=BEDROCK_INSTALLER_TRUST_CERT");
     println!("cargo:rerun-if-env-changed=BEDROCK_REQUIRE_PRODUCTION_TRUST");
 
-    #[cfg(target_os = "windows")]
-    {
-        let manifest_dir = std::path::PathBuf::from(
-            std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set"),
-        );
-        let helper_manifest = manifest_dir.join("elevation/windows/bedrock-media-writer.exe.manifest");
-        println!("cargo:rerun-if-changed={}", helper_manifest.display());
-        println!("cargo:rustc-link-arg-bin=bedrock-media-writer=/MANIFEST:EMBED");
-        println!(
-            "cargo:rustc-link-arg-bin=bedrock-media-writer=/MANIFESTINPUT:{}",
-            helper_manifest.display()
-        );
-    }
-
     let out_dir = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR is set"));
     let embedded_cert = out_dir.join("bedrock-release-trust.pem");
     match std::env::var_os("BEDROCK_INSTALLER_TRUST_CERT") {

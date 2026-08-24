@@ -23,6 +23,7 @@ Immediately before writing, the privileged helper must enumerate again and requi
 ## Writer requirements
 
 - Verify the signed release manifest and SHA-256 before requesting elevation.
+- On Windows, replace the separately built helper's embedded manifest resource after linking; the main application keeps Tauri's unprivileged manifest and only the helper requests UAC.
 - Open only the selected whole-disk target, never a partition or path supplied as free text.
 - Refuse system, mounted, read-only, undersized, or non-removable media again after elevation.
 - Stream writes with progress, flush all data, reread and hash the completed media, then safely eject when supported.
