@@ -1,8 +1,8 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub const INSTALLER_PROGRESS_EVENT: &str = "bedrock://installer-progress";
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum WritePhase {
     Preparing,
@@ -21,8 +21,9 @@ pub struct PipelineProgress {
     pub total_bytes: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct WriteProgress {
     pub schema: u8,
     pub session_id: String,
@@ -87,6 +88,22 @@ impl ProgressTracker {
         phase: WritePhase,
         completed_bytes: u64,
     ) -> Result<WriteProgress, String> {
+        let next_sequence = self
+            .sequence
+            .checked_add(1)
+            .ok_or_else(|| "The installer progress sequence overflowed.".to_string())?;
+        let update = WriteProgress::new(
+            &self.session_id,
+            next_sequence,
+            phase,
+            completed_bytes,
+            self.total_bytes,
+        )?;
+        self.accept(update.clone())?;
+        Ok(update)
+    }
+
+    pub fn accept(&mut self, update: WriteProgress) -> Result<(), String> {
         let rank = |value: WritePhase| match value {
             WritePhase::Preparing => 0,
             WritePhase::AwaitingApproval => 1,
@@ -95,27 +112,36 @@ impl ProgressTracker {
             WritePhase::Finalizing => 4,
             WritePhase::Complete | WritePhase::Failed => 5,
         };
-        if self.phase == Some(WritePhase::Complete)
-            || self.phase == Some(WritePhase::Failed)
-            || self.phase.is_some_and(|previous| rank(phase) < rank(previous))
-            || (self.phase == Some(phase) && completed_bytes < self.completed_bytes)
-        {
-            return Err("The installer progress sequence moved backward.".into());
-        }
-        self.sequence = self
+        let expected_sequence = self
             .sequence
             .checked_add(1)
             .ok_or_else(|| "The installer progress sequence overflowed.".to_string())?;
-        let update = WriteProgress::new(
-            &self.session_id,
-            self.sequence,
-            phase,
-            completed_bytes,
-            self.total_bytes,
-        )?;
-        self.phase = Some(phase);
-        self.completed_bytes = completed_bytes;
-        Ok(update)
+        if update.schema != 1
+            || update.session_id != self.session_id
+            || update.total_bytes != self.total_bytes
+            || update.sequence != expected_sequence
+            || WriteProgress::new(
+                &update.session_id,
+                update.sequence,
+                update.phase,
+                update.completed_bytes,
+                update.total_bytes,
+            )
+            .is_err()
+            || self.phase == Some(WritePhase::Complete)
+            || self.phase == Some(WritePhase::Failed)
+            || self
+                .phase
+                .is_some_and(|previous| rank(update.phase) < rank(previous))
+            || (self.phase == Some(update.phase)
+                && update.completed_bytes < self.completed_bytes)
+        {
+            return Err("The installer progress sequence moved backward.".into());
+        }
+        self.sequence = update.sequence;
+        self.phase = Some(update.phase);
+        self.completed_bytes = update.completed_bytes;
+        Ok(())
     }
 }
 
@@ -148,5 +174,25 @@ mod tests {
         assert!(tracker.update(WritePhase::Writing, 49).is_err());
         tracker.update(WritePhase::Complete, 100).unwrap();
         assert!(tracker.update(WritePhase::Failed, 100).is_err());
+    }
+
+    #[test]
+    fn accepts_only_exact_remote_session_sequence_and_size() {
+        let mut sender = ProgressTracker::new(SESSION, 100).unwrap();
+        let update = sender.update(WritePhase::Writing, 25).unwrap();
+        let encoded = serde_json::to_vec(&update).unwrap();
+        let decoded: WriteProgress = serde_json::from_slice(&encoded).unwrap();
+        let mut receiver = ProgressTracker::new(SESSION, 100).unwrap();
+        receiver.accept(decoded.clone()).unwrap();
+        assert!(receiver.accept(decoded).is_err());
+
+        let mut wrong_session = ProgressTracker::new(
+            "85ca2b97-fdf4-4773-a397-27c0e6b61aee",
+            100,
+        )
+        .unwrap();
+        assert!(wrong_session.accept(update.clone()).is_err());
+        let mut wrong_size = ProgressTracker::new(SESSION, 101).unwrap();
+        assert!(wrong_size.accept(update).is_err());
     }
 }

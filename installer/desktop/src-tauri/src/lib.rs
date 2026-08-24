@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 use std::fs::File;
 #[cfg(target_os = "linux")]
 use std::fs::OpenOptions;
-use std::io::Read;
+use std::io::{BufRead, Read, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -34,6 +34,7 @@ const MAX_HELPER_REQUEST_BYTES: u64 = 16 * 1024;
 const HELPER_REQUEST_LIFETIME_SECONDS: u64 = 120;
 const HELPER_PREFLIGHT_ONLY_EXIT: i32 = 3;
 const HELPER_WRITE_COMPLETE_EXIT: i32 = 0;
+const MAX_PROGRESS_LINE_BYTES: usize = 2 * 1024;
 const MACOS_APP_IDENTIFIER: &str = "os.bedrock.installer";
 const MACOS_HELPER_IDENTIFIER: &str = "com.bedrock.server.installer.writer";
 #[cfg(target_os = "macos")]
@@ -115,6 +116,7 @@ struct PrivilegedWriteRequest {
 #[derive(Debug)]
 struct PreparedWrite {
     target: InstallTarget,
+    session_id: String,
     image_path: PathBuf,
     image_type: String,
     write_size: u64,
@@ -422,7 +424,17 @@ fn write_verified_image(
         crate::write_progress::WritePhase::AwaitingApproval,
         0,
     );
-    match launch_protected_writer(&request) {
+    let write_size = manifest.artifact.write_size;
+    let result = launch_protected_writer(&request, write_size, |remote| {
+        if !matches!(
+            remote.phase,
+            crate::write_progress::WritePhase::Complete
+                | crate::write_progress::WritePhase::Failed
+        ) {
+            publish(&mut progress, remote.phase, remote.completed_bytes);
+        }
+    });
+    match result {
         Ok(ProtectedWriterResult::WriteComplete) => {
             publish(
                 &mut progress,
@@ -786,14 +798,68 @@ fn linux_helper_command(encoded: &str) -> Command {
     command
 }
 
+fn relay_progress_lines<R: BufRead>(
+    reader: R,
+    session_id: &str,
+    total_bytes: u64,
+    mut progress: impl FnMut(crate::write_progress::WriteProgress),
+) {
+    let Ok(mut tracker) =
+        crate::write_progress::ProgressTracker::new(session_id, total_bytes)
+    else {
+        return;
+    };
+    for line in reader.lines() {
+        let Ok(line) = line else {
+            break;
+        };
+        if line.len() > MAX_PROGRESS_LINE_BYTES {
+            continue;
+        }
+        let Ok(update) = serde_json::from_str::<crate::write_progress::WriteProgress>(&line)
+        else {
+            continue;
+        };
+        if matches!(
+            update.phase,
+            crate::write_progress::WritePhase::Complete
+                | crate::write_progress::WritePhase::Failed
+        ) {
+            continue;
+        }
+        if tracker.accept(update.clone()).is_ok() {
+            progress(update);
+        }
+    }
+}
+
 #[cfg(all(unix, not(target_os = "macos")))]
 fn launch_protected_writer(
     request: &PrivilegedWriteRequest,
+    total_bytes: u64,
+    progress: impl FnMut(crate::write_progress::WriteProgress),
 ) -> Result<ProtectedWriterResult, String> {
+    use std::io::BufReader;
+    use std::process::Stdio;
+
     let encoded = encode_helper_request(request)?;
-    let status = linux_helper_command(&encoded)
-        .status()
+    let mut child = linux_helper_command(&encoded)
+        .stdout(Stdio::piped())
+        .spawn()
         .map_err(|_| "The Linux administrator approval service could not start.".to_string())?;
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.wait();
+        return Err("The Linux protected progress channel could not open.".into());
+    };
+    relay_progress_lines(
+        BufReader::new(stdout),
+        &request.session_id,
+        total_bytes,
+        progress,
+    );
+    let status = child
+        .wait()
+        .map_err(|_| "The Linux protected writer result could not be read.".to_string())?;
     match status.code() {
         Some(HELPER_WRITE_COMPLETE_EXIT) => Ok(ProtectedWriterResult::WriteComplete),
         Some(HELPER_PREFLIGHT_ONLY_EXIT) => Ok(ProtectedWriterResult::PreflightOnly),
@@ -821,6 +887,8 @@ unsafe extern "C" {
 #[cfg(target_os = "macos")]
 fn launch_protected_writer(
     request: &PrivilegedWriteRequest,
+    _total_bytes: u64,
+    _progress: impl FnMut(crate::write_progress::WriteProgress),
 ) -> Result<ProtectedWriterResult, String> {
     let bytes = helper_request_bytes(request)?;
     let requirement = macos_peer_requirement(MACOS_HELPER_IDENTIFIER, APPLE_TEAM_ID)?;
@@ -853,6 +921,8 @@ fn launch_protected_writer(
 #[cfg(target_os = "windows")]
 fn launch_protected_writer(
     request: &PrivilegedWriteRequest,
+    _total_bytes: u64,
+    _progress: impl FnMut(crate::write_progress::WriteProgress),
 ) -> Result<ProtectedWriterResult, String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
@@ -963,6 +1033,7 @@ fn protected_writer_preflight<R: Read>(
     .clone();
     Ok(PreparedWrite {
         target,
+        session_id: request.session_id,
         image_path: request.image_path,
         image_type: manifest.artifact.image_type,
         write_size: manifest.artifact.write_size,
@@ -988,6 +1059,7 @@ fn protected_writer_operation<R: Read>(
     input: R,
     executable: &Path,
     now: u64,
+    mut progress: impl FnMut(crate::write_progress::WriteProgress),
 ) -> Result<ProtectedWriterResult, String> {
     use crate::write_pipeline::write_verify_and_finalize;
 
@@ -995,15 +1067,33 @@ fn protected_writer_operation<R: Read>(
     let mut source = File::open(&prepared.image_path)
         .map_err(|_| "The verified image could not be reopened for writing.".to_string())?;
     let mut device = open_exclusive_whole_device(&prepared.target)?;
+    let mut tracker = crate::write_progress::ProgressTracker::new(
+        &prepared.session_id,
+        prepared.write_size,
+    )?;
     write_verify_and_finalize(
         &prepared.image_type,
         &mut source,
         &mut device,
         prepared.write_size,
         &prepared.write_sha256,
-        |_| {},
+        |update| {
+            if let Ok(update) = tracker.update(update.phase, update.completed_bytes) {
+                progress(update);
+            }
+        },
     )?;
     Ok(ProtectedWriterResult::WriteComplete)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn write_helper_progress(update: crate::write_progress::WriteProgress) {
+    let Ok(line) = serde_json::to_string(&update) else {
+        return;
+    };
+    let mut stdout = std::io::stdout().lock();
+    let _ = writeln!(stdout, "{line}");
+    let _ = stdout.flush();
 }
 
 #[cfg(not(all(
@@ -1018,6 +1108,7 @@ fn protected_writer_operation<R: Read>(
     input: R,
     executable: &Path,
     now: u64,
+    _progress: impl FnMut(crate::write_progress::WriteProgress),
 ) -> Result<ProtectedWriterResult, String> {
     protected_writer_open_gate(input, executable, now)?;
     Ok(ProtectedWriterResult::PreflightOnly)
@@ -1045,10 +1136,20 @@ pub fn run_protected_writer_helper() -> i32 {
     };
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let result = match arguments.as_slice() {
-        [] => protected_writer_operation(std::io::stdin().lock(), &executable, now),
+        [] => protected_writer_operation(
+            std::io::stdin().lock(),
+            &executable,
+            now,
+            write_helper_progress,
+        ),
         [flag, encoded] if flag == "--request-base64" => decode_helper_request(encoded)
             .and_then(|bytes| {
-                protected_writer_operation(std::io::Cursor::new(bytes), &executable, now)
+                protected_writer_operation(
+                    std::io::Cursor::new(bytes),
+                    &executable,
+                    now,
+                    write_helper_progress,
+                )
             }),
         _ => Err("The protected writer command line is invalid.".into()),
     };
@@ -1085,7 +1186,12 @@ fn macos_writer_request(bytes: &[u8]) -> i32 {
             return 1;
         }
     };
-    match protected_writer_operation(std::io::Cursor::new(bytes), &executable, now) {
+    match protected_writer_operation(
+        std::io::Cursor::new(bytes),
+        &executable,
+        now,
+        |_| {},
+    ) {
         Ok(ProtectedWriterResult::WriteComplete) => HELPER_WRITE_COMPLETE_EXIT,
         Ok(ProtectedWriterResult::PreflightOnly) => HELPER_PREFLIGHT_ONLY_EXIT,
         Err(error) => {
@@ -1145,10 +1251,10 @@ pub fn run() {
 mod tests {
     use super::{
         decode_helper_request, encode_helper_request, is_sha256, parse_inventory,
-        macos_peer_requirement, protected_writer_preflight, validate_elevated_identity,
-        physical_writer_enabled, validate_helper_request, validate_write_target,
-        verify_cms_signature, whole_device_open_path, InstallTarget, PrivilegedWriteRequest,
-        MACOS_APP_IDENTIFIER, MACOS_HELPER_IDENTIFIER,
+        macos_peer_requirement, physical_writer_enabled, protected_writer_preflight,
+        relay_progress_lines, validate_elevated_identity, validate_helper_request,
+        validate_write_target, verify_cms_signature, whole_device_open_path, InstallTarget,
+        PrivilegedWriteRequest, MACOS_APP_IDENTIFIER, MACOS_HELPER_IDENTIFIER,
     };
     use openssl::asn1::Asn1Time;
     use openssl::bn::BigNum;
@@ -1339,6 +1445,41 @@ mod tests {
                 "encoded-request"
             ]
         );
+    }
+
+    #[test]
+    fn progress_relay_accepts_only_bounded_monotonic_session_updates() {
+        use crate::write_progress::{ProgressTracker, WritePhase, WriteProgress};
+
+        let session = "5d776cd0-c6b8-44d2-a8e0-8e3b56f0fb7d";
+        let mut sender = ProgressTracker::new(session, 100).unwrap();
+        let first = sender.update(WritePhase::Writing, 25).unwrap();
+        let second = sender.update(WritePhase::Writing, 50).unwrap();
+        let complete = sender.update(WritePhase::Complete, 100).unwrap();
+        let wrong_session = WriteProgress::new(
+            "85ca2b97-fdf4-4773-a397-27c0e6b61aee",
+            2,
+            WritePhase::Writing,
+            40,
+            100,
+        )
+        .unwrap();
+        let lines = [
+            serde_json::to_string(&first).unwrap(),
+            "not-json".into(),
+            serde_json::to_string(&first).unwrap(),
+            serde_json::to_string(&wrong_session).unwrap(),
+            "x".repeat(super::MAX_PROGRESS_LINE_BYTES + 1),
+            serde_json::to_string(&second).unwrap(),
+            serde_json::to_string(&complete).unwrap(),
+        ]
+        .join("\n");
+        let mut accepted = Vec::new();
+        relay_progress_lines(Cursor::new(lines), session, 100, |update| {
+            accepted.push(update)
+        });
+
+        assert_eq!(accepted, [first, second]);
     }
 
     #[test]

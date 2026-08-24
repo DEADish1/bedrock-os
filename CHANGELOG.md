@@ -42,6 +42,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Added the equivalent acceptance-only Windows adapter, retaining one zero-share `PhysicalDrive` handle through streaming, reread verification, cache flush, allow-removal, eject/manual-removal handling, and final close; CI compiles the gated branch without executing it.
 - Added the acceptance-only macOS adapter, retaining one exclusive raw-disk descriptor through streaming, reread verification, full cache synchronization, eject, and final close; the authenticated XPC handler returns completed-write status only in an exact-token production build, and CI compiles without executing the branch.
 - Added a versioned, session-bound, monotonic installer progress contract, real write/reread/finalization pipeline phases, and truthful graphical preparation/approval/completion states; privileged byte-progress relay remains fail-closed pending authenticated per-platform channels.
+- Connected Linux protected-helper byte progress through a one-way pipe from the exact policy-bound executable, with strict session, size, sequence, phase, byte, and line validation; invalid display updates cannot affect the write and completion still requires a successful helper exit.
 
 ### Next starting point
 
