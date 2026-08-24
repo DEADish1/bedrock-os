@@ -45,6 +45,8 @@ This file records completed work, decisions, validation, and the next starting p
 - Connected Linux protected-helper byte progress through a one-way pipe from the exact policy-bound executable, with strict session, size, sequence, phase, byte, and line validation; invalid display updates cannot affect the write and completion still requires a successful helper exit.
 - Connected Windows protected-helper byte progress through a local-only inbound named pipe authenticated against the elevated helper process ID, with an interruptible connection wait, exact session-derived pipe identity, the shared strict progress validation, and successful helper exit still required for completion.
 - Connected macOS protected-helper byte progress through a progress-only proxy object on the existing mutually code-signed XPC connection, with bounded messages, locked callback invalidation, shared session/size/sequence/phase validation, and successful protected-service completion still required.
+- Added tested installer recovery guidance for insufficient space, interrupted writes, checksum failure, unavailable media, administrator approval, malformed progress, and unknown failures; failed media remains visibly untrusted and can be restarted safely.
+- Added in-app and written USB/DVD guidance that distinguishes verified image burning from copying an ISO file and makes clear that optical writing and physical-hardware acceptance are not yet complete.
 
 ### Next starting point
 

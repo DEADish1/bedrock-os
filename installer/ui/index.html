@@ -18,6 +18,7 @@
         <p class="intro">Select the signed ISO or compressed USB image you downloaded. Bedrock checks its signature and every byte before showing any drives.</p>
         <button id="choose-image" class="drop"><span>⇧</span><strong>Choose Bedrock image</strong><small>ISO or RAW.ZST plus its signed manifest</small></button>
         <div id="image-result" class="result" hidden></div>
+        <details class="disc-help"><summary>Using an optical disc instead?</summary><p>Download the signed ISO, verify it, then use your computer's disc-burning feature to burn it as a disc image. Do not copy the ISO file onto the disc. USB is preferred; Bedrock Installer does not write CDs or DVDs.</p></details>
       </article>
       <article id="drive" class="panel">
         <p class="eyebrow">STEP 2 OF 4</p><h1>Select a removable drive <button class="help" aria-label="Explain removable drives">?<span>Internal, system, mounted, read-only, and undersized drives cannot be selected.</span></button></h1>
@@ -30,6 +31,7 @@
         <code id="confirmation-phrase"></code><input id="confirmation" autocomplete="off" spellcheck="false">
         <button id="write-button" class="danger" disabled>Erase drive and create Bedrock media</button>
         <div id="progress" class="progress" hidden><i></i><span>Preparing verified media…</span></div>
+        <button id="recover" class="secondary recovery" hidden>Start again safely</button>
       </article>
       <article id="done" class="panel">
         <p class="eyebrow">COMPLETE</p><h1>Your Bedrock media is ready</h1><div class="success">✓</div>
@@ -41,5 +43,5 @@
   </div>
   <footer>Bedrock Installer <span>•</span> No drive is written until its full name is confirmed.</footer>
 </main>
-<script src="app.js"></script>
+<script src="recovery.js"></script><script src="app.js"></script>
 </body></html>

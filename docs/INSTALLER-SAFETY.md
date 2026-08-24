@@ -29,6 +29,8 @@ Immediately before writing, the privileged helper must enumerate again and requi
 - Stream writes with progress, flush all data, reread and hash the completed media, then safely eject when supported.
 - Treat interruption, short writes, disappearing media, and verification mismatch as failures with recovery guidance.
 
+The graphical recovery contract never converts a native failure into success. It keeps the failed state visible, says the media is not ready, and requires a fresh start. Insufficient capacity directs the user to larger media; interruptions require a full rewrite; checksum failure recommends replacement after a repeated failure; unavailable media requires reconnect/unmount and refreshed discovery; missing administrator approval requires a new protected-write request. Every failure warns against booting from or using the drive until a later write passes verification.
+
 ## Protected helper boundary
 
 The desktop package contains a separate `bedrock-media-writer` executable. It accepts only a bounded schema-1 request on standard input, requires a valid opaque session identity and a request no more than two minutes old, independently re-verifies the signed image, locates only a packaged platform scanner relative to its own executable, refreshes inventory, and repeats the complete target and confirmation checks. Unknown request fields, caller-provided scanner paths, relative image paths, oversized requests, and expired requests are rejected.

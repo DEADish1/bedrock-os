@@ -27,12 +27,14 @@
       verifying: [78 + ratio * 17, `Rereading and verifying media… ${Math.round(ratio * 100)}%`],
       finalizing: [97, "Synchronizing and preparing safe removal…"],
       complete: [100, "Verified media is complete."],
-      failed: [0, "The protected write did not complete."],
+      failed: [null, "The protected write did not complete. This drive is not ready to use."],
     }[update.phase];
     if (!presentation) return;
-    $("progress").hidden = false;
-    $("progress").querySelector("i").style.width = presentation[0] + "%";
-    $("progress").querySelector("span").textContent = presentation[1];
+    const progress = $("progress");
+    progress.hidden = false;
+    progress.classList.toggle("failed", update.phase === "failed");
+    if (presentation[0] !== null) progress.querySelector("i").style.width = presentation[0] + "%";
+    progress.querySelector("span").textContent = presentation[1];
   };
   const progressListener = globalThis.__TAURI__?.event?.listen;
   if (progressListener) {
@@ -77,15 +79,27 @@
   $("write-button").onclick = async () => {
     try {
       error("");
+      $("recover").hidden = true;
       $("write-button").disabled = true;
       renderProgress({ phase: "preparing", completedBytes: 0, totalBytes: state.image.sizeBytes });
       await invoke("write_verified_image", { image: state.image, targetId: state.target.id, confirmation: $("confirmation").value });
       renderProgress({ phase: "complete", completedBytes: state.image.sizeBytes, totalBytes: state.image.sizeBytes });
       show("done");
     } catch (e) {
-      $("progress").hidden = true;
-      error((e.message || e) + " The drive was not accepted as complete; rewrite it from the beginning.");
+      renderProgress({ phase: "failed" });
+      error(globalThis.BedrockRecovery.messageFor(e.message || e));
+      $("recover").hidden = false;
     }
   };
-  $("start-over").onclick = () => { state.image = state.target = null; error(""); show("image"); };
+  const startOver = () => {
+    state.image = state.target = null;
+    state.phrase = "";
+    error("");
+    $("progress").hidden = true;
+    $("progress").classList.remove("failed");
+    $("recover").hidden = true;
+    show("image");
+  };
+  $("recover").onclick = startOver;
+  $("start-over").onclick = startOver;
 })();
