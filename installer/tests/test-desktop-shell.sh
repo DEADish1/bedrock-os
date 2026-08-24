@@ -51,6 +51,15 @@ fi
 grep -q 'Command::new("/bin/sh")' "$LIB"
 grep -q 'Command::new("powershell.exe")' "$LIB"
 grep -q 'fn parse_inventory' "$LIB"
+grep -q 'blocking_pick_file' "$LIB"
+grep -q 'fn preflight_signed_release' "$LIB"
+grep -q 'production release trust certificate is not installed' "$LIB"
+grep -q 'tauri-plugin-dialog = "2"' "$TAURI/Cargo.toml"
+
+if grep -q 'dialog:' "$TAURI/capabilities/default.json"; then
+  printf 'error: the frontend must not receive direct dialog-plugin permission\n' >&2
+  exit 1
+fi
 
 grep -q 'No disk operation was attempted' "$LIB"
 for field in 'size_bytes: u64' 'system: bool' 'name: String' 'version: String'; do

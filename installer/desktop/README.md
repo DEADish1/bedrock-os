@@ -6,7 +6,7 @@ This Tauri 2 shell packages the shared installer interface as native Windows, ma
 - list eligible removable targets;
 - write a verified image after exact confirmation.
 
-Live removable-drive discovery is connected to the bundled read-only Windows, macOS, and Linux adapters. Image selection and writing still fail closed with a clear message until their platform-specific protected services are connected and tested. The shell has no general command runner, shell plugin, or unrestricted filesystem permission.
+Live removable-drive discovery is connected to the bundled read-only Windows, macOS, and Linux adapters. Native image selection now requires a supported Bedrock filename, strict manifest schema, non-empty signature, exact size, and streaming SHA-256 match. It still fails closed after these preflight checks until the production release trust certificate and CMS validator are installed. Writing also remains disabled. The shell has no general command runner, shell plugin, or unrestricted filesystem permission.
 
 The Rust response models use the same camel-case fields consumed by `ui/app.js`. GitHub checks the contract and compiles the shell independently on Windows, macOS, and Linux before it can be accepted.
 

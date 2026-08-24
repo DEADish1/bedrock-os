@@ -1,7 +1,11 @@
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 use std::process::Command;
 use tauri::{path::BaseDirectory, Manager};
+use tauri_plugin_dialog::DialogExt;
 
 const BRIDGE_UNAVAILABLE: &str =
     "The protected disk service is not connected. No disk operation was attempted.";
@@ -35,9 +39,121 @@ struct VerifiedImage {
     image_type: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReleaseManifest {
+    schema: u8,
+    product: String,
+    architecture: String,
+    version: String,
+    artifact: ReleaseArtifact,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReleaseArtifact {
+    name: String,
+    #[serde(rename = "type")]
+    image_type: String,
+    sha256: String,
+    size: u64,
+    write_sha256: String,
+    write_size: u64,
+}
+
 #[tauri::command]
-fn choose_and_verify_image() -> Result<VerifiedImage, String> {
-    Err(BRIDGE_UNAVAILABLE.into())
+fn choose_and_verify_image(handle: tauri::AppHandle) -> Result<VerifiedImage, String> {
+    let selection = handle
+        .dialog()
+        .file()
+        .add_filter("Bedrock OS images", &["iso", "zst"])
+        .blocking_pick_file()
+        .ok_or_else(|| "No image was selected.".to_string())?;
+    let image_path = selection
+        .into_path()
+        .map_err(|_| "The selected image is not a local file.".to_string())?;
+    preflight_signed_release(&image_path)?;
+    Err("The image passed local checks, but the production release trust certificate is not installed. No image was accepted.".into())
+}
+
+fn preflight_signed_release(image_path: &Path) -> Result<ReleaseManifest, String> {
+    let release_dir = image_path
+        .parent()
+        .ok_or_else(|| "The selected image has no release folder.".to_string())?;
+    let manifest_path = release_dir.join("manifest.json");
+    let signature_path = release_dir.join("manifest.p7s");
+    let manifest_bytes = std::fs::read(&manifest_path)
+        .map_err(|_| "The signed release manifest is missing.".to_string())?;
+    let signature_size = std::fs::metadata(&signature_path)
+        .map_err(|_| "The release signature is missing.".to_string())?
+        .len();
+    if signature_size == 0 {
+        return Err("The release signature is empty.".into());
+    }
+    let manifest: ReleaseManifest = serde_json::from_slice(&manifest_bytes)
+        .map_err(|_| "The release manifest format is invalid.".to_string())?;
+    validate_manifest(&manifest, image_path)?;
+    let (size, sha256) = hash_file(image_path)?;
+    if size != manifest.artifact.size {
+        return Err("The selected image size does not match its signed manifest.".into());
+    }
+    if sha256 != manifest.artifact.sha256 {
+        return Err("The selected image checksum does not match its signed manifest.".into());
+    }
+    Ok(manifest)
+}
+
+fn validate_manifest(manifest: &ReleaseManifest, image_path: &Path) -> Result<(), String> {
+    let filename = image_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "The selected image filename is invalid.".to_string())?;
+    let valid_name = filename == "bedrock-os-amd64.iso" || filename == "bedrock-os-amd64.raw.zst";
+    let valid_type = (manifest.artifact.image_type == "iso" && filename.ends_with(".iso"))
+        || (manifest.artifact.image_type == "raw-zst" && filename.ends_with(".raw.zst"));
+    if manifest.schema != 1
+        || manifest.product != "Bedrock Server OS"
+        || manifest.architecture != "amd64"
+        || manifest.version.is_empty()
+        || manifest.artifact.name != filename
+        || !valid_name
+        || !valid_type
+        || manifest.artifact.size == 0
+        || manifest.artifact.write_size == 0
+        || !is_sha256(&manifest.artifact.sha256)
+        || !is_sha256(&manifest.artifact.write_sha256)
+    {
+        return Err("The release manifest contains unsupported or unsafe values.".into());
+    }
+    if manifest.artifact.image_type == "iso"
+        && (manifest.artifact.write_size != manifest.artifact.size
+            || manifest.artifact.write_sha256 != manifest.artifact.sha256)
+    {
+        return Err("The ISO write identity does not match the selected image.".into());
+    }
+    Ok(())
+}
+
+fn is_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn hash_file(path: &Path) -> Result<(u64, String), String> {
+    let mut file = File::open(path).map_err(|_| "The selected image could not be opened.".to_string())?;
+    let mut digest = Sha256::new();
+    let mut size = 0_u64;
+    let mut buffer = [0_u8; 1024 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|_| "The selected image could not be read completely.".to_string())?;
+        if read == 0 {
+            break;
+        }
+        size += read as u64;
+        digest.update(&buffer[..read]);
+    }
+    Ok((size, format!("{:x}", digest.finalize())))
 }
 
 #[tauri::command]
@@ -129,6 +245,7 @@ fn write_verified_image(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             choose_and_verify_image,
             list_targets,
@@ -140,7 +257,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_inventory;
+    use super::{is_sha256, parse_inventory};
 
     #[test]
     fn accepts_shared_inventory_contract() {
@@ -153,5 +270,13 @@ mod tests {
     fn rejects_incomplete_inventory() {
         let error = parse_inventory(br#"{"schema":1,"targets":[{"id":"","path":"/dev/test","model":"Test USB","sizeBytes":8589934592,"removable":true,"system":false,"mounted":false,"readOnly":false}]}"#).unwrap_err();
         assert!(error.contains("incomplete"));
+    }
+
+    #[test]
+    fn accepts_only_lowercase_sha256_values() {
+        assert!(is_sha256(&"a".repeat(64)));
+        assert!(!is_sha256(&"A".repeat(64)));
+        assert!(!is_sha256(&"g".repeat(64)));
+        assert!(!is_sha256(&"a".repeat(63)));
     }
 }

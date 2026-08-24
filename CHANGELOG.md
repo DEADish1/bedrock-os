@@ -16,6 +16,9 @@ This file records completed work, decisions, validation, and the next starting p
 - Connected the desktop client to bundled read-only Windows, macOS, and Linux removable-drive inventory adapters.
 - Added native inventory schema validation and Rust tests that reject malformed or incomplete drive records.
 - Replaced the Windows adapter's modern-only hashing calls with Windows PowerShell 5.1-compatible cryptography APIs.
+- Added native image selection without granting direct filesystem or dialog permissions to the web interface.
+- Added fail-closed manifest, filename, signature-presence, exact-size, and streaming SHA-256 preflight validation.
+- Kept image acceptance disabled until the production trust certificate and native CMS validation are installed.
 
 ### Next starting point
 
