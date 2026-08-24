@@ -921,13 +921,25 @@ fn launch_protected_writer(
 #[cfg(target_os = "windows")]
 fn launch_protected_writer(
     request: &PrivilegedWriteRequest,
-    _total_bytes: u64,
-    _progress: impl FnMut(crate::write_progress::WriteProgress),
+    total_bytes: u64,
+    progress: impl FnMut(crate::write_progress::WriteProgress),
 ) -> Result<ProtectedWriterResult, String> {
     use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+    use std::os::windows::io::FromRawHandle;
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GetLastError, ERROR_IO_PENDING, ERROR_PIPE_CONNECTED,
+        INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
+    };
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OVERLAPPED;
+    use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
+    use windows_sys::Win32::System::Pipes::{
+        ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId,
+        PIPE_ACCESS_INBOUND, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
+        PIPE_TYPE_BYTE, PIPE_WAIT,
+    };
     use windows_sys::Win32::System::Threading::{
-        GetExitCodeProcess, WaitForSingleObject, INFINITE,
+        CreateEventW, GetExitCodeProcess, GetProcessId, WaitForMultipleObjects,
+        WaitForSingleObject, INFINITE,
     };
     use windows_sys::Win32::UI::Shell::{
         ShellExecuteExW, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
@@ -951,10 +963,53 @@ fn launch_protected_writer(
                 .into(),
         );
     }
-
+    let pipe_name = windows_progress_pipe_name(&request.session_id)?;
+    let pipe_name_wide = wide(std::ffi::OsStr::new(&pipe_name));
+    let pipe = unsafe {
+        CreateNamedPipeW(
+            pipe_name_wide.as_ptr(),
+            PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+            1,
+            0,
+            MAX_PROGRESS_LINE_BYTES as u32 * 4,
+            0,
+            std::ptr::null(),
+        )
+    };
+    if pipe == INVALID_HANDLE_VALUE {
+        return Err("The Windows protected progress channel could not be created.".into());
+    }
+    let connected_event = unsafe {
+        CreateEventW(std::ptr::null(), 1, 0, std::ptr::null())
+    };
+    if connected_event.is_null() {
+        unsafe { CloseHandle(pipe) };
+        return Err("The Windows protected progress event could not be created.".into());
+    }
+    let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+    overlapped.hEvent = connected_event;
+    let connect_result = unsafe { ConnectNamedPipe(pipe, &mut overlapped) };
+    let connect_error = if connect_result == 0 {
+        unsafe { GetLastError() }
+    } else {
+        0
+    };
+    if connect_result == 0
+        && connect_error != ERROR_IO_PENDING
+        && connect_error != ERROR_PIPE_CONNECTED
+    {
+        unsafe {
+            CloseHandle(connected_event);
+            CloseHandle(pipe);
+        }
+        return Err("The Windows protected progress channel could not listen.".into());
+    }
     let verb = wide(std::ffi::OsStr::new("runas"));
     let helper = wide(helper.as_os_str());
-    let parameters = wide(std::ffi::OsStr::new(&format!("--request-base64 {encoded}")));
+    let parameters = wide(std::ffi::OsStr::new(&format!(
+        "--request-base64 {encoded} --progress-pipe {pipe_name}"
+    )));
     let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
     info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
     info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
@@ -964,8 +1019,65 @@ fn launch_protected_writer(
     info.nShow = SW_SHOWNORMAL;
 
     if unsafe { ShellExecuteExW(&mut info) } == 0 || info.hProcess.is_null() {
+        unsafe {
+            if connect_error == ERROR_IO_PENDING {
+                CancelIoEx(pipe, &overlapped);
+                let mut ignored = 0_u32;
+                GetOverlappedResult(pipe, &mut overlapped, &mut ignored, 1);
+            }
+            CloseHandle(connected_event);
+            CloseHandle(pipe);
+        }
         return Err("Windows administrator approval was cancelled or unavailable.".into());
     }
+    let expected_process_id = unsafe { GetProcessId(info.hProcess) };
+    let connected = connect_result != 0 || connect_error == ERROR_PIPE_CONNECTED;
+    if !connected {
+        let handles = [connected_event, info.hProcess];
+        let wait = unsafe { WaitForMultipleObjects(2, handles.as_ptr(), 0, INFINITE) };
+        if wait != WAIT_OBJECT_0 {
+            unsafe {
+                CancelIoEx(pipe, &overlapped);
+                let mut ignored = 0_u32;
+                GetOverlappedResult(pipe, &mut overlapped, &mut ignored, 1);
+                CloseHandle(connected_event);
+                CloseHandle(pipe);
+                WaitForSingleObject(info.hProcess, INFINITE);
+                CloseHandle(info.hProcess);
+            }
+            return Err("The elevated Windows writer did not connect its progress channel.".into());
+        }
+        let mut ignored = 0_u32;
+        if unsafe { GetOverlappedResult(pipe, &mut overlapped, &mut ignored, 0) } == 0 {
+            unsafe {
+                CloseHandle(connected_event);
+                CloseHandle(pipe);
+                WaitForSingleObject(info.hProcess, INFINITE);
+                CloseHandle(info.hProcess);
+            }
+            return Err("The Windows protected progress connection did not complete.".into());
+        }
+    }
+    unsafe { CloseHandle(connected_event) };
+    let mut connected_process_id = 0_u32;
+    if expected_process_id == 0
+        || unsafe { GetNamedPipeClientProcessId(pipe, &mut connected_process_id) } == 0
+        || connected_process_id != expected_process_id
+    {
+        unsafe {
+            CloseHandle(pipe);
+            WaitForSingleObject(info.hProcess, INFINITE);
+            CloseHandle(info.hProcess);
+        }
+        return Err("The Windows protected progress client identity did not match.".into());
+    }
+    let progress_pipe = unsafe { File::from_raw_handle(pipe) };
+    relay_progress_lines(
+        std::io::BufReader::new(progress_pipe),
+        &request.session_id,
+        total_bytes,
+        progress,
+    );
     let wait = unsafe { WaitForSingleObject(info.hProcess, INFINITE) };
     let mut exit_code = 1_u32;
     let read_exit = unsafe { GetExitCodeProcess(info.hProcess, &mut exit_code) };
@@ -980,6 +1092,27 @@ fn launch_protected_writer(
             "The protected writer rejected the request. No disk operation was attempted.".into(),
         ),
     }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_progress_pipe_name(session_id: &str) -> Result<String, String> {
+    let session = Uuid::parse_str(session_id)
+        .map_err(|_| "The Windows protected progress session is invalid.".to_string())?;
+    Ok(format!(r"\\.\pipe\bedrock-installer-progress-{session}"))
+}
+
+#[cfg(target_os = "windows")]
+fn open_windows_progress_pipe(
+    pipe_name: &str,
+    session_id: &str,
+) -> Result<File, String> {
+    if pipe_name != windows_progress_pipe_name(session_id)? {
+        return Err("The Windows protected progress pipe identity is invalid.".into());
+    }
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(pipe_name)
+        .map_err(|_| "The Windows protected progress pipe could not be opened.".to_string())
 }
 
 fn helper_adapter_path(executable: &Path) -> Result<PathBuf, String> {
@@ -1088,12 +1221,19 @@ fn protected_writer_operation<R: Read>(
 
 #[cfg(not(target_os = "macos"))]
 fn write_helper_progress(update: crate::write_progress::WriteProgress) {
+    let mut stdout = std::io::stdout().lock();
+    write_progress_line(&mut stdout, update);
+}
+
+fn write_progress_line(
+    writer: &mut impl std::io::Write,
+    update: crate::write_progress::WriteProgress,
+) {
     let Ok(line) = serde_json::to_string(&update) else {
         return;
     };
-    let mut stdout = std::io::stdout().lock();
-    let _ = writeln!(stdout, "{line}");
-    let _ = stdout.flush();
+    let _ = writeln!(writer, "{line}");
+    let _ = writer.flush();
 }
 
 #[cfg(not(all(
@@ -1151,6 +1291,22 @@ pub fn run_protected_writer_helper() -> i32 {
                     write_helper_progress,
                 )
             }),
+        #[cfg(target_os = "windows")]
+        [flag, encoded, progress_flag, pipe_name]
+            if flag == "--request-base64" && progress_flag == "--progress-pipe" =>
+        {
+            decode_helper_request(encoded).and_then(|bytes| {
+                let request: PrivilegedWriteRequest = serde_json::from_slice(&bytes)
+                    .map_err(|_| "The protected writer request format is invalid.".to_string())?;
+                let mut pipe = open_windows_progress_pipe(pipe_name, &request.session_id)?;
+                protected_writer_operation(
+                    std::io::Cursor::new(bytes),
+                    &executable,
+                    now,
+                    |update| write_progress_line(&mut pipe, update),
+                )
+            })
+        }
         _ => Err("The protected writer command line is invalid.".into()),
     };
     match result {
@@ -1480,6 +1636,17 @@ mod tests {
         });
 
         assert_eq!(accepted, [first, second]);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_progress_pipe_name_is_bound_to_the_exact_session() {
+        let session = "5d776cd0-c6b8-44d2-a8e0-8e3b56f0fb7d";
+        assert_eq!(
+            super::windows_progress_pipe_name(session).unwrap(),
+            r"\\.\pipe\bedrock-installer-progress-5d776cd0-c6b8-44d2-a8e0-8e3b56f0fb7d"
+        );
+        assert!(super::windows_progress_pipe_name("not-a-session").is_err());
     }
 
     #[test]

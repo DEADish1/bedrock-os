@@ -43,6 +43,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Added the acceptance-only macOS adapter, retaining one exclusive raw-disk descriptor through streaming, reread verification, full cache synchronization, eject, and final close; the authenticated XPC handler returns completed-write status only in an exact-token production build, and CI compiles without executing the branch.
 - Added a versioned, session-bound, monotonic installer progress contract, real write/reread/finalization pipeline phases, and truthful graphical preparation/approval/completion states; privileged byte-progress relay remains fail-closed pending authenticated per-platform channels.
 - Connected Linux protected-helper byte progress through a one-way pipe from the exact policy-bound executable, with strict session, size, sequence, phase, byte, and line validation; invalid display updates cannot affect the write and completion still requires a successful helper exit.
+- Connected Windows protected-helper byte progress through a local-only inbound named pipe authenticated against the elevated helper process ID, with an interruptible connection wait, exact session-derived pipe identity, the shared strict progress validation, and successful helper exit still required for completion.
 
 ### Next starting point
 
