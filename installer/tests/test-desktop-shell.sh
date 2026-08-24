@@ -76,6 +76,41 @@ grep -q 'deny_unknown_fields' "$LIB"
 grep -q 'MAX_HELPER_REQUEST_BYTES' "$LIB"
 grep -q 'HELPER_REQUEST_LIFETIME_SECONDS' "$LIB"
 grep -q 'run_protected_writer_helper' "$TAURI/src/bin/bedrock-media-writer.rs"
+node --check "$ROOT/installer/desktop/scripts/prepare-release-sidecar.mjs"
+if env -u BEDROCK_REQUIRE_PRODUCTION_TRUST -u BEDROCK_INSTALLER_TRUST_CERT \
+  node "$ROOT/installer/desktop/scripts/prepare-release-sidecar.mjs" >/dev/null 2>&1; then
+  printf 'error: release sidecar staging accepted missing production trust\n' >&2
+  exit 1
+fi
+
+python3 - "$TAURI" <<'PY'
+import json
+import pathlib
+import plistlib
+import sys
+import xml.etree.ElementTree as ET
+
+root = pathlib.Path(sys.argv[1])
+release = json.loads((root / "tauri.release.conf.json").read_text())
+bundle = release["bundle"]
+assert bundle["externalBin"] == ["binaries/bedrock-media-writer"]
+policy = root / "elevation/linux/com.bedrock.server.installer.write.policy"
+windows = root / "elevation/windows/bedrock-media-writer.exe.manifest"
+macos = root / "elevation/macos/com.bedrock.server.installer.writer.plist"
+ET.parse(policy)
+ET.parse(windows)
+with macos.open("rb") as stream:
+    plist = plistlib.load(stream)
+assert plist["Label"] == "com.bedrock.server.installer.writer"
+assert plist["BundleProgram"] == "Contents/MacOS/bedrock-media-writer"
+assert bundle["macOS"]["minimumSystemVersion"] == "13.0"
+assert "/usr/share/polkit-1/actions/com.bedrock.server.installer.write.policy" in bundle["linux"]["deb"]["files"]
+PY
+
+grep -q 'rustc-link-arg-bin=bedrock-media-writer=/MANIFEST:EMBED' "$TAURI/build.rs"
+grep -q 'requestedExecutionLevel level="requireAdministrator"' "$TAURI/elevation/windows/bedrock-media-writer.exe.manifest"
+grep -q '<allow_active>auth_admin</allow_active>' "$TAURI/elevation/linux/com.bedrock.server.installer.write.policy"
+grep -q 'org.freedesktop.policykit.exec.path' "$TAURI/elevation/linux/com.bedrock.server.installer.write.policy"
 
 if grep -q 'dialog:' "$TAURI/capabilities/default.json"; then
   printf 'error: the frontend must not receive direct dialog-plugin permission\n' >&2

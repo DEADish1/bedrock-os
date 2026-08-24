@@ -28,6 +28,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Added a platform-neutral native media engine with ISO and compressed-raw streaming, bounded size checks, byte progress, flush, full reread, and signed SHA-256 verification.
 - Marked the completed v0.3 removable-drive enumeration, signed-image verification, and exact destructive-confirmation checklist items complete.
 - Added a separate fail-closed media-writer helper entry point with bounded, strict, time-limited requests, independent signed-image verification, packaged-scanner resolution, fresh inventory, and repeated target validation.
+- Added release-only helper staging with target-triple naming and SHA-256 copy verification, helper-only Windows UAC metadata, exact-path Linux polkit policy, and macOS 13+ signed-bundle launch-daemon placement.
 
 ### Next starting point
 
