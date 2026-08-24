@@ -49,6 +49,7 @@ sh -n "$OS_DIR/tests/test-hardware-inventory.sh"
 sh -n "$OS_DIR/tests/test-storage-health.sh"
 sh -n "$OS_DIR/tests/test-storage-alerts.sh"
 sh -n "$OS_DIR/tests/test-storage-plan.sh"
+sh -n "$OS_DIR/tests/test-first-run-config.sh"
 sh -n "$OS_DIR/tests/test-reproducibility-check.sh"
 sh -n "$OS_DIR/tests/validate-boot-test-report.sh"
 sh -n "$OS_DIR/scripts/compare-reproducible-builds.sh"
@@ -79,11 +80,15 @@ sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/collect-hardware-inventory
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/collect-storage-health"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/process-storage-alerts"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/create-storage-plan"
+sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/validate-first-run-config"
+sh -n "$OS_DIR/config/includes.chroot/usr/sbin/bedrock-first-run"
+sh -n "$OS_DIR/config/includes.chroot/usr/sbin/bedrock-apply-first-run"
 grep -q '^ExecStart=/usr/lib/bedrock/mark-boot-healthy$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-boot-health.service"
 [ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/multi-user.target.wants/bedrock-boot-health.service" ] || { printf 'error: boot health service is not enabled\n' >&2; exit 1; }
 [ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/multi-user.target.wants/bedrock-hardware-inventory.service" ] || { printf 'error: hardware inventory service is not enabled\n' >&2; exit 1; }
 [ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/timers.target.wants/bedrock-update-check.timer" ] || { printf 'error: update-check timer is not enabled\n' >&2; exit 1; }
 [ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/timers.target.wants/bedrock-storage-health.timer" ] || { printf 'error: storage-health timer is not enabled\n' >&2; exit 1; }
+[ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/multi-user.target.wants/bedrock-first-run.service" ] || { printf 'error: first-run service is not enabled\n' >&2; exit 1; }
 "$OS_DIR/scripts/validate-layout.sh"
 "$OS_DIR/scripts/validate-boot.sh"
 sh "$ROOT/installer/tests/test-target-selection.sh"
@@ -101,6 +106,7 @@ sh "$OS_DIR/tests/test-update-preferences.sh"
 sh "$OS_DIR/tests/test-storage-health.sh"
 sh "$OS_DIR/tests/test-storage-alerts.sh"
 sh "$OS_DIR/tests/test-storage-plan.sh"
+sh "$OS_DIR/tests/test-first-run-config.sh"
 sh "$OS_DIR/tests/test-install-plan.sh"
 sh "$OS_DIR/tests/test-install-image-simulator.sh"
 sh "$OS_DIR/tests/test-protected-install-request.sh"

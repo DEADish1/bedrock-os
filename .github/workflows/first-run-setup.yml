@@ -1,0 +1,24 @@
+name: First-run setup
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/first-run-setup.yml"
+      - "os/config/includes.chroot/usr/lib/bedrock/validate-first-run-config"
+      - "os/config/includes.chroot/usr/lib/systemd/system/bedrock-first-run.service"
+      - "os/config/includes.chroot/usr/sbin/bedrock-first-run"
+      - "os/config/includes.chroot/usr/sbin/bedrock-apply-first-run"
+      - "os/config/package-lists/bedrock.list.chroot"
+      - "os/tests/test-first-run-config.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  configuration-contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate first-run configuration
+        run: sh os/tests/test-first-run-config.sh

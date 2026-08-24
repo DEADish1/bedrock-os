@@ -59,10 +59,15 @@ This file records completed work, decisions, validation, and the next starting p
 - Added a periodic, read-only storage health foundation covering non-waking SMART status and temperatures, Linux MD health and recovery progress, imported ZFS pool status when tooling is available, and hardware RAID controller discovery. Hardware member/cache/battery health is reported as limited until a supported vendor adapter exists, and fixture tests cover healthy and degraded arrays, a failing disk, ZFS degradation, and symbolic-link output rejection.
 - Added atomic storage alert and audit state for SMART failure, high temperature, degraded MD/ZFS storage, and limited hardware RAID visibility. Repeated scans are deduplicated, first-seen time is retained, severity changes and resolutions are recorded, history is bounded to 1,000 events, and invalid or indirect state is rejected.
 - Added fail-closed, review-only creation plans for ZFS mirror/RAID-Z1/RAID-Z2 and Linux MD RAID 1/5/6/10. Planning enforces unique eligible disks, exact destructive confirmation, minimum disk counts, matching sector sizes, bounded numeric capacity, usable-capacity and resilience explanations, hardware/software RAID stacking rules, and advanced limited-visibility acknowledgement without emitting a command or authorization token.
+- Added the complete guided local-console first-run flow for hostname, administrator, DHCP or static IPv4 networking, time zone, automatic clock synchronization, and the signed-update check preference. Configuration is strictly validated, plaintext passwords are never written, applied state is secret-free, and a failed network activation rolls back the newly created user and all changed settings.
+- Enabled first-run setup automatically on the first local boot, added the required dialog package, and added focused tests for accepted DHCP/static configurations, unsafe input rejection, one-time completion, permissions, secret redaction, and transactional rollback.
+- Marked the v0.3 first-run wizard and automated interrupted-write/bad-media/recovery test requirements complete. v0.3 still requires packaged installer acceptance, physical USB/DVD evidence, real on-server installation, and a terminal-free clean-install acceptance run.
 
 ### Next starting point
 
 - Boot-test the v0.2 image on physical Intel and AMD systems and the remaining common VM platforms.
+- Build the updated image and perform the local-console first-run acceptance run, including one forced network failure followed by a successful retry.
+- Run the guarded writer on an explicitly approved disposable USB drive, boot it, and archive privacy-safe evidence; then repeat the protected on-server install on an approved disposable system disk.
 - Connect review-only storage planning to a fresh read-only eligibility inventory, then add an independently revalidated privileged preflight that remains disabled before any mutating RAID control.
 - Add update download/resume transport, release-channel policy, and certificate-rotation handling.
 

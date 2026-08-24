@@ -1,0 +1,144 @@
+#!/bin/sh
+set -eu
+
+LC_ALL=C
+export LC_ALL
+[ "$#" -eq 1 ] || { printf 'usage: %s CONFIG.json\n' "$0" >&2; exit 2; }
+source_config=$1
+if [ "${BEDROCK_FIRST_RUN_TEST_MODE:-0}" = 1 ]; then
+  test_root=${BEDROCK_FIRST_RUN_TEST_ROOT:?test mode requires BEDROCK_FIRST_RUN_TEST_ROOT}
+  sys_root=${BEDROCK_FIRST_RUN_TEST_SYS_ROOT:?test mode requires BEDROCK_FIRST_RUN_TEST_SYS_ROOT}
+  timezone_root=${BEDROCK_FIRST_RUN_TIMEZONE_ROOT:?test mode requires BEDROCK_FIRST_RUN_TIMEZONE_ROOT}
+  PATH=${BEDROCK_FIRST_RUN_TEST_PATH:?test mode requires BEDROCK_FIRST_RUN_TEST_PATH}:/usr/bin:/bin
+  validator=${BEDROCK_FIRST_RUN_VALIDATOR:?test mode requires BEDROCK_FIRST_RUN_VALIDATOR}
+  update_settings=${BEDROCK_FIRST_RUN_UPDATE_SETTINGS:?test mode requires BEDROCK_FIRST_RUN_UPDATE_SETTINGS}
+  completed_unix=${BEDROCK_FIRST_RUN_TEST_NOW:-0}
+else
+  [ "$(id -u)" -eq 0 ] || { printf 'error: first-run setup requires root\n' >&2; exit 1; }
+  test_root=
+  sys_root=/sys
+  timezone_root=/usr/share/zoneinfo
+  PATH=/usr/sbin:/usr/bin:/sbin:/bin
+  validator=/usr/lib/bedrock/validate-first-run-config
+  update_settings=/usr/sbin/bedrock-update-settings
+  completed_unix=$(date +%s)
+fi
+export PATH
+for tool in chpasswd getent hostnamectl jq mktemp nmcli timedatectl useradd userdel; do
+  command -v "$tool" >/dev/null 2>&1 || { printf 'error: first-run setup requires %s\n' "$tool" >&2; exit 2; }
+done
+printf '%s' "$completed_unix" | grep -Eq '^[0-9]+$' || { printf 'error: completion timestamp is invalid\n' >&2; exit 1; }
+
+marker=$test_root/var/lib/bedrock/setup/complete.json
+network_file=$test_root/etc/NetworkManager/system-connections/bedrock-setup.nmconnection
+[ ! -e "$marker" ] && [ ! -L "$marker" ] || { printf 'error: first-run setup is already complete or its marker is unsafe\n' >&2; exit 1; }
+[ ! -e "$network_file" ] && [ ! -L "$network_file" ] || { printf 'error: the Bedrock first-run network profile already exists or is unsafe\n' >&2; exit 1; }
+
+umask 077
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+trap 'exit 130' INT TERM
+cp "$source_config" "$work/config.json"
+config=$work/config.json
+BEDROCK_FIRST_RUN_TEST_MODE=${BEDROCK_FIRST_RUN_TEST_MODE:-0} \
+BEDROCK_FIRST_RUN_TIMEZONE_ROOT="$timezone_root" BEDROCK_FIRST_RUN_TEST_NOW="$completed_unix" \
+  "$validator" "$config" > "$work/plan.json"
+
+username=$(jq -r .administrator.username "$config")
+display_name=$(jq -r .administrator.display_name "$config")
+password_hash=$(jq -r .administrator.password_hash "$config")
+hostname=$(jq -r .hostname "$config")
+interface=$(jq -r .network.interface "$config")
+mode=$(jq -r .network.mode "$config")
+timezone=$(jq -r .time.timezone "$config")
+ntp=$(jq -r .time.ntp "$config")
+automatic_checks=$(jq -r .updates.automatic_checks "$config")
+[ -e "$sys_root/class/net/$interface" ] || { printf 'error: selected network interface is no longer present\n' >&2; exit 1; }
+if getent passwd "$username" >/dev/null 2>&1; then
+  printf 'error: selected administrator account already exists\n' >&2
+  exit 1
+fi
+
+previous_hostname=$(hostnamectl --static)
+previous_timezone=$(timedatectl show --property=Timezone --value)
+previous_ntp=$(timedatectl show --property=NTP --value)
+previous_updates=$($update_settings show | jq -r .automatic_checks)
+case $previous_updates in true|false) ;; *) printf 'error: current update preference is invalid\n' >&2; exit 1 ;; esac
+
+committed=false
+user_created=false
+hostname_changed=false
+time_changed=false
+updates_changed=false
+network_written=false
+rollback() {
+  [ "$committed" = false ] || return 0
+  if [ "$updates_changed" = true ]; then
+    [ "$previous_updates" = true ] && update_choice=on || update_choice=off
+    "$update_settings" automatic-checks "$update_choice" >/dev/null 2>&1 || true
+  fi
+  if [ "$network_written" = true ]; then
+    nmcli connection down bedrock-setup >/dev/null 2>&1 || true
+    rm -f "$network_file"
+    nmcli connection reload >/dev/null 2>&1 || true
+  fi
+  if [ "$time_changed" = true ]; then
+    timedatectl set-timezone "$previous_timezone" >/dev/null 2>&1 || true
+    case $previous_ntp in yes|true) timedatectl set-ntp true >/dev/null 2>&1 || true ;; *) timedatectl set-ntp false >/dev/null 2>&1 || true ;; esac
+  fi
+  if [ "$hostname_changed" = true ]; then hostnamectl set-hostname "$previous_hostname" >/dev/null 2>&1 || true; fi
+  if [ "$user_created" = true ]; then userdel --remove "$username" >/dev/null 2>&1 || true; fi
+  rm -rf "$work"
+}
+trap rollback EXIT
+trap 'exit 130' INT TERM
+
+useradd --create-home --shell /bin/bash --comment "$display_name" --groups sudo "$username"
+user_created=true
+if ! printf '%s:%s\n' "$username" "$password_hash" | chpasswd --encrypted; then
+  printf 'error: administrator password could not be installed\n' >&2
+  exit 1
+fi
+password_hash=
+
+hostnamectl set-hostname "$hostname"
+hostname_changed=true
+timedatectl set-timezone "$timezone"
+timedatectl set-ntp "$ntp"
+time_changed=true
+
+mkdir -p "$(dirname -- "$network_file")"
+network_tmp=$(mktemp "$(dirname -- "$network_file")/.bedrock-network.XXXXXX")
+{
+  printf '%s\n' '[connection]' 'id=bedrock-setup' 'type=ethernet' "interface-name=$interface" 'autoconnect=true' '' '[ethernet]' '' '[ipv4]'
+  if [ "$mode" = dhcp ]; then
+    printf '%s\n' 'method=auto'
+  else
+    address_cidr=$(jq -r .network.address_cidr "$config")
+    gateway=$(jq -r .network.gateway "$config")
+    printf 'method=manual\naddress1=%s,%s\n' "$address_cidr" "$gateway"
+  fi
+  dns=$(jq -r '.network.dns | join(";")' "$config")
+  [ -z "$dns" ] || printf 'dns=%s;\n' "$dns"
+  printf '%s\n' '' '[ipv6]' 'method=auto'
+} > "$network_tmp"
+chmod 0600 "$network_tmp"
+mv "$network_tmp" "$network_file"
+network_written=true
+nmcli connection reload
+nmcli connection up bedrock-setup ifname "$interface"
+
+updates_changed=true
+[ "$automatic_checks" = true ] && update_choice=on || update_choice=off
+"$update_settings" automatic-checks "$update_choice" >/dev/null
+
+mkdir -p "$(dirname -- "$marker")"
+marker_tmp=$(mktemp "$(dirname -- "$marker")/.first-run-complete.XXXXXX")
+jq -S --argjson completed_unix "$completed_unix" \
+  '. + {completed_unix:$completed_unix,setup_complete:true}' "$work/plan.json" > "$marker_tmp"
+chmod 0600 "$marker_tmp"
+mv "$marker_tmp" "$marker"
+committed=true
+rm -rf "$work"
+trap - EXIT INT TERM
+cat "$marker"

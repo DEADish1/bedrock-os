@@ -1,6 +1,6 @@
 # Bedrock Server OS project roadmap
 
-Bedrock Server OS has completed **0.1.0 — Product definition** and is beginning the **0.2.0 bootable foundation**. Version 1.0 means a fully functional, tested, documented, signed, and supportable product that is ready to ship.
+Bedrock Server OS has completed **0.1.0 — Product definition**. The 0.2 bootable foundation and 0.3 installer are implemented through their safe automated gates, with named physical and cross-hypervisor acceptance work still required before either milestone can be declared complete. Version 1.0 means a fully functional, tested, documented, signed, and supportable product that is ready to ship.
 
 ## Release rules
 
@@ -43,9 +43,10 @@ Exit: a repeatable image boots, identifies hardware, persists configuration, upd
 - [x] Require destructive confirmation naming the exact target drive.
 - [ ] Write and verify USB media; provide ISO download and DVD guidance.
 - [ ] Implement on-server installation to a selected system drive.
-- [ ] Add first-run wizard for hostname, administrator, network, time, and updates.
-  - Update preference step implemented: users choose automatic signed-metadata checks or manual-only checks; the rest of the first-run wizard remains open.
-- [ ] Test interrupted writes, bad media, insufficient space, and recovery messages.
+- [x] Add first-run wizard for hostname, administrator, network, time, and updates.
+  - The local-console wizard validates every value, stores only a password hash, applies settings transactionally, rolls back failed network activation, and records a secret-free completion marker. Real-image console acceptance remains part of the 0.3 exit test.
+- [x] Test interrupted writes, bad media, insufficient space, and recovery messages.
+  - Automated virtual-device and interface tests cover interruption, insufficient capacity, checksum mismatch, unavailable media, approval failure, malformed progress, safe retry, and final trust state. Physical-media acceptance remains open under the write-and-verify item above.
 
 Exit: a new user can create media and install Bedrock without using a terminal.
 

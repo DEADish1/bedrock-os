@@ -3,6 +3,7 @@ ca-certificates
 cryptsetup-bin
 cryptsetup-initramfs
 curl
+dialog
 dmidecode
 dracut-core
 e2fsprogs

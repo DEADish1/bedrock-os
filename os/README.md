@@ -9,7 +9,7 @@ This directory is the reproducible-image source for Bedrock Server OS. It uses D
 - `bedrock-build-manifest.json`
 - `build.log`
 
-The first image is a development/live foundation, not yet an installable 1.0 system. The two-slot immutable system layout and dm-verity integration are subsequent 0.2 work.
+The image remains a development build rather than an installable 1.0 release. It includes the two-slot immutable dm-verity system layout and the guarded 0.3 installer foundation, but physical-media and real-system installation acceptance are still required.
 
 ## Build on Debian 13
 
@@ -55,6 +55,9 @@ CI runs two clean ISO replicas and `scripts/compare-reproducible-builds.sh` requ
 - `config/includes.chroot/usr/sbin/bedrock-update`: writes a verified bundle only to the inactive root/verity/signature slots, verifies each device write, and arms its UKI for three health-gated attempts.
 - `config/includes.chroot/usr/lib/bedrock/check-for-updates`: honors the persistent automatic-check preference, downloads only bounded HTTPS metadata, verifies its CMS signature and schema, and records availability without installing anything.
 - `config/includes.chroot/usr/sbin/bedrock-update-settings`: shows or changes automatic checks and provides the manual `check-now` path; `bedrock-setup-updates` exposes the same choice to first-run setup.
+- `config/includes.chroot/usr/sbin/bedrock-first-run`: guided local-console setup for the server name, administrator, network, clock, and signed-update check preference.
+- `config/includes.chroot/usr/sbin/bedrock-apply-first-run`: transactionally applies a strictly validated first-run configuration and rolls back incomplete setup.
+- `tests/test-first-run-config.sh`: validates safe DHCP/static plans, rejects unsafe values and password handling, and proves successful application plus network-failure rollback.
 - `config/includes.chroot/usr/lib/bedrock/collect-storage-health`: performs read-only SMART, Linux MD, ZFS, and hardware RAID discovery without waking standby disks; unsupported hardware-controller details are explicitly reported as limited.
 - `config/includes.chroot/usr/lib/bedrock/process-storage-alerts`: converts storage-health changes into a bounded, deduplicated active-alert and audit history without repeating unchanged events.
 - `config/includes.chroot/usr/lib/bedrock/create-storage-plan`: validates destructive ZFS mirror/RAID-Z and Linux RAID 1/5/6/10 proposals, explains capacity and resilience, and emits a review-only result containing no execution material.
