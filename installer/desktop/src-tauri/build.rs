@@ -13,7 +13,7 @@ fn main() {
         if std::env::var_os("BEDROCK_REQUIRE_PRODUCTION_TRUST").is_none() {
             panic!("physical writer builds require BEDROCK_REQUIRE_PRODUCTION_TRUST");
         }
-        if target_os != "linux" {
+        if target_os != "linux" && target_os != "windows" {
             panic!("the gated physical writer is not connected on this target OS");
         }
         println!("cargo:rustc-cfg=bedrock_physical_writer");

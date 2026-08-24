@@ -16,7 +16,7 @@ use uuid::Uuid;
 mod media_writer;
 mod device_finalizer;
 mod write_pipeline;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "windows"))]
 mod physical_device;
 
 const RELEASE_TRUST_CERT_PEM: &[u8] =
@@ -123,7 +123,10 @@ enum ProtectedWriterResult {
 }
 
 fn physical_writer_enabled() -> bool {
-    cfg!(all(target_os = "linux", bedrock_physical_writer))
+    cfg!(all(
+        any(target_os = "linux", target_os = "windows"),
+        bedrock_physical_writer
+    ))
 }
 
 #[tauri::command]
@@ -545,7 +548,9 @@ fn whole_device_open_path(target: &InstallTarget) -> Result<PathBuf, String> {
 }
 
 #[cfg(target_os = "linux")]
-fn open_exclusive_whole_device(target: &InstallTarget) -> Result<File, String> {
+fn open_exclusive_whole_device(
+    target: &InstallTarget,
+) -> Result<crate::physical_device::PlatformPhysicalDevice, String> {
     use std::os::fd::AsRawFd;
     use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
 
@@ -584,7 +589,7 @@ fn open_exclusive_whole_device(target: &InstallTarget) -> Result<File, String> {
     {
         return Err("The opened Linux disk capacity no longer matches the confirmed drive.".into());
     }
-    Ok(device)
+    Ok(crate::physical_device::PlatformPhysicalDevice::from_exclusive_file(device))
 }
 
 #[cfg(target_os = "macos")]
@@ -607,7 +612,9 @@ fn open_exclusive_whole_device(target: &InstallTarget) -> Result<(), String> {
 }
 
 #[cfg(target_os = "windows")]
-fn open_exclusive_whole_device(target: &InstallTarget) -> Result<(), String> {
+fn open_exclusive_whole_device(
+    target: &InstallTarget,
+) -> Result<crate::physical_device::PlatformPhysicalDevice, String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::{
         CloseHandle, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE,
@@ -654,15 +661,17 @@ fn open_exclusive_whole_device(target: &InstallTarget) -> Result<(), String> {
             std::ptr::null_mut(),
         )
     };
-    unsafe { CloseHandle(handle) };
     if inspected == 0
         || returned != std::mem::size_of::<GET_LENGTH_INFORMATION>() as u32
         || length.Length < 0
         || length.Length as u64 != target.size_bytes
     {
+        unsafe { CloseHandle(handle) };
         return Err("The opened Windows disk capacity no longer matches the confirmed drive.".into());
     }
-    Ok(())
+    Ok(unsafe {
+        crate::physical_device::PlatformPhysicalDevice::from_exclusive_handle(handle)
+    })
 }
 
 #[cfg(unix)]
@@ -899,20 +908,21 @@ fn protected_writer_open_gate<R: Read>(input: R, executable: &Path, now: u64) ->
     Ok(())
 }
 
-#[cfg(all(target_os = "linux", bedrock_physical_writer))]
+#[cfg(all(
+    any(target_os = "linux", target_os = "windows"),
+    bedrock_physical_writer
+))]
 fn protected_writer_operation<R: Read>(
     input: R,
     executable: &Path,
     now: u64,
 ) -> Result<ProtectedWriterResult, String> {
-    use crate::physical_device::LinuxPhysicalDevice;
     use crate::write_pipeline::write_verify_and_finalize;
 
     let prepared = protected_writer_preflight(input, executable, now)?;
     let mut source = File::open(&prepared.image_path)
         .map_err(|_| "The verified image could not be reopened for writing.".to_string())?;
-    let exclusive = open_exclusive_whole_device(&prepared.target)?;
-    let mut device = LinuxPhysicalDevice::from_exclusive_file(exclusive);
+    let mut device = open_exclusive_whole_device(&prepared.target)?;
     write_verify_and_finalize(
         &prepared.image_type,
         &mut source,
@@ -924,7 +934,10 @@ fn protected_writer_operation<R: Read>(
     Ok(ProtectedWriterResult::WriteComplete)
 }
 
-#[cfg(not(all(target_os = "linux", bedrock_physical_writer)))]
+#[cfg(not(all(
+    any(target_os = "linux", target_os = "windows"),
+    bedrock_physical_writer
+)))]
 fn protected_writer_operation<R: Read>(
     input: R,
     executable: &Path,
