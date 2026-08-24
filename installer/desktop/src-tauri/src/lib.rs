@@ -12,6 +12,7 @@ use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
 mod media_writer;
+mod device_finalizer;
 
 const RELEASE_TRUST_CERT_PEM: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/bedrock-release-trust.pem"));

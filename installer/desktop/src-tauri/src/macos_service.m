@@ -46,6 +46,25 @@ int32_t bedrock_macos_probe_exclusive_disk(const char *path, uint64_t expected_s
     return valid ? 0 : BRWriterRejected;
 }
 
+int32_t bedrock_macos_synchronize_disk(int32_t descriptor)
+{
+    if (descriptor < 0
+        || fsync(descriptor) != 0
+        || fcntl(descriptor, F_FULLFSYNC) != 0
+        || ioctl(descriptor, DKIOCSYNCHRONIZECACHE) != 0) {
+        return BRWriterRejected;
+    }
+    return 0;
+}
+
+int32_t bedrock_macos_eject_disk(int32_t descriptor)
+{
+    if (descriptor < 0 || ioctl(descriptor, DKIOCEJECT) != 0) {
+        return BRWriterRejected;
+    }
+    return 0;
+}
+
 @protocol BRWriterProtocol
 - (void)preflightRequest:(NSData *)request withReply:(void (^)(NSInteger result))reply;
 @end
