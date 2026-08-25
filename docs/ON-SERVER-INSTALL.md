@@ -58,3 +58,13 @@ When an enabled acceptance image boots, `bedrock-install.service` opens the guid
 The installer displays only eligible unused internal drives and includes model, kernel path, and capacity. It requires the complete typed phrase `INSTALL BEDROCK — <model> — <path> — <bytes>`, shows a second destructive review, creates a two-minute protected request, and then invokes the integrity-checked writer. It reports success only when raw write, full reread, GPT finalization, and persistent-state checks all return true. Failure tells the user not to boot the target and to perform a complete rewrite. After verified success, the user can reboot, power off, or return to the live console without entering a terminal command.
 
 Fixture tests exercise a successful guided request, incorrect confirmation, no eligible target, completion evidence, and the mutually exclusive live-versus-installed console conditions without opening a device.
+
+## Physical acceptance evidence
+
+Physical acceptance must use an explicitly approved disposable internal drive containing no needed data. Copy `os/tests/install-acceptance-report.example.json`, change `mode` to `physical`, enter only the disk model, whole-device path, capacity, image SHA-256, and observed boolean results, then validate it with:
+
+```sh
+sh os/tests/validate-install-acceptance-report.sh path/to/report.json
+```
+
+The report passes only when the acceptance writer was enabled; inventory and exact confirmation were fresh; the terminal-free installer completed; raw write, reread, GPT, and persistent-state checks passed; the installed target booted healthy; hardware inventory and first-run setup completed; and state survived a reboot. Fixture reports are rejected in normal validation. Do not record a serial number, username, hostname, IP address, or other personal data.
