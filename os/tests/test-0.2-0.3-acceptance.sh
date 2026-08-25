@@ -19,11 +19,13 @@ jq '.mode = "physical" | .platform = "physical" | .platform_generation = null | 
 jq '.mode = "physical" | .platform = "physical" | .platform_generation = null | .cpu_vendor = "amd"' \
   "$boot_fixture" > "$work/amd.json"
 jq -n --arg sha "$sha" '{
-  schema:1,mode:"physical",platform:"linux",completed_at:"2026-08-25T00:00:00Z",
+  schema:2,mode:"physical",platform:"linux",completed_at:"2026-08-25T00:00:00Z",
+  boot_completed_at:"2026-08-25T01:00:00Z",
   image_sha256:$sha,
   target:{id:"linux:acceptance-usb",path:"/dev/sdz",model:"Disposable USB",size_bytes:8589934592,disposable:true},
   checks:{fresh_inventory:true,exact_confirmation:true,write_completed:true,
-    reread_checksum:true,cache_synchronized:true,manual_removal_safe:true}
+    reread_checksum:true,cache_synchronized:true,manual_removal_safe:true,
+    booted_from_media:true,guided_installer_opened:true}
 }' > "$work/usb.json"
 jq '.mode = "physical" | .target.path = "/dev/nvme0n1"' \
   "$install_fixture" > "$work/install.json"
@@ -69,6 +71,9 @@ jq '.notes = "unreviewed extra data"' "$work/usb.json" > "$work/unknown.json"
 must_reject_usb 'unknown fields' "$work/unknown.json"
 jq '.target.serial_number = "private"' "$work/usb.json" > "$work/private.json"
 must_reject_usb 'private target data' "$work/private.json"
+jq '.boot_completed_at = null | .checks.booted_from_media = false |
+    .checks.guided_installer_opened = false' "$work/usb.json" > "$work/unbooted.json"
+must_reject_usb 'unbooted media' "$work/unbooted.json"
 ln -s "$work/usb.json" "$work/usb-link.json"
 must_reject_usb 'an indirect report' "$work/usb-link.json"
 

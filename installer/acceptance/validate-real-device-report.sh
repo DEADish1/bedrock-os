@@ -15,8 +15,8 @@ command -v jq >/dev/null 2>&1 || { printf 'error: jq is required\n' >&2; exit 2;
 required_mode=physical
 [ "${BEDROCK_ALLOW_FIXTURE_ACCEPTANCE_REPORT:-0}" = 1 ] && required_mode=fixture
 jq -e --arg mode "$required_mode" '
-  (keys | sort) == (["checks","completed_at","image_sha256","mode","platform","schema","target"] | sort) and
-  .schema == 1 and .mode == $mode and
+  (keys | sort) == (["boot_completed_at","checks","completed_at","image_sha256","mode","platform","schema","target"] | sort) and
+  .schema == 2 and .mode == $mode and
   (.platform == "linux" or .platform == "macos" or .platform == "windows") and
   (.completed_at | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
   (.image_sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
@@ -32,9 +32,19 @@ jq -e --arg mode "$required_mode" '
       (.target.path | ltrimstr("\\\\.\\PhysicalDrive") | test("^[0-9]+$")))) and
   .target.disposable == true and
   (.checks | keys | sort) == ([
-    "cache_synchronized","exact_confirmation","fresh_inventory",
-    "manual_removal_safe","reread_checksum","write_completed"
-  ] | sort) and all(.checks[]; . == true)
+    "booted_from_media","cache_synchronized","exact_confirmation","fresh_inventory",
+    "guided_installer_opened","manual_removal_safe","reread_checksum","write_completed"
+  ] | sort) and
+  .checks.fresh_inventory == true and .checks.exact_confirmation == true and
+  .checks.write_completed == true and .checks.reread_checksum == true and
+  .checks.cache_synchronized == true and .checks.manual_removal_safe == true and
+  (if $mode == "physical" then
+    (.boot_completed_at | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and
+    .checks.booted_from_media == true and .checks.guided_installer_opened == true
+   else
+    .boot_completed_at == null and
+    .checks.booted_from_media == false and .checks.guided_installer_opened == false
+   end)
 ' "$report" >/dev/null || {
   printf 'error: removable-media acceptance report is incomplete, unsafe, or not the required mode\n' >&2
   exit 1

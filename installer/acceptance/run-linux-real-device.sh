@@ -90,10 +90,12 @@ jq -n \
   --arg model "$model" \
   --argjson size_bytes "$size" \
   '{
-    schema:1, mode:$mode, platform:"linux", completed_at:$completed_at,
+    schema:2, mode:$mode, platform:"linux", completed_at:$completed_at,
+    boot_completed_at:null,
     image_sha256:$image_sha256,
     target:{id:$target_id,path:$path,model:$model,size_bytes:$size_bytes,disposable:true},
     checks:{fresh_inventory:true,exact_confirmation:true,write_completed:true,
-      reread_checksum:true,cache_synchronized:true,manual_removal_safe:true}
+      reread_checksum:true,cache_synchronized:true,manual_removal_safe:true,
+      booted_from_media:false,guided_installer_opened:false}
   }' > "$report"
-printf 'Bedrock disposable-drive acceptance report written: %s\n' "$report"
+printf 'Bedrock disposable-drive write report created; physical boot observations are still required: %s\n' "$report"
