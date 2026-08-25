@@ -53,8 +53,11 @@ PY
 workflow="$ROOT/.github/workflows/installer-desktop.yml"
 grep -q 'npm ci --prefix installer/desktop --ignore-scripts' "$workflow"
 grep -q 'Linux) bundle=deb' "$workflow"
-grep -q 'Windows) bundle=nsis' "$workflow"
 grep -q 'macOS) bundle=dmg' "$workflow"
+grep -q 'Build unsigned Windows preview package' "$workflow"
+grep -q 'shell: pwsh' "$workflow"
+grep -q -- '--bundles nsis' "$workflow"
+grep -q "Windows packaging selected Git's incomplete Perl" "$workflow"
 grep -q 'actions/upload-artifact@v4' "$workflow"
 grep -q 'PREVIEW-NOTICE.txt' "$workflow"
 
