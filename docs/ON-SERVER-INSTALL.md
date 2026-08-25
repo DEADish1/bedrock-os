@@ -68,3 +68,5 @@ sh os/tests/validate-install-acceptance-report.sh path/to/report.json
 ```
 
 The report passes only when the acceptance writer was enabled; inventory and exact confirmation were fresh; the terminal-free installer completed; raw write, reread, GPT, and persistent-state checks passed; the installed target booted healthy; hardware inventory and first-run setup completed; and state survived a reboot. Fixture reports are rejected in normal validation. Do not record a serial number, username, hostname, IP address, or other personal data.
+
+Use `docs/ACCEPTANCE-0.2-0.3.md` for the final combined check. It requires this report, the disposable-removable-media report, and all four outstanding boot-platform reports to name the exact same image SHA-256.

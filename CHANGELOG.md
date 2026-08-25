@@ -69,6 +69,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Passed native preview packaging for Windows, Linux, and macOS together in Installer desktop run `32795296293`; corrected Windows release packaging to use the runner's native Perl instead of Git Bash's incomplete Perl, and strengthened the packaging contract to prevent regression.
 - Marked the v0.3 cross-platform installer-build requirement complete. v0.3 now has six of eight requirements complete; approved physical USB/DVD evidence and a real disposable-system-disk installation/boot remain open.
 - Strengthened the final v0.2 boot evidence contract with strict schema-2 physical-versus-fixture modes, exact VMware/Hyper-V Generation 2/physical platform rules, verified same-image SHA-256, UEFI and Secure Boot state, complete inventory and persistent-reboot checks, and rejection of private or unknown fields.
+- Hardened removable-media evidence to reject indirect or oversized reports, unknown/private fields, malformed timestamps, oversized values, and Linux partition paths presented as whole disks. Added one final 0.2/0.3 acceptance command that requires six distinct physical reports for VMware, Hyper-V Generation 2, physical Intel, physical AMD, disposable USB, and installed-system acceptance, all bound to one exact image SHA-256.
 
 ### Next starting point
 

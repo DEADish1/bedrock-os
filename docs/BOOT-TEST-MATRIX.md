@@ -28,3 +28,5 @@ The validator rejects fixture-mode reports during normal acceptance. Do not add 
 ## Completion rule
 
 The roadmap checkbox may be marked complete only after schema-2 physical-mode passing reports exist for VMware, Hyper-V Generation 2, one physical Intel system, and one physical AMD system, all naming the same verified image SHA-256, in addition to the automated QEMU result.
+
+Before closing 0.2 or 0.3, combine these reports with the removable-media and installed-system reports using `docs/ACCEPTANCE-0.2-0.3.md`. The bundle validator enforces the four distinct boot roles and one exact image hash across every report.

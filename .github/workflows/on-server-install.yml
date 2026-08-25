@@ -13,6 +13,9 @@ on:
       - "os/tests/test-guided-install.sh"
       - "os/tests/test-install-acceptance-report.sh"
       - "os/tests/validate-install-acceptance-report.sh"
+      - "os/tests/test-0.2-0.3-acceptance.sh"
+      - "os/tests/validate-0.2-0.3-acceptance.sh"
+      - "installer/acceptance/validate-real-device-report.sh"
       - "os/tests/test-protected-system-writer.sh"
       - "os/tests/test-protected-loop-install.sh"
       - "os/tests/test-protected-installer-package.sh"
@@ -35,6 +38,7 @@ jobs:
           sh os/tests/test-install-plan.sh
           sh os/tests/test-guided-install.sh
           sh os/tests/test-install-acceptance-report.sh
+          sh os/tests/test-0.2-0.3-acceptance.sh
           sh os/tests/test-install-image-simulator.sh
           sh os/tests/test-protected-install-request.sh
           sh os/tests/test-protected-system-writer.sh

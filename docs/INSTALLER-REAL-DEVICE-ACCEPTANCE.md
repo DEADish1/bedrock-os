@@ -16,4 +16,6 @@ sh installer/acceptance/validate-real-device-report.sh path/to/report.json
 
 Fixture reports require an explicit validator test switch and are rejected by the normal physical-report validator.
 
+The report validator also rejects indirect or oversized files, unknown fields, private identifiers, noncanonical timestamps, and partition paths presented as Linux whole disks. Use `docs/ACCEPTANCE-0.2-0.3.md` to bind the passing report to the same image used for the final boot and installed-system evidence.
+
 Windows and macOS now have matching native preflight gates. Each uses its packaged scanner, accepts only one safe removable whole-device identity, requires the same destructive and large-drive attestations, rechecks the exact path/capacity/erase phrase, and emits a plan with `ready_for_writer: false`. Their fixture tests run on matching Windows and macOS GitHub hosts. These gates deliberately do not write; the production desktop helper connection and genuine disposable-drive reports on all supported platforms remain required before v0.3 media writing can be marked complete.
