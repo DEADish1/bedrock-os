@@ -4,6 +4,7 @@ After=NetworkManager.service systemd-user-sessions.service
 Wants=NetworkManager.service
 Conflicts=getty@tty1.service
 ConditionPathExists=!/var/lib/bedrock/setup/complete.json
+ConditionPathExists=!/run/live/medium/bedrock/bedrock-os-amd64.raw
 
 [Service]
 Type=simple

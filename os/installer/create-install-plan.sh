@@ -54,6 +54,6 @@ jq -n -c \
     requires_fresh_inventory: true,
     requires_exclusive_whole_disk: true,
     ready_for_writer: false,
-    blocked_reason: "The privileged on-server writer is not connected. This is a review-only plan."
+    blocked_reason: "The protected writer must independently refresh inventory and revalidate this review-only plan before opening a disk."
   }
 '

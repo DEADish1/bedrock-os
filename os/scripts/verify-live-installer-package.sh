@@ -21,7 +21,10 @@ xorriso -osirrox on -indev "$iso" \
   -extract /live/filesystem.squashfs "$squashfs" >/dev/null 2>&1
 [ -s "$squashfs" ] || { printf 'error: live filesystem is missing from ISO\n' >&2; exit 1; }
 unsquashfs -quiet -d "$rootfs" "$squashfs" \
-  usr/lib/bedrock usr/sbin/bedrock-install-system usr/share/bedrock/installer >/dev/null
+  etc/systemd/system/multi-user.target.wants/bedrock-install.service \
+  usr/lib/bedrock usr/lib/systemd/system/bedrock-install.service \
+  usr/sbin/bedrock-install usr/sbin/bedrock-install-system \
+  usr/share/bedrock/installer >/dev/null
 
 manifest=usr/share/bedrock/installer/package-manifest.sha256
 metadata=usr/share/bedrock/installer/package.json
@@ -44,8 +47,15 @@ jq -e --argjson expected "$expected" '
   exit 1
 }
 [ -x "$rootfs/usr/lib/bedrock/bedrock-system-writer" ] && \
-  [ -x "$rootfs/usr/sbin/bedrock-install-system" ] || {
+  [ -x "$rootfs/usr/sbin/bedrock-install-system" ] && \
+  [ -x "$rootfs/usr/sbin/bedrock-install" ] || {
   printf 'error: protected installer executables are unavailable inside ISO\n' >&2
+  exit 1
+}
+[ -L "$rootfs/etc/systemd/system/multi-user.target.wants/bedrock-install.service" ] &&
+  [ "$(readlink "$rootfs/etc/systemd/system/multi-user.target.wants/bedrock-install.service")" = \
+    '../../../../usr/lib/systemd/system/bedrock-install.service' ] || {
+  printf 'error: guided installer service is not enabled correctly inside ISO\n' >&2
   exit 1
 }
 

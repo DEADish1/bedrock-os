@@ -62,6 +62,8 @@ This file records completed work, decisions, validation, and the next starting p
 - Added the complete guided local-console first-run flow for hostname, administrator, DHCP or static IPv4 networking, time zone, automatic clock synchronization, and the signed-update check preference. Configuration is strictly validated, plaintext passwords are never written, applied state is secret-free, and a failed network activation rolls back the newly created user and all changed settings.
 - Enabled first-run setup automatically on the first local boot, added the required dialog package, and added focused tests for accepted DHCP/static configurations, unsafe input rejection, one-time completion, permissions, secret redaction, and transactional rollback.
 - Marked the v0.3 first-run wizard and automated interrupted-write/bad-media/recovery test requirements complete. v0.3 still requires packaged installer acceptance, physical USB/DVD evidence, real on-server installation, and a terminal-free clean-install acceptance run.
+- Added a terminal-free guided on-server installer that automatically opens on tty1 only when booted from packaged live media, filters to eligible internal targets, requires the exact model/path/capacity erase phrase, performs a second destructive review, and consumes the existing short-lived protected request and writer chain.
+- Prevented the installed-system first-run wizard from opening on live installation media, added verified completion/recovery screens and reboot/power-off choices, and added non-destructive guided-flow tests for success, wrong confirmation, no eligible disk, and live-versus-installed console isolation.
 
 ### Next starting point
 

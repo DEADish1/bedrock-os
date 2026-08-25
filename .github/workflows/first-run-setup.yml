@@ -6,6 +6,7 @@ on:
       - ".github/workflows/first-run-setup.yml"
       - "os/config/includes.chroot/usr/lib/bedrock/validate-first-run-config"
       - "os/config/includes.chroot/usr/lib/systemd/system/bedrock-first-run.service"
+      - "os/installer/bedrock-install.service"
       - "os/config/includes.chroot/usr/sbin/bedrock-first-run"
       - "os/config/includes.chroot/usr/sbin/bedrock-apply-first-run"
       - "os/config/package-lists/bedrock.list.chroot"

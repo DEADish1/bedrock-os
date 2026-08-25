@@ -21,7 +21,7 @@ The eventual privileged installer must obtain fresh inventory, match the same ID
 
 The protected writer must create GPT and the canonical EFI, A/B verified-root, verity, signature, and growing state partitions; install signed boot artifacts; flush; reread and verify every fixed component; validate the final GPT; and report success only after synchronization. Interruption or any mismatch leaves the installation incomplete and requires restarting from the beginning.
 
-This checkpoint implements only selection validation and a reviewable plan. It does not open or modify a disk, and it does not complete the v0.3 on-server installation checklist item.
+The guided local-console installer uses this selection contract before creating a protected request. Development images remain non-writing. An explicitly enabled acceptance image can continue through the protected writer only after the final review.
 
 ## Disposable write simulation
 
@@ -41,12 +41,20 @@ CI uses a reduced-size layout with the same eight roles and standard partition t
 
 `write-protected-install.sh` does not accept test substitutions. It reruns the independent protected preflight immediately before handing the fixed live-media artifact and freshly confirmed target to the root-owned writer. The raw writer returns the kernel major/minor identity obtained from its exclusively opened handle. `finalize-protected-layout.sh` binds subsequent work to private root-only device nodes created from that identity instead of trusting a reusable `/dev` name. It relocates the backup GPT, recreates partition 8 with its original GUID and canonical type/name, asks the kernel to reread the table, discovers the exact child through sysfs, checks and grows ext4, synchronizes it, and verifies all eight GPT roles.
 
-The existing disposable-file simulator executes the equivalent complete transformation and failure cases. A separate gated CI acceptance test runs the protected writer and finalizer only on a loop device whose sysfs backing file must exactly equal a newly created disposable sparse image. It verifies the completed GPT, state growth, and fixed system content after detaching the loop. Automation never selects or opens a physical disk. A genuine disposable-system-disk installation and boot report is still required, so this checkpoint does not complete the v0.3 on-server installation checklist item.
+The existing disposable-file simulator executes the equivalent complete transformation and failure cases. A separate gated CI acceptance test runs the protected writer and finalizer only on a loop device whose sysfs backing file must exactly equal a newly created disposable sparse image. It verifies the completed GPT, state growth, and fixed system content after detaching the loop. Automation never selects or opens a physical disk. A genuine disposable-system-disk installation and boot report is still required before the v0.3 on-server installation checklist item can close.
 
 ## Live-image package
 
-`stage-protected-installer.sh` creates the live overlay package with the fixed Linux scanner, canonical layout, planning/request/preflight/finalization scripts, `/usr/sbin/bedrock-install-system`, and the compiled helper. It records exact SHA-256 values for every installed component plus build metadata that states whether the destructive writer was production-enabled. `build-image.sh` stages this overlay only while `live-build` consumes it and then verifies and removes the generated files, preventing build artifacts from dirtying the source tree.
+`stage-protected-installer.sh` creates the live overlay package with the fixed Linux scanner, canonical layout, planning/request/preflight/finalization scripts, the guided `/usr/sbin/bedrock-install` interface, `/usr/sbin/bedrock-install-system`, its first-live-boot service, and the compiled helper. It records exact SHA-256 values for every installed component plus build metadata that states whether the destructive writer was production-enabled. `build-image.sh` stages this overlay only while `live-build` consumes it and then verifies and removes the generated files, preventing build artifacts from dirtying the source tree.
 
 The installed launcher uses only `/usr/lib/bedrock/installer`, `/usr/share/bedrock/installer`, `/usr/lib/bedrock/bedrock-system-writer`, and the fixed live-media package. Before preflight it checks root ownership, package hashes, and `writer_enabled: true`. Development images package a fail-closed helper and metadata value of `false`; production writer builds require both the exact data-loss build token and production-trust gate.
 
 The image workflow exposes a manual `protected_writer_acceptance` option. When selected, both reproducibility replicas compile the gated helper, the completed ISO is opened read-only, its live filesystem is extracted to temporary storage, and every protected-installer component is checked against the embedded manifest. The build manifest records `protected_system_writer_enabled: true`. These artifacts still use explicitly ephemeral development signing and remain acceptance-only, not release-eligible.
+
+## Guided local-console flow
+
+When an enabled acceptance image boots, `bedrock-install.service` opens the guided installer on the local console. The installed-system first-run wizard explicitly excludes live media, so the two interfaces cannot compete for the same console.
+
+The installer displays only eligible unused internal drives and includes model, kernel path, and capacity. It requires the complete typed phrase `INSTALL BEDROCK — <model> — <path> — <bytes>`, shows a second destructive review, creates a two-minute protected request, and then invokes the integrity-checked writer. It reports success only when raw write, full reread, GPT finalization, and persistent-state checks all return true. Failure tells the user not to boot the target and to perform a complete rewrite. After verified success, the user can reboot, power off, or return to the live console without entering a terminal command.
+
+Fixture tests exercise a successful guided request, incorrect confirmation, no eligible target, completion evidence, and the mutually exclusive live-versus-installed console conditions without opening a device.

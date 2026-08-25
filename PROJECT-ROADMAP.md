@@ -43,6 +43,7 @@ Exit: a repeatable image boots, identifies hardware, persists configuration, upd
 - [x] Require destructive confirmation naming the exact target drive.
 - [ ] Write and verify USB media; provide ISO download and DVD guidance.
 - [ ] Implement on-server installation to a selected system drive.
+  - Protected write, reread, GPT finalization, state growth, and a terminal-free local-console workflow are implemented and pass disposable-image tests. The checkbox remains open until an approved disposable physical system disk installs and boots successfully.
 - [x] Add first-run wizard for hostname, administrator, network, time, and updates.
   - The local-console wizard validates every value, stores only a password hash, applies settings transactionally, rolls back failed network activation, and records a secret-free completion marker. Real-image console acceptance remains part of the 0.3 exit test.
 - [x] Test interrupted writes, bad media, insufficient space, and recovery messages.

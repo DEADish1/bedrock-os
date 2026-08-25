@@ -14,7 +14,9 @@ case $rootfs in /|/usr|/usr/local) printf 'error: refusing broad protected insta
 
 manifest=usr/share/bedrock/installer/package-manifest.sha256
 metadata=usr/share/bedrock/installer/package.json
+service_link=etc/systemd/system/multi-user.target.wants/bedrock-install.service
 packaged_files='
+etc/systemd/system/multi-user.target.wants/bedrock-install.service
 usr/lib/bedrock/bedrock-system-writer
 usr/lib/bedrock/installer/create-install-plan.sh
 usr/lib/bedrock/installer/create-protected-install-request.sh
@@ -23,6 +25,8 @@ usr/lib/bedrock/installer/linux-list-targets.sh
 usr/lib/bedrock/installer/preflight-protected-install.sh
 usr/lib/bedrock/installer/validate-install-target.sh
 usr/lib/bedrock/installer/verify-disk-image.sh
+usr/lib/systemd/system/bedrock-install.service
+usr/sbin/bedrock-install
 usr/sbin/bedrock-install-system
 usr/share/bedrock/installer/bedrock-amd64.json
 usr/share/bedrock/installer/package.json
@@ -36,6 +40,7 @@ remove_package() {
   rm -f "$rootfs/$manifest"
   rmdir "$rootfs/usr/lib/bedrock/installer" 2>/dev/null || true
   rmdir "$rootfs/usr/share/bedrock/installer" 2>/dev/null || true
+  rmdir "$rootfs/etc/systemd/system/multi-user.target.wants" 2>/dev/null || true
   rmdir "$rootfs/usr/sbin" 2>/dev/null || true
   rmdir "$rootfs/usr/lib/bedrock" 2>/dev/null || true
   rmdir "$rootfs/usr/share/bedrock" 2>/dev/null || true
@@ -60,7 +65,10 @@ done
 [ ! -e "$rootfs/$manifest" ] || { printf 'error: protected installer is already staged\n' >&2; exit 1; }
 printf '%s' "$packaged_files" | while IFS= read -r file; do
   [ -n "$file" ] || continue
-  [ ! -e "$rootfs/$file" ] || { printf 'error: refusing to overwrite staged path: %s\n' "$file" >&2; exit 1; }
+  [ ! -e "$rootfs/$file" ] && [ ! -L "$rootfs/$file" ] || {
+    printf 'error: refusing to overwrite staged path: %s\n' "$file" >&2
+    exit 1
+  }
 done
 
 work=$(mktemp -d)
@@ -72,7 +80,9 @@ cleanup() {
 trap cleanup EXIT INT TERM
 package_root="$work/root"
 mkdir -p \
+  "$package_root/etc/systemd/system/multi-user.target.wants" \
   "$package_root/usr/lib/bedrock/installer" \
+  "$package_root/usr/lib/systemd/system" \
   "$package_root/usr/sbin" \
   "$package_root/usr/share/bedrock/installer"
 
@@ -89,6 +99,12 @@ install -m 0755 "$ROOT/os/scripts/verify-disk-image.sh" \
   "$package_root/usr/lib/bedrock/installer/verify-disk-image.sh"
 install -m 0755 "$ROOT/os/installer/write-protected-install.sh" \
   "$package_root/usr/sbin/bedrock-install-system"
+install -m 0755 "$ROOT/os/installer/bedrock-install-guided.sh" \
+  "$package_root/usr/sbin/bedrock-install"
+install -m 0644 "$ROOT/os/installer/bedrock-install.service" \
+  "$package_root/usr/lib/systemd/system/bedrock-install.service"
+ln -s ../../../../usr/lib/systemd/system/bedrock-install.service \
+  "$package_root/$service_link"
 install -m 0644 "$ROOT/os/layout/bedrock-amd64.json" \
   "$package_root/usr/share/bedrock/installer/bedrock-amd64.json"
 
@@ -106,11 +122,17 @@ printf '%s' "$packaged_files" | while IFS= read -r file; do
 done > "$package_manifest"
 
 mkdir -p \
+  "$rootfs/etc/systemd/system/multi-user.target.wants" \
   "$rootfs/usr/lib/bedrock/installer" \
+  "$rootfs/usr/lib/systemd/system" \
   "$rootfs/usr/sbin" \
   "$rootfs/usr/share/bedrock/installer"
 printf '%s' "$packaged_files" | while IFS= read -r file; do
   [ -n "$file" ] || continue
+  if [ "$file" = "$service_link" ]; then
+    ln -s "$(readlink "$package_root/$file")" "$rootfs/$file"
+    continue
+  fi
   mode=0644
   case $file in *.sh|usr/sbin/*|usr/lib/bedrock/bedrock-system-writer) mode=0755 ;; esac
   install -m "$mode" "$package_root/$file" "$rootfs/$file"

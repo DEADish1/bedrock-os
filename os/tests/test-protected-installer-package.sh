@@ -27,8 +27,17 @@ manifest="$work/root/usr/share/bedrock/installer/package-manifest.sha256"
 jq -e '.schema == 1 and .writer_enabled == false and (.layout_sha256 | test("^[0-9a-f]{64}$"))' \
   "$work/root/usr/share/bedrock/installer/package.json" >/dev/null
 [ "$(stat -c %a "$work/root/usr/sbin/bedrock-install-system")" = 755 ]
+[ "$(stat -c %a "$work/root/usr/sbin/bedrock-install")" = 755 ]
+[ "$(stat -c %a "$work/root/usr/lib/systemd/system/bedrock-install.service")" = 644 ]
 [ "$(stat -c %a "$work/root/usr/lib/bedrock/bedrock-system-writer")" = 755 ]
 [ "$(stat -c %a "$manifest")" = 644 ]
+[ -L "$work/root/etc/systemd/system/multi-user.target.wants/bedrock-install.service" ]
+[ "$(readlink "$work/root/etc/systemd/system/multi-user.target.wants/bedrock-install.service")" = \
+  '../../../../usr/lib/systemd/system/bedrock-install.service' ]
+grep -q '^ExecStart=/usr/sbin/bedrock-install$' \
+  "$work/root/usr/lib/systemd/system/bedrock-install.service"
+grep -q '^ConditionPathExists=/run/live/medium/bedrock/bedrock-os-amd64.raw$' \
+  "$work/root/usr/lib/systemd/system/bedrock-install.service"
 grep -q '/usr/lib/bedrock/installer' "$work/root/usr/sbin/bedrock-install-system"
 grep -q 'package-manifest.sha256' "$work/root/usr/sbin/bedrock-install-system"
 grep -q 'writer_enabled == true' "$work/root/usr/sbin/bedrock-install-system"
@@ -40,7 +49,9 @@ if "$work/root/usr/lib/bedrock/bedrock-system-writer" >/dev/null 2>&1; then
 fi
 
 sh "$stager" remove "$work/root"
-[ ! -e "$manifest" ] && [ ! -e "$work/root/usr/sbin/bedrock-install-system" ] || {
+[ ! -e "$manifest" ] && [ ! -e "$work/root/usr/sbin/bedrock-install-system" ] &&
+  [ ! -e "$work/root/usr/sbin/bedrock-install" ] &&
+  [ ! -L "$work/root/etc/systemd/system/multi-user.target.wants/bedrock-install.service" ] || {
   printf 'error: protected installer staging cleanup was incomplete\n' >&2
   exit 1
 }
