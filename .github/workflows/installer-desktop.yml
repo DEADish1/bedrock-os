@@ -116,18 +116,29 @@ jobs:
           cache-dependency-path: installer/desktop/package-lock.json
       - name: Install pinned desktop packaging tool
         run: npm ci --prefix installer/desktop --ignore-scripts
-      - name: Build unsigned preview package
+      - name: Build unsigned Unix preview package
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           case "${{ runner.os }}" in
             Linux) bundle=deb ;;
-            Windows) bundle=nsis ;;
             macOS) bundle=dmg ;;
             *) printf 'error: unsupported packaging host\n' >&2; exit 1 ;;
           esac
           npm --prefix installer/desktop run tauri -- build \
             --config src-tauri/tauri.preview.conf.json \
             --bundles "$bundle"
+      - name: Build unsigned Windows preview package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $perl = (Get-Command perl.exe -CommandType Application).Source
+          if ($perl -like "*\\Git\\usr\\bin\\*") {
+            throw "Windows packaging selected Git's incomplete Perl: $perl"
+          }
+          npm --prefix installer/desktop run tauri -- build `
+            --config src-tauri/tauri.preview.conf.json `
+            --bundles nsis
       - name: Upload unsigned preview package
         uses: actions/upload-artifact@v4
         with:
