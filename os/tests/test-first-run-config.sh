@@ -81,13 +81,20 @@ run_applier() {
   BEDROCK_FIRST_RUN_TEST_LOG="$work/commands.log" BEDROCK_FIRST_RUN_TEST_NOW=1787616000 \
     "$applier" "$2"
 }
+file_mode() {
+  if stat -c %a "$1" >/dev/null 2>&1; then
+    stat -c %a "$1"
+  else
+    stat -f %Lp "$1"
+  fi
+}
 run_applier "$work/root" "$work/static.json" > "$work/applied.json"
 jq -e '
   .setup_complete == true and .secrets_included == false and .administrator.username == "admin" and
   .network.mode == "static" and .updates.automatic_checks == true
 ' "$work/applied.json" >/dev/null
-[ "$(stat -f %Lp "$work/root/var/lib/bedrock/setup/complete.json" 2>/dev/null || stat -c %a "$work/root/var/lib/bedrock/setup/complete.json")" = 600 ]
-[ "$(stat -f %Lp "$work/root/etc/NetworkManager/system-connections/bedrock-setup.nmconnection" 2>/dev/null || stat -c %a "$work/root/etc/NetworkManager/system-connections/bedrock-setup.nmconnection")" = 600 ]
+[ "$(file_mode "$work/root/var/lib/bedrock/setup/complete.json")" = 600 ]
+[ "$(file_mode "$work/root/etc/NetworkManager/system-connections/bedrock-setup.nmconnection")" = 600 ]
 grep -q '^address1=192.168.50.10/24,192.168.50.1$' "$work/root/etc/NetworkManager/system-connections/bedrock-setup.nmconnection"
 grep -q '^dns=192.168.50.1;1.1.1.1;$' "$work/root/etc/NetworkManager/system-connections/bedrock-setup.nmconnection"
 grep -q '^useradd ' "$work/commands.log"
