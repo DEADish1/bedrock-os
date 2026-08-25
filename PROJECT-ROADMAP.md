@@ -37,7 +37,8 @@ Exit: a repeatable image boots, identifies hardware, persists configuration, upd
 
 ## 0.3.0 — Installer and first-run setup
 
-- [ ] Build Bedrock Installer for Windows, macOS, and Linux.
+- [x] Build Bedrock Installer for Windows, macOS, and Linux.
+  - Native unsigned, non-writing preview packages (`.exe`, `.deb`, and `.dmg`) passed together in [Installer desktop run #61](https://github.com/DEADish1/bedrock-os/actions/runs/32795296293). Production signing/trust and approved physical-media writing remain separate release gates.
 - [x] Safely enumerate removable drives with model, path, and capacity.
 - [x] Verify downloaded image signatures and checksums before writing.
 - [x] Require destructive confirmation naming the exact target drive.
