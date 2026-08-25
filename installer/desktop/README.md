@@ -32,6 +32,8 @@ cargo tauri dev
 
 Use `cargo tauri build` to create the host platform's signed-package input. Release signing and notarization remain separate release-pipeline requirements.
 
+Pull-request CI also assembles an unsigned `.deb`, Windows NSIS executable, and macOS `.dmg` with the pinned Tauri CLI. Every artifact includes `PREVIEW-NOTICE.txt`. These packages prove native assembly only: their development trust placeholder rejects all images and the physical writer is disabled. They cannot satisfy media-writing or release-signing acceptance.
+
 Production packages must fail their build unless a protected release pipeline injects the public trust certificate:
 
 ```sh

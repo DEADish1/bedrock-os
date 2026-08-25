@@ -32,6 +32,32 @@ assert config["bundle"]["resources"] == {
 }
 PY
 
+python3 - "$ROOT/installer/desktop" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+package = json.loads((root / "package.json").read_text())
+lock = json.loads((root / "package-lock.json").read_text())
+preview = json.loads((root / "src-tauri/tauri.preview.conf.json").read_text())
+assert package["private"] is True
+assert package["devDependencies"]["@tauri-apps/cli"] == "2.11.4"
+assert lock["packages"][""]["devDependencies"]["@tauri-apps/cli"] == "2.11.4"
+assert lock["packages"]["node_modules/@tauri-apps/cli"]["version"] == "2.11.4"
+assert preview["bundle"]["macOS"]["signingIdentity"] == "-"
+notice = (root / "PREVIEW-NOTICE.txt").read_text()
+assert "unsigned" in notice and "cannot accept or write" in notice
+PY
+
+workflow="$ROOT/.github/workflows/installer-desktop.yml"
+grep -q 'npm ci --prefix installer/desktop --ignore-scripts' "$workflow"
+grep -q 'Linux) bundle=deb' "$workflow"
+grep -q 'Windows) bundle=nsis' "$workflow"
+grep -q 'macOS) bundle=dmg' "$workflow"
+grep -q 'actions/upload-artifact@v4' "$workflow"
+grep -q 'PREVIEW-NOTICE.txt' "$workflow"
+
 grep -Eq '^tauri = \{ version = "2", features = \[\] \}$' "$TAURI/Cargo.toml"
 grep -q '^cc = "1"$' "$TAURI/Cargo.toml"
 if grep -q 'tauri-plugin-shell' "$TAURI/Cargo.toml"; then

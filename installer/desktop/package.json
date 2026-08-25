@@ -1,0 +1,11 @@
+{
+  "name": "bedrock-installer-desktop-tools",
+  "private": true,
+  "version": "0.3.0",
+  "scripts": {
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.4"
+  }
+}

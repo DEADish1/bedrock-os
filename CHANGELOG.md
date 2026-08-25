@@ -65,6 +65,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Added a terminal-free guided on-server installer that automatically opens on tty1 only when booted from packaged live media, filters to eligible internal targets, requires the exact model/path/capacity erase phrase, performs a second destructive review, and consumes the existing short-lived protected request and writer chain.
 - Prevented the installed-system first-run wizard from opening on live installation media, added verified completion/recovery screens and reboot/power-off choices, and added non-destructive guided-flow tests for success, wrong confirmation, no eligible disk, and live-versus-installed console isolation.
 - Added a strict privacy-safe physical system-install report and fixture-only test mode covering the acceptance writer, fresh selection, terminal-free flow, exact confirmation, write/reread/GPT/state verification, healthy installed boot, hardware inventory, first-run completion, and persistence across reboot.
+- Added pinned, native preview packaging for Linux `.deb`, Windows NSIS, and macOS `.dmg` artifacts. Preview packages include an explicit non-release notice, have no production trust anchor, keep physical writing disabled, and are retained only long enough for packaging review.
 
 ### Next starting point
 

@@ -1,0 +1,9 @@
+Bedrock Installer 0.3 preview package
+
+This package proves that the Bedrock graphical installer can be assembled for
+its supported desktop platform. It is unsigned, contains no production release
+trust certificate, and intentionally cannot accept or write a Bedrock image.
+
+Do not publish or present this preview as a release installer. Physical-media
+acceptance requires a separately authorized build with production trust,
+platform signing, and the exact protected-writer gate.
