@@ -1,9 +1,14 @@
 {
-  "schema": 1,
-  "image_sha256": "replace-with-64-lowercase-hex-characters",
+  "schema": 2,
+  "mode": "fixture",
+  "completed_at": "2026-08-25T00:00:00Z",
+  "image_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "platform": "vmware",
+  "platform_generation": null,
   "cpu_vendor": "intel",
-  "uefi": true,
+  "firmware_mode": "uefi",
+  "secure_boot": "disabled",
+  "same_image_verified": true,
   "healthy_boot": true,
   "persistent_reboot": true,
   "inventory": {
@@ -12,5 +17,5 @@
     "disk": true,
     "network": true
   },
-  "notes": "Do not include serial numbers, IP addresses, or usernames."
+  "privacy_reviewed": true
 }

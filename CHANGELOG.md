@@ -66,6 +66,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Prevented the installed-system first-run wizard from opening on live installation media, added verified completion/recovery screens and reboot/power-off choices, and added non-destructive guided-flow tests for success, wrong confirmation, no eligible disk, and live-versus-installed console isolation.
 - Added a strict privacy-safe physical system-install report and fixture-only test mode covering the acceptance writer, fresh selection, terminal-free flow, exact confirmation, write/reread/GPT/state verification, healthy installed boot, hardware inventory, first-run completion, and persistence across reboot.
 - Added pinned, native preview packaging for Linux `.deb`, Windows NSIS, and macOS `.dmg` artifacts. Preview packages include an explicit non-release notice, have no production trust anchor, keep physical writing disabled, and are retained only long enough for packaging review.
+- Strengthened the final v0.2 boot evidence contract with strict schema-2 physical-versus-fixture modes, exact VMware/Hyper-V Generation 2/physical platform rules, verified same-image SHA-256, UEFI and Secure Boot state, complete inventory and persistent-reboot checks, and rejection of private or unknown fields.
 
 ### Next starting point
 

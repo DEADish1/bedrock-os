@@ -17,14 +17,14 @@ The final 0.2 release gate requires the same signed amd64 image to boot on every
 3. Boot the image and wait for `BEDROCK_BOOT_HEALTHY slot=A` on the serial console or diagnostics view.
 4. Confirm `/var/lib/bedrock/hardware/inventory.json` exists and contains CPU, memory, disk, and network records.
 5. Reboot without changing the disk and confirm the system remains healthy and persistent state is retained.
-6. Copy `os/tests/boot-test-report.example.json`, enter the observed values, and run:
+6. Copy `os/tests/boot-test-report.example.json`, change `mode` to `physical`, enter the observed values, record `generation-2` only for Hyper-V, and run:
 
    ```sh
    sh ./os/tests/validate-boot-test-report.sh path/to/report.json
    ```
 
-Do not include serial numbers, public IP addresses, usernames, or other personal data in reports committed to GitHub.
+The validator rejects fixture-mode reports during normal acceptance. Do not add serial numbers, MAC addresses, public IP addresses, usernames, hostnames, notes, or other personal data to reports committed to GitHub.
 
 ## Completion rule
 
-The roadmap checkbox may be marked complete only after validated passing reports exist for VMware, Hyper-V Generation 2, one physical Intel system, and one physical AMD system, in addition to the automated QEMU result.
+The roadmap checkbox may be marked complete only after schema-2 physical-mode passing reports exist for VMware, Hyper-V Generation 2, one physical Intel system, and one physical AMD system, all naming the same verified image SHA-256, in addition to the automated QEMU result.
