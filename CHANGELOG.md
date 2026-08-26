@@ -14,6 +14,8 @@ This file records completed work, decisions, validation, and the next starting p
 - Added StorCLI normalization for hardware RAID controller, physical-member, logical-volume, cache-protection, and rebuild health plus actionable alerts; unsupported controllers remain explicitly limited.
 - Added bounded dataset SHA-256 manifests and recovery tests for interrupted operations, degraded pools, member replacement, rebuild/check, export/import, and corruption detection.
 - Added a dedicated disposable Linux acceptance workflow that exercises real OpenZFS, Linux RAID, Samba parsing, failure, replacement, import, and post-recovery integrity without using host disks.
+- Passed [Storage and NAS acceptance run #1](https://github.com/DEADish1/bedrock-os/actions/runs/33016715779): the real disposable OpenZFS/Linux RAID recovery job and every protected/guided storage and NAS contract completed without skips.
+- Marked all ten v0.4 storage and NAS checklist items complete. Physical controller qualification remains model-specific, and abrupt-power hardware soak remains part of the v0.9 release-candidate gate.
 
 ### Desktop installer packaging
 

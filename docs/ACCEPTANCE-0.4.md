@@ -1,6 +1,6 @@
 # Bedrock 0.4 storage and NAS acceptance
 
-Bedrock 0.4 is accepted only when the normal configuration suite and the dedicated disposable Linux storage workflow both pass for the same revision. No test may use an existing host disk.
+Bedrock 0.4 passed on 2026-08-26 in [Storage and NAS acceptance run #1](https://github.com/DEADish1/bedrock-os/actions/runs/33016715779). The normal configuration suite and dedicated disposable Linux workflow passed for the same revision. No test used an existing host disk.
 
 ## Automated contract evidence
 

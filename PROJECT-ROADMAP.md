@@ -1,6 +1,6 @@
 # Bedrock Server OS project roadmap
 
-Bedrock Server OS has completed **0.1.0 — Product definition**. The 0.2 bootable foundation and 0.3 installer are implemented through their safe automated gates, with named physical and cross-hypervisor acceptance work still required before either milestone can be declared complete. Version 1.0 means a fully functional, tested, documented, signed, and supportable product that is ready to ship.
+Bedrock Server OS has completed **0.1.0 — Product definition** and the independently testable **0.4.0 — Storage and NAS** milestone. The 0.2 bootable foundation and 0.3 installer are implemented through their safe automated gates, with named physical and cross-hypervisor acceptance work still required before either earlier milestone can be declared complete. Version 1.0 means a fully functional, tested, documented, signed, and supportable product that is ready to ship.
 
 ## Release rules
 
@@ -52,25 +52,30 @@ Exit: a repeatable image boots, identifies hardware, persists configuration, upd
 
 Exit: a new user can create media and install Bedrock without using a terminal.
 
-## 0.4.0 — Storage and NAS
+## 0.4.0 — Storage and NAS (complete)
 
-- [ ] Implement disk inventory, SMART/health, temperatures, and alerts.
-  - Read-only disk, SMART health/temperature, software RAID, ZFS, and controller discovery plus deduplicated alert/audit state implemented; UI and notification delivery remain open.
-- [ ] Create, expand, scrub, export, and import storage pools.
-  - Fail-closed, review-only creation plans implemented; actual creation, expansion, scrub, export, and import remain disabled.
-- [ ] Support OpenZFS mirrors/RAID-Z and Linux software RAID (`mdadm`) with single-/dual-drive failure protection where valid.
-  - Mirror, RAID-Z1/Z2, and MD RAID 1/5/6/10 layout/count/capacity/resilience validation implemented without execution.
-- [ ] Detect supported hardware RAID controllers and logical volumes; surface controller, cache/battery, disk, and rebuild health when vendor tooling permits.
-  - Controller discovery and limited-health reporting implemented; vendor member/cache/battery adapters remain open.
-- [ ] Add guided RAID creation, degraded-array, replacement, rebuild-progress, scrub/check, and safe import workflows.
-  - Guided creation review contract implemented with exact disk naming and destructive warnings; execution and recovery workflows remain open.
-- [ ] Implement datasets/shares, quotas, snapshots, recycle behavior, and permissions.
-- [ ] Add SMB; evaluate NFS and optional Time Machine support.
-- [ ] Add users, groups, access-control lists, and credential rotation.
-- [ ] Implement degraded-pool, drive-replacement, and recovery workflows.
-- [ ] Test power-loss behavior, disk failure, pool import, and data-integrity checks.
+- [x] Implement disk inventory, SMART/health, temperatures, and alerts.
+  - Read-only direct-disk, SMART health/temperature, Linux RAID, ZFS, controller, StorCLI, deduplicated alert, and bounded audit state pass fixture and schema tests.
+- [x] Create, expand, scrub, export, and import storage pools.
+  - The guarded executor refreshes whole-device safety, requires exact confirmation, serializes changes, and commits managed state only after successful OpenZFS or Linux RAID operations.
+- [x] Support OpenZFS mirrors/RAID-Z and Linux software RAID (`mdadm`) with single-/dual-drive failure protection where valid.
+  - ZFS mirror/RAID-Z1/RAID-Z2 and Linux RAID 1/5/6/10 validation is enforced; ZFS expansion adds only a complete protected vdev and unsafe RAID 10 member-count reshape remains blocked.
+- [x] Detect supported hardware RAID controllers and logical volumes; surface controller, cache/battery, disk, and rebuild health when vendor tooling permits.
+  - StorCLI controller, member, logical-volume, cache-protection, and rebuild telemetry is normalized and alerted; controllers without a supported tool remain explicitly limited rather than inferred healthy.
+- [x] Add guided RAID creation, degraded-array, replacement, rebuild-progress, scrub/check, and safe import workflows.
+  - A terminal-free local-console flow explains layouts, selects disks, requires the full pool/layout/device phrase, shows a final review, and delegates to independently repeated privileged checks.
+- [x] Implement datasets/shares, quotas, snapshots, recycle behavior, and permissions.
+  - OpenZFS datasets, byte quotas, manual snapshots, ACLs, and per-user Samba recycle behavior are stateful and covered by secret-redaction tests.
+- [x] Add SMB; evaluate NFS and optional Time Machine support.
+  - SMB is primary with SMB2.1 minimum and no guest mapping; NFS is explicit opt-in; Time Machine uses writable SMB and requires a dataset quota.
+- [x] Add users, groups, access-control lists, and credential rotation.
+  - Password rotation uses a bounded root-readable file and never records plaintext in requests, arguments, state, or audits.
+- [x] Implement degraded-pool, drive-replacement, and recovery workflows.
+  - Managed storage exposes degraded/rebuilding states, protected replacement, scrub/check, export/import, boot reactivation, and recovery guidance.
+- [x] Test power-loss behavior, disk failure, pool import, and data-integrity checks.
+  - Transaction interruption is injected before durable state commit; the dedicated Linux job exercises real disposable ZFS/Linux RAID failure, replacement, export/import or reassembly, scrub/check, and post-recovery SHA-256 integrity.
 
-Exit: NAS and software/hardware RAID workflows are safe, monitored, recoverable, and usable from Windows/macOS/Linux.
+Exit: passed in [Storage and NAS acceptance run #1](https://github.com/DEADish1/bedrock-os/actions/runs/33016715779). Physical abrupt-power soak remains a 0.9 release-candidate gate; controller qualification remains model-specific and cannot upgrade limited telemetry without real vendor evidence.
 
 ## 0.5.0 — Virtual machines and image library
 
