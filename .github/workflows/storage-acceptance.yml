@@ -1,0 +1,45 @@
+name: Storage and NAS acceptance
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/storage-acceptance.yml"
+      - "os/config/includes.chroot/etc/systemd/system/smbd.service.d/**"
+      - "os/config/includes.chroot/usr/lib/bedrock/collect-storage-health"
+      - "os/config/includes.chroot/usr/lib/bedrock/mount-storage-resources"
+      - "os/config/includes.chroot/usr/lib/bedrock/process-storage-alerts"
+      - "os/config/includes.chroot/usr/lib/bedrock/render-nas-services"
+      - "os/config/includes.chroot/usr/lib/bedrock/storage-integrity"
+      - "os/config/includes.chroot/usr/sbin/bedrock-nas"
+      - "os/config/includes.chroot/usr/sbin/bedrock-storage"
+      - "os/config/includes.chroot/usr/sbin/bedrock-storage-guided"
+      - "os/tests/test-nas-management.sh"
+      - "os/tests/test-real-storage-linux.sh"
+      - "os/tests/test-guided-storage.sh"
+      - "os/tests/test-storage-operations.sh"
+      - "os/tests/test-storage-recovery.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  disposable-storage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install storage and file-sharing tools
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends acl jq mdadm samba zfsutils-linux
+      - name: Load storage drivers
+        run: |
+          sudo modprobe zfs
+          sudo modprobe loop
+      - name: Exercise disposable ZFS, Linux RAID, and NAS recovery
+        run: sudo ./os/tests/test-real-storage-linux.sh
+      - name: Validate guided and protected management workflows
+        run: |
+          sh os/tests/test-storage-operations.sh
+          sh os/tests/test-nas-management.sh
+          sh os/tests/test-storage-recovery.sh
+          sh os/tests/test-guided-storage.sh

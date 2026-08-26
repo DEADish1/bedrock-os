@@ -29,6 +29,7 @@ jq -e '
   (.software_raid.md_arrays | type == "array") and
   (.software_raid.zfs.pools | type == "array") and
   (.hardware_raid.controllers | type == "array") and
+  ((.hardware_raid.vendor_reports // []) | type == "array") and
   all(.disks[];
     (.path | type == "string" and test("^/dev/[A-Za-z0-9._/-]+$") and (test("(^|/)\\.\\.(/|$)") | not)) and
     (.smart | type == "object") and
@@ -43,6 +44,9 @@ jq -e '
     (.status == "healthy" or .status == "degraded" or .status == "failing" or .status == "unknown")) and
   all(.hardware_raid.controllers[];
     (.address | type == "string") and (.member_health_available | type == "boolean")) and
+  all((.hardware_raid.vendor_reports // [])[];
+    (.tool | type == "string") and (.status | type == "string") and (.healthy | type == "boolean") and
+    (.physical_drives | type == "array") and (.logical_volumes | type == "array") and (.cache_protection | type == "array")) and
   ([.disks[].path] | length == (unique | length)) and
   ([.software_raid.md_arrays[].name] | length == (unique | length)) and
   ([.software_raid.zfs.pools[].name] | length == (unique | length)) and
@@ -58,6 +62,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 jq -S '
+  . as $health |
   ([.disks[] |
     if .smart.health == "failing" then
       {id:("disk-smart:" + .path),kind:"disk-smart",resource:.path,severity:"critical",
@@ -78,10 +83,22 @@ jq -S '
        severity:(if .status == "failing" then "critical" else "warning" end),
        title:"ZFS pool needs attention",
        explanation:("Pool health is " + .health + ". Review pool status before changing disks.")}] +
-   [.hardware_raid.controllers[] | select(.member_health_available == false) |
+   [.hardware_raid.controllers[] | select(.member_health_available == false and (($health.hardware_raid.vendor_reports // []) | length) == 0) |
       {id:("hardware-raid-visibility:" + .address),kind:"hardware-raid-visibility",resource:.address,severity:"warning",
        title:"Hardware RAID health is limited",
-       explanation:"Bedrock detected a RAID controller but cannot yet verify member disks, cache/battery, or rebuild health."}]) |
+       explanation:"Bedrock detected a RAID controller but cannot verify member disks, cache/battery, or rebuild health."}] +
+   [(.hardware_raid.vendor_reports // [])[] | select(.healthy == false) |
+      {id:("hardware-raid-controller:" + (.controller|tostring)),kind:"hardware-raid-controller",resource:(.controller|tostring),severity:"critical",
+       title:"Hardware RAID controller needs attention",explanation:("The controller reports " + .status + ". Review its physical disks, cache protection, and logical volumes.")}] +
+   [(.hardware_raid.vendor_reports // [])[] as $controller | $controller.physical_drives[] | select(.healthy == false) |
+      {id:("hardware-raid-disk:" + ($controller.controller|tostring) + ":" + .slot),kind:"hardware-raid-disk",resource:.slot,severity:"critical",
+       title:"Hardware RAID member needs attention",explanation:("Controller member " + .slot + " reports state " + .state + ".")}] +
+   [(.hardware_raid.vendor_reports // [])[] as $controller | $controller.logical_volumes[] | select(.healthy == false) |
+      {id:("hardware-raid-volume:" + ($controller.controller|tostring) + ":" + .id),kind:"hardware-raid-volume",resource:.id,severity:"critical",
+       title:"Hardware RAID logical volume needs attention",explanation:("Logical volume " + .id + " reports state " + .state + ".")}] +
+   [(.hardware_raid.vendor_reports // [])[] as $controller | $controller.cache_protection[] | select(.healthy == false) |
+      {id:("hardware-raid-cache:" + ($controller.controller|tostring) + ":" + .model),kind:"hardware-raid-cache",resource:.model,severity:"critical",
+       title:"Hardware RAID cache protection needs attention",explanation:("Cache or battery protection reports state " + .state + ". Write-back safety may be reduced.")}]) |
   sort_by(.id) | unique_by(.id)
 ' "$health" > "$work/desired.json"
 

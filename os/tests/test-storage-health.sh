@@ -29,7 +29,12 @@ jq -e '
   .software_raid.zfs.pools[1].status == "degraded" and
   (.hardware_raid.controllers | length == 1) and
   .hardware_raid.controllers[0].health_visibility == "limited" and
-  .hardware_raid.controllers[0].member_health_available == false
+  .hardware_raid.controllers[0].member_health_available == false and
+  (.hardware_raid.vendor_reports | length) == 1 and
+  .hardware_raid.vendor_reports[0].physical_drives[1].state == "Rbld" and
+  .hardware_raid.vendor_reports[0].physical_drives[1].rebuild_percent == 42 and
+  .hardware_raid.vendor_reports[0].logical_volumes[0].healthy == false and
+  .hardware_raid.vendor_reports[0].cache_protection[0].healthy == true
 ' "$work/health.json" >/dev/null
 
 ln -s "$work/elsewhere.json" "$work/indirect.json"

@@ -148,6 +148,38 @@ for candidate in storcli64 storcli perccli64 perccli ssacli arcconf; do
     management_tools=$(printf '%s' "$management_tools" | jq -c --arg tool "$candidate" '. + [$tool]')
   fi
 done
+vendor_reports='[]'
+if command -v storcli64 >/dev/null 2>&1; then
+  if storcli64 /call show all J > "$work/storcli.json" 2>/dev/null &&
+     jq -e '(.Controllers | type) == "array"' "$work/storcli.json" >/dev/null 2>&1; then
+    vendor_reports=$(jq -c '
+      [.Controllers[] |
+        (."Command Status" // {}) as $command |
+        (."Response Data" // {}) as $data |
+        ($data."PD LIST" // []) as $physical |
+        ($data."VD LIST" // []) as $logical |
+        ($data."Cachevault_Info" // $data."CacheVault_Info" // []) as $cache |
+        {tool:"storcli64",controller:($command.Controller // null),
+         status:($command.Status // $data.Status."Controller Status" // $data.Basics."Controller Status" // "Unknown"),
+         description:($command.Description // ""),
+         healthy:(($command.Status // "Unknown") == "Success" and
+           (($data.Status."Controller Status" // $data.Basics."Controller Status" // "Optimal") | test("^(Optimal|OK)$";"i"))),
+         physical_drives:[$physical[] | {
+           slot:(."EID:Slt" // .Slot // "unknown"),state:(.State // "unknown"),size:(.Size // null),
+           interface:(.Intf // null),media:(.Med // null),model:(.Model // null),
+           healthy:((.State // "") | test("^(Onln|UGood|GHS|DHS)$";"i")),
+           rebuild_percent:((."Rebuild Progress" // ."Rebuild%" // null) | if type=="string" then (sub("%$";"") | tonumber?) else . end)}],
+         logical_volumes:[$logical[] | {
+           id:(."DG/VD" // .VD // "unknown"),layout:(.TYPE // null),state:(.State // "unknown"),
+           access:(.Access // null),cache:(.Cache // null),consistent:(.Consist // null),size:(.Size // null),
+           healthy:((.State // "") | test("^(Optl|Optimal)$";"i"))}],
+         cache_protection:[$cache[] | {
+           model:(.Model // .Name // "unknown"),state:(.State // .Status // "unknown"),
+           healthy:((.State // .Status // "") | test("^(Optimal|OK)$";"i"))}],
+         visibility:"full"}]
+    ' "$work/storcli.json")
+  fi
+fi
 
 overall=healthy
 if printf '%s' "$disks" | jq -e 'any(.[]; .smart.health == "failing")' >/dev/null ||
@@ -156,6 +188,12 @@ if printf '%s' "$disks" | jq -e 'any(.[]; .smart.health == "failing")' >/dev/nul
   overall=attention
 elif [ "$(printf '%s' "$hardware_controllers" | jq 'length')" -gt 0 ]; then
   overall=limited
+fi
+if printf '%s' "$vendor_reports" | jq -e 'any(.[]; .healthy == false or any(.physical_drives[]; .healthy == false) or any(.logical_volumes[]; .healthy == false) or any(.cache_protection[]; .healthy == false))' >/dev/null; then
+  overall=attention
+elif [ "$(printf '%s' "$vendor_reports" | jq 'length')" -gt 0 ] &&
+     printf '%s' "$vendor_reports" | jq -e 'all(.[]; .healthy == true)' >/dev/null; then
+  overall=healthy
 fi
 
 directory=$(dirname -- "$output")
@@ -166,10 +204,13 @@ jq -S -n --argjson generated_unix "$now" --arg overall "$overall" \
   --argjson disks "$disks" --argjson md_arrays "$md_arrays" \
   --argjson zfs_available "$zfs_available" --argjson zfs_pools "$zfs_pools" \
   --argjson hardware_controllers "$hardware_controllers" --argjson management_tools "$management_tools" \
+  --argjson vendor_reports "$vendor_reports" \
   '{schema:1,generated_unix:$generated_unix,overall:$overall,read_only:true,disks:$disks,
     software_raid:{md_arrays:$md_arrays,zfs:{available:$zfs_available,pools:$zfs_pools}},
-    hardware_raid:{controllers:$hardware_controllers,management_tools:$management_tools,
-      explanation:"Hardware RAID member and rebuild health is limited until a supported vendor tool is detected and integrated."}}' > "$temporary"
+    hardware_raid:{controllers:$hardware_controllers,management_tools:$management_tools,vendor_reports:$vendor_reports,
+      explanation:(if ($vendor_reports|length)>0 then
+        "A supported controller tool is reporting controller, member-disk, logical-volume, cache-protection, and rebuild health."
+      else "Hardware RAID member and rebuild health is limited until a supported vendor tool is detected and integrated." end)}}' > "$temporary"
 chmod 0644 "$temporary"
 mv "$temporary" "$output"
 temporary=

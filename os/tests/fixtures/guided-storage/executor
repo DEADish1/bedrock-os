@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+[ "$#" -eq 2 ]
+mode=$1 request=$2
+jq -e '.schema==1' "$request" >/dev/null
+printf '%s %s %s\n' "$mode" "$(jq -r .action "$request")" "$(jq -r .pool "$request")" >> "${BEDROCK_STORAGE_GUIDED_TEST_LOG:?}"
+if [ "$mode" = plan ]; then
+  jq -S '. + {generated_unix:1,destructive:true,warnings:["Fixture review"],requires_root:true,requires_fresh_health:true,requires_exclusive_lock:true,ready_for_execution:true}' "$request"
+else
+  jq -S '{schema:1,completed_unix:2,action:.action,pool:.pool,result:"completed"}' "$request"
+fi

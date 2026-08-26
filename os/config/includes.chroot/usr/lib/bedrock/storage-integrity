@@ -1,0 +1,57 @@
+#!/bin/sh
+set -eu
+
+LC_ALL=C
+export LC_ALL
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+[ "$#" -eq 3 ] || fail "usage: storage-integrity create|verify DATASET-DIRECTORY MANIFEST.json"
+mode=$1 root=$2 manifest=$3
+[ "$mode" = create ] || [ "$mode" = verify ] || fail "mode must be create or verify"
+[ -d "$root" ] && [ ! -L "$root" ] || fail "dataset directory is missing or indirect"
+case "$root" in /*) ;; *) fail "dataset directory must be absolute" ;; esac
+for tool in jq openssl find sort mktemp; do command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"; done
+
+work=$(mktemp -d)
+temporary=
+cleanup() { rm -rf "$work"; [ -z "$temporary" ] || rm -f "$temporary"; }
+trap cleanup EXIT INT TERM
+
+find "$root" -type l -print -quit | grep -q . && fail "dataset contains symbolic links"
+find "$root" -type f -print | LC_ALL=C sort > "$work/files"
+[ "$(wc -l < "$work/files" | tr -d ' ')" -le 100000 ] || fail "dataset contains too many files for one integrity run"
+entries='[]'
+while IFS= read -r path; do
+  [ -n "$path" ] || continue
+  relative=${path#"$root"/}
+  [ "$relative" != "$path" ] && [ -n "$relative" ] || fail "dataset traversal produced an unsafe path"
+  printf '%s' "$relative" | grep -Eq '(^|/)\.\.(/|$)|[[:cntrl:]]' && fail "dataset contains an unsafe filename"
+  size=$(wc -c < "$path" | tr -d ' ')
+  digest=$(openssl dgst -sha256 -r "$path" | awk '{print $1}')
+  entries=$(printf '%s' "$entries" | jq -c --arg path "$relative" --arg sha256 "$digest" --argjson size "$size" \
+    '. + [{path:$path,size_bytes:$size,sha256:$sha256}]')
+done < "$work/files"
+
+if [ "$mode" = create ]; then
+  directory=$(dirname -- "$manifest")
+  mkdir -p "$directory"
+  [ ! -L "$manifest" ] || fail "integrity manifest cannot be a symbolic link"
+  temporary=$(mktemp "$directory/.integrity.XXXXXX")
+  jq -S -n --arg root "$root" --argjson files "$entries" \
+    '{schema:1,algorithm:"sha256",root:$root,file_count:($files|length),files:$files}' > "$temporary"
+  chmod 0600 "$temporary" && mv "$temporary" "$manifest" && temporary=
+  printf 'BEDROCK_STORAGE_INTEGRITY_CREATED files=%s manifest=%s\n' "$(printf '%s' "$entries" | jq length)" "$manifest"
+  exit 0
+fi
+
+[ -s "$manifest" ] && [ ! -L "$manifest" ] || fail "integrity manifest is missing, empty, or indirect"
+jq -e --arg root "$root" '
+  (keys|sort)==(["algorithm","file_count","files","root","schema"]|sort) and .schema==1 and .algorithm=="sha256" and
+  .root==$root and .file_count==(.files|length) and (.files|length)<=100000 and
+  ([.files[].path]|length==(unique|length)) and all(.files[];
+    (.path|type=="string" and length>0 and (test("(^|/)\\.\\.(/|$)|[[:cntrl:]]")|not)) and
+    (.size_bytes|type=="number" and floor==. and .>=0) and (.sha256|test("^[0-9a-f]{64}$")))
+' "$manifest" >/dev/null || fail "integrity manifest is invalid"
+printf '%s' "$entries" | jq -S . > "$work/current.json"
+jq -S .files "$manifest" > "$work/expected.json"
+cmp -s "$work/current.json" "$work/expected.json" || fail "dataset content does not match the integrity manifest"
+printf 'BEDROCK_STORAGE_INTEGRITY_VERIFIED files=%s manifest=%s\n' "$(jq .file_count "$manifest")" "$manifest"

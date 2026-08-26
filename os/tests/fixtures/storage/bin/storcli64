@@ -1,0 +1,5 @@
+#!/bin/sh
+[ "$*" = "/call show all J" ] || exit 2
+cat <<'EOF'
+{"Controllers":[{"Command Status":{"Controller":0,"Status":"Success","Description":"None"},"Response Data":{"Basics":{"Controller Status":"Optimal"},"PD LIST":[{"EID:Slt":"252:0","State":"Onln","Size":"4 TB","Intf":"SATA","Med":"HDD","Model":"BEDROCK-A"},{"EID:Slt":"252:1","State":"Rbld","Size":"4 TB","Intf":"SATA","Med":"HDD","Model":"BEDROCK-B","Rebuild Progress":"42%"}],"VD LIST":[{"DG/VD":"0/0","TYPE":"RAID1","State":"Dgrd","Access":"RW","Consist":"Yes","Cache":"RWBD","Size":"4 TB"}],"Cachevault_Info":[{"Model":"CVPM05","State":"Optimal"}]}}]}
+EOF

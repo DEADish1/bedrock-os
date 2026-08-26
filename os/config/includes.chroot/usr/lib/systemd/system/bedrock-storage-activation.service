@@ -1,0 +1,19 @@
+[Unit]
+Description=Activate managed Bedrock storage pools
+After=local-fs.target systemd-udev-settle.service
+Before=smbd.service nfs-server.service bedrock-storage-health.service
+ConditionPathIsMountPoint=/var
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/bedrock/mount-storage-resources
+RemainAfterExit=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/srv/bedrock /run /var/lib/bedrock/storage
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

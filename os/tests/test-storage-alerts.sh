@@ -14,7 +14,7 @@ jq -n '{
   ],
   software_raid:{md_arrays:[{name:"md0",path:"/dev/md0",health:"degraded",active_members:1,expected_members:2}],
     zfs:{available:true,pools:[{name:"archive",health:"DEGRADED",status:"degraded"}]}},
-  hardware_raid:{controllers:[{address:"0000:03:00.0",member_health_available:false}]}
+  hardware_raid:{controllers:[{address:"0000:03:00.0",member_health_available:false}],vendor_reports:[]}
 }' > "$work/health.json"
 
 BEDROCK_STORAGE_ALERT_TEST_MODE=1 BEDROCK_STORAGE_ALERT_TEST_NOW=1000 \
@@ -26,6 +26,18 @@ jq -e '
   (.active[] | select(.kind == "disk-temperature") | .severity) == "critical" and
   all(.active[]; .first_seen_unix == 1000 and .last_seen_unix == 1000)
 ' "$work/alerts.json" >/dev/null
+
+jq '.hardware_raid.vendor_reports=[{tool:"storcli64",controller:0,status:"Degraded",healthy:false,
+  physical_drives:[{slot:"252:1",state:"Rbld",healthy:false}],
+  logical_volumes:[{id:"0/0",state:"Dgrd",healthy:false}],
+  cache_protection:[{model:"CVPM05",state:"Failed",healthy:false}]}]' "$work/health.json" > "$work/vendor-health.json"
+BEDROCK_STORAGE_ALERT_TEST_MODE=1 BEDROCK_STORAGE_ALERT_TEST_NOW=1000 \
+  "$processor" "$work/vendor-health.json" "$work/vendor-alerts.json"
+jq -e '
+  .active_count == 8 and
+  ([.active[].kind] | index("hardware-raid-visibility") | not) and
+  ([.active[].kind] | contains(["hardware-raid-cache","hardware-raid-controller","hardware-raid-disk","hardware-raid-volume"]))
+' "$work/vendor-alerts.json" >/dev/null
 
 BEDROCK_STORAGE_ALERT_TEST_MODE=1 BEDROCK_STORAGE_ALERT_TEST_NOW=1010 \
   "$processor" "$work/health.json" "$work/alerts.json"

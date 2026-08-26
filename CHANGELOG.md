@@ -4,6 +4,17 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+### Storage and NAS 0.4
+
+- Added guarded OpenZFS mirror/RAID-Z and Linux RAID 1/5/6/10 creation, protected-vdev expansion, scrub/check, export/import, and failed-disk replacement workflows with exact destructive confirmation, fresh whole-disk checks, exclusive mutation locking, and durable audit state.
+- Added a terminal-free local-console storage wizard with contextual protection explanations, healthy-disk selection, exact review, safe cancellation, and independently repeated privileged checks.
+- Added persistent boot activation for managed Linux RAID storage and ordering that brings pools online before SMB/NFS services.
+- Added users, groups, membership, plaintext-free Samba credential rotation, datasets, ZFS quotas, ACLs, manual snapshots, SMB/NFS shares, recycle behavior, and quota-required Time Machine shares.
+- Added atomic Samba/NFS configuration rendering on persistent state for the immutable OS, SMB2.1 minimum, no guest mapping, and a storage-ordered Samba service override.
+- Added StorCLI normalization for hardware RAID controller, physical-member, logical-volume, cache-protection, and rebuild health plus actionable alerts; unsupported controllers remain explicitly limited.
+- Added bounded dataset SHA-256 manifests and recovery tests for interrupted operations, degraded pools, member replacement, rebuild/check, export/import, and corruption detection.
+- Added a dedicated disposable Linux acceptance workflow that exercises real OpenZFS, Linux RAID, Samba parsing, failure, replacement, import, and post-recovery integrity without using host disks.
+
 ### Desktop installer packaging
 
 - Added a Tauri 2 desktop packaging shell for the shared Windows, macOS, and Linux installer interface.
@@ -76,7 +87,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Boot-test the v0.2 image on physical Intel and AMD systems and the remaining common VM platforms.
 - Build the updated image and perform the local-console first-run acceptance run, including one forced network failure followed by a successful retry.
 - Run the guarded writer on an explicitly approved disposable USB drive, boot it, and archive privacy-safe evidence; then repeat the protected on-server install on an approved disposable system disk.
-- Connect review-only storage planning to a fresh read-only eligibility inventory, then add an independently revalidated privileged preflight that remains disabled before any mutating RAID control.
+- Require the new disposable Linux storage acceptance job to pass, then archive model-specific physical hardware RAID evidence as supported controllers are qualified.
 - Add update download/resume transport, release-channel policy, and certificate-rotation handling.
 
 ### Bootable foundation work

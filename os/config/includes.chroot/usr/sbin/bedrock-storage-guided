@@ -1,0 +1,113 @@
+#!/bin/sh
+set -eu
+
+LC_ALL=C
+export LC_ALL
+if [ "${BEDROCK_STORAGE_GUIDED_TEST_MODE:-0}" = 1 ]; then
+  PATH=${BEDROCK_STORAGE_GUIDED_TEST_PATH:?test mode requires BEDROCK_STORAGE_GUIDED_TEST_PATH}
+  health=${BEDROCK_STORAGE_GUIDED_TEST_HEALTH:?test mode requires BEDROCK_STORAGE_GUIDED_TEST_HEALTH}
+  state=${BEDROCK_STORAGE_GUIDED_TEST_STATE:?test mode requires BEDROCK_STORAGE_GUIDED_TEST_STATE}
+  storage=${BEDROCK_STORAGE_GUIDED_TEST_EXECUTOR:?test mode requires BEDROCK_STORAGE_GUIDED_TEST_EXECUTOR}
+else
+  PATH=/usr/sbin:/usr/bin:/sbin:/bin
+  [ "$(id -u)" -eq 0 ] || { printf 'error: guided storage management requires root\n' >&2; exit 1; }
+  health=/var/lib/bedrock/storage/health.json
+  state=/var/lib/bedrock/storage/resources.json
+  storage=/usr/sbin/bedrock-storage
+  /usr/lib/bedrock/collect-storage-health
+fi
+export PATH
+for tool in dialog jq mktemp; do command -v "$tool" >/dev/null 2>&1 || { printf 'error: guided storage management requires %s\n' "$tool" >&2; exit 2; }; done
+[ -x "$storage" ] && [ ! -L "$storage" ] || { printf 'error: protected storage executor is unavailable\n' >&2; exit 1; }
+work=$(mktemp -d); trap 'rm -rf "$work"' EXIT INT TERM; umask 077
+cancelled() { dialog --title 'Storage unchanged' --msgbox 'No storage operation was started.' 7 62 || true; exit 0; }
+
+dialog --title 'Bedrock storage' --msgbox \
+  'Create and maintain protected storage without a terminal. Bedrock shows the exact disks and rechecks them immediately before any destructive change.' 10 76 || cancelled
+action=$(dialog --stdout --title 'Choose a storage task' --menu 'What would you like to do?' 18 76 8 \
+  create 'Create protected storage' expand 'Add a protected group of disks' scrub 'Check data and parity' \
+  export 'Safely disconnect a pool' import 'Reconnect an exported pool' replace 'Replace a failed disk') || cancelled
+
+choose_pool() {
+  [ -s "$state" ] || { dialog --title 'No managed storage' --msgbox 'Create a storage pool first.' 7 62 || true; exit 1; }
+  set --
+  while IFS="$(printf '\t')" read -r pool_name pool_backend pool_layout pool_status; do set -- "$@" "$pool_name" "$pool_backend $pool_layout · $pool_status"; done <<EOF
+$(jq -r '.pools[] | [.name,.backend,.layout,.state] | @tsv' "$state")
+EOF
+  [ "$#" -gt 0 ] || { dialog --title 'No managed storage' --msgbox 'Create a storage pool first.' 7 62 || true; exit 1; }
+  dialog --stdout --title 'Choose storage' --menu 'Select the pool or array.' 17 78 8 "$@" || cancelled
+}
+
+devices='[]'; layout=none
+if [ "$action" = create ]; then
+  pool=$(dialog --stdout --title 'Name the storage' --inputbox 'Use a short name such as family or archive.' 9 68) || cancelled
+  backend=$(dialog --stdout --title 'Choose storage technology' --menu 'OpenZFS is recommended for new storage.' 13 78 3 \
+    zfs 'OpenZFS · checksums, snapshots, and simple recovery' mdraid 'Linux RAID · compatibility mode') || cancelled
+  if [ "$backend" = zfs ]; then
+    layout=$(dialog --stdout --title 'Choose protection' --menu 'Protection keeps data available after a valid number of disk failures.' 15 88 4 \
+      mirror 'Mirror · 2–3 disks · strongest simple protection' raidz1 'RAID-Z1 · 3+ disks · one-disk protection' raidz2 'RAID-Z2 · 4+ disks · two-disk protection') || cancelled
+  else
+    layout=$(dialog --stdout --title 'Choose protection' --menu 'Linux software RAID layouts.' 16 84 5 \
+      raid1 'RAID 1 · 2+ disks' raid5 'RAID 5 · 3+ disks · one-disk protection' raid6 'RAID 6 · 4+ disks · two-disk protection' raid10 'RAID 10 · even count of 4+ disks') || cancelled
+  fi
+  [ -s "$health" ] || { dialog --title 'Drive scan unavailable' --msgbox 'Bedrock could not read fresh disk health. No disk was changed.' 8 68 || true; exit 1; }
+  jq -c '.disks[] | select(.size_bytes>=68719476736 and .smart.health=="healthy")' "$health" > "$work/eligible.jsonl"
+  [ -s "$work/eligible.jsonl" ] || { dialog --title 'No healthy unused disks' --msgbox 'No healthy disk of at least 64 GiB is available. No disk was changed.' 8 70 || true; exit 1; }
+  while :; do
+    set -- done 'Finish selecting disks'
+    while IFS= read -r disk; do
+      path=$(printf '%s' "$disk" | jq -r .path)
+      if ! printf '%s' "$devices" | jq -e --arg path "$path" 'index($path)!=null' >/dev/null; then
+        description=$(printf '%s' "$disk" | jq -r '"\(.model) · \(.path) · \((.size_bytes/1073741824|floor)) GiB · \(.smart.temperature_c // "temperature unknown")°C"')
+        set -- "$@" "$path" "$description"
+      fi
+    done < "$work/eligible.jsonl"
+    choice=$(dialog --stdout --title 'Choose storage disks' --menu 'Select one disk at a time. Every selected disk will be erased.' 19 94 10 "$@") || cancelled
+    [ "$choice" != done ] || break
+    devices=$(printf '%s' "$devices" | jq -c --arg path "$choice" '.+[$path]')
+  done
+  [ "$(printf '%s' "$devices" | jq length)" -gt 0 ] || { dialog --title 'No disks selected' --msgbox 'No disk was changed.' 7 54 || true; exit 1; }
+  paths=$(printf '%s' "$devices" | jq -r 'join(", ")')
+  expected="ERASE AND CREATE — $pool — $backend $layout — $paths"
+else
+  pool=$(choose_pool)
+  backend=$(jq -r --arg pool "$pool" '.pools[]|select(.name==$pool)|.backend' "$state")
+  current_layout=$(jq -r --arg pool "$pool" '.pools[]|select(.name==$pool)|.layout' "$state")
+  case "$action" in
+    scrub) expected="SCRUB — $pool" ;;
+    export) expected="EXPORT — $pool" ;;
+    import) expected="IMPORT — $pool" ;;
+    expand|replace)
+      dialog --title 'Disk identity required' --msgbox 'For this recovery operation, Bedrock will ask for stable /dev/disk/by-id paths. The final safety check rejects mounted, read-only, system, partition, or failing targets.' 11 78 || cancelled
+      old=
+      [ "$action" != replace ] || old=$(dialog --stdout --title 'Failed disk' --inputbox 'Enter the old member path exactly.' 9 72) || cancelled
+      if [ "$action" = replace ]; then
+        new=$(dialog --stdout --title 'Replacement disk' --inputbox 'Enter the new whole-disk /dev/disk/by-id path.' 9 78) || cancelled
+        devices=$(jq -n -c --arg old "$old" --arg new "$new" '[$old,$new]'); expected="REPLACE — $pool — $old, $new"
+      else
+        devices='[]'
+        while :; do
+          new=$(dialog --stdout --title 'New storage disk' --inputbox 'Enter a new whole-disk /dev/disk/by-id path.' 9 78) || cancelled
+          devices=$(printf '%s' "$devices" | jq -c --arg new "$new" 'if index($new) then . else .+[$new] end')
+          next=$(dialog --stdout --title 'Add another disk?' --menu 'ZFS expansion must add a complete protected mirror or RAID-Z group.' 12 78 2 add 'Add another disk' done 'Finish selecting disks') || cancelled
+          [ "$next" = add ] || break
+        done
+        layout=$current_layout
+        paths=$(printf '%s' "$devices" | jq -r 'join(", ")')
+        expected="EXPAND — $pool — $paths"
+      fi
+      ;;
+  esac
+fi
+
+typed=$(dialog --stdout --title 'Confirm storage operation' --inputbox "Type this complete phrase exactly:\n\n$expected" 14 96) || cancelled
+[ "$typed" = "$expected" ] || { dialog --title 'Confirmation did not match' --msgbox 'Nothing was changed. The complete phrase must match exactly.' 8 68 || true; exit 1; }
+jq -S -n --arg action "$action" --arg backend "$backend" --arg name "$pool" --arg pool "$pool" --arg layout "$layout" \
+  --argjson devices "$devices" --arg confirmation "$typed" \
+  '{schema:1,action:$action,backend:$backend,name:$name,pool:$pool,layout:$layout,devices:$devices,confirmation:$confirmation}' > "$work/request.json"
+if ! "$storage" plan "$work/request.json" > "$work/plan.json"; then dialog --title 'Safety plan rejected' --msgbox 'The proposed operation is not valid. Nothing was changed.' 8 66 || true; exit 1; fi
+review=$(jq -r '"Task: \(.action)\nStorage: \(.pool)\nTechnology: \(.backend) \(.layout)\nDisks: \((.devices|join(", ")) // "none")\n\n" + ((.warnings|join("\n")) // "No destructive disk write is planned.")' "$work/plan.json")
+dialog --title 'Final storage review' --yesno "$review\n\nContinue now?" 18 88 || cancelled
+if ! "$storage" apply "$work/request.json" > "$work/result.json"; then dialog --title 'Storage task incomplete' --msgbox 'The operation did not complete. Review storage health before retrying. Existing data was not reported as verified.' 9 74 || true; exit 1; fi
+jq -e '.schema==1 and .result=="completed" and .action==$action and .pool==$pool' --arg action "$action" --arg pool "$pool" "$work/result.json" >/dev/null || { printf 'error: storage executor returned an invalid completion result\n' >&2; exit 1; }
+dialog --title 'Storage task complete' --msgbox 'Bedrock completed the requested task. Current health and rebuild progress will appear in storage monitoring.' 9 72

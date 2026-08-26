@@ -1,0 +1,203 @@
+#!/bin/sh
+set -eu
+
+LC_ALL=C
+export LC_ALL
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+if [ "${BEDROCK_NAS_TEST_MODE:-0}" = 1 ]; then
+  [ "$#" -eq 3 ] || fail "usage: bedrock-nas plan|apply REQUEST.json STATE.json"
+  mode=$1 request=$2 state=$3
+  root=${BEDROCK_NAS_TEST_ROOT:?test mode requires BEDROCK_NAS_TEST_ROOT}
+  now=${BEDROCK_NAS_TEST_NOW:-0}
+  audit=${BEDROCK_NAS_TEST_AUDIT:?test mode requires BEDROCK_NAS_TEST_AUDIT}
+else
+  [ "$#" -eq 2 ] || fail "usage: bedrock-nas plan|apply REQUEST.json"
+  mode=$1 request=$2
+  state=/var/lib/bedrock/storage/nas.json
+  root=/
+  now=$(date +%s)
+  audit=/var/lib/bedrock/storage/nas-operations.jsonl
+fi
+[ "$mode" = plan ] || [ "$mode" = apply ] || fail "mode must be plan or apply"
+[ -s "$request" ] && [ ! -L "$request" ] || fail "request is missing, empty, or indirect"
+[ "$(wc -c < "$request" | tr -d ' ')" -le 1048576 ] || fail "request is too large"
+command -v jq >/dev/null 2>&1 || fail "jq is required"
+printf '%s' "$now" | grep -Eq '^[0-9]+$' || fail "operation timestamp is invalid"
+
+jq -e '
+  (keys | sort) == (["action","confirmation","name","pool","protocols","quota_bytes","read_only","recycle","schema","subject","time_machine"] | sort) and
+  .schema == 1 and
+  (.action == "create-user" or .action == "create-group" or .action == "add-member" or
+   .action == "rotate-credential" or .action == "create-dataset" or .action == "set-quota" or
+   .action == "create-share" or .action == "set-acl" or .action == "snapshot" or .action == "destroy-snapshot") and
+  (.name | type == "string" and test("^[a-z][a-z0-9_-]{0,31}$")) and
+  (.pool | type == "string" and (length == 0 or test("^[a-z][a-z0-9_-]{0,31}$"))) and
+  (.subject | type == "string" and (length == 0 or test("^[a-z][a-z0-9_-]{0,31}$"))) and
+  (.quota_bytes | type == "number" and floor == . and . >= 0 and . <= 9007199254740991) and
+  (.protocols | type == "array" and length <= 2 and all(.[]; . == "smb" or . == "nfs") and length == (unique | length)) and
+  (.read_only | type == "boolean") and (.recycle | type == "boolean") and (.time_machine | type == "boolean") and
+  (.confirmation | type == "string" and length <= 4096 and (test("[\\r\\n]") | not))
+' "$request" >/dev/null || fail "request schema is invalid"
+
+action=$(jq -r .action "$request") name=$(jq -r .name "$request") pool=$(jq -r .pool "$request")
+subject=$(jq -r .subject "$request") quota=$(jq -r .quota_bytes "$request")
+confirmation=$(jq -r .confirmation "$request")
+protocols=$(jq -r '.protocols | join(",")' "$request")
+read_only=$(jq -r .read_only "$request") recycle=$(jq -r .recycle "$request") time_machine=$(jq -r .time_machine "$request")
+
+case "$action" in
+  create-user) [ -z "$pool$subject$protocols" ] || fail "user request contains unrelated fields"; expected="CREATE USER — $name" ;;
+  create-group) [ -z "$pool$subject$protocols" ] || fail "group request contains unrelated fields"; expected="CREATE GROUP — $name" ;;
+  add-member) [ -z "$pool$protocols" ] && [ -n "$subject" ] || fail "membership requires a user subject"; expected="ADD MEMBER — $subject — $name" ;;
+  rotate-credential) [ -z "$pool$subject$protocols" ] || fail "credential request contains unrelated fields"; expected="ROTATE CREDENTIAL — $name" ;;
+  create-dataset) [ -n "$pool" ] && [ -z "$subject$protocols" ] || fail "dataset request requires only a pool"; expected="CREATE DATASET — $pool/$name" ;;
+  set-quota) [ -n "$pool" ] && [ -z "$subject$protocols" ] && [ "$quota" -gt 0 ] || fail "quota requires a pool and positive byte limit"; expected="SET QUOTA — $pool/$name — $quota" ;;
+  create-share)
+    [ -n "$pool$subject" ] && [ -n "$protocols" ] || fail "share requires a pool, access group, and protocol"
+    [ "$time_machine" = false ] || { [ "$protocols" = smb ] || fail "Time Machine shares must use SMB only"; [ "$read_only" = false ] || fail "Time Machine shares must be writable"; }
+    expected="CREATE SHARE — $pool/$name — $protocols — $subject"
+    ;;
+  set-acl) [ -n "$pool$subject" ] && [ -z "$protocols" ] || fail "ACL requires a pool and subject"; expected="SET ACL — $pool/$name — $subject" ;;
+  snapshot) [ -n "$pool" ] && [ -z "$subject$protocols" ] || fail "snapshot requires a pool"; expected="SNAPSHOT — $pool/$name" ;;
+  destroy-snapshot) [ -n "$pool" ] && [ -z "$subject$protocols" ] || fail "snapshot removal requires a pool"; expected="DESTROY SNAPSHOT — $pool/$name" ;;
+esac
+[ "$confirmation" = "$expected" ] || fail "confirmation must exactly match: $expected"
+destructive=false
+[ "$action" = destroy-snapshot ] && destructive=true
+plan=$(jq -S -n --argjson generated_unix "$now" --arg action "$action" --arg name "$name" --arg pool "$pool" \
+  --arg subject "$subject" --argjson quota_bytes "$quota" --argjson protocols "$(jq '.protocols' "$request")" \
+  --argjson read_only "$read_only" --argjson recycle "$recycle" --argjson time_machine "$time_machine" \
+  --arg confirmation "$confirmation" --argjson destructive "$destructive" '
+  {schema:1,generated_unix:$generated_unix,action:$action,name:$name,pool:$pool,subject:$subject,
+   quota_bytes:$quota_bytes,protocols:$protocols,read_only:$read_only,recycle:$recycle,time_machine:$time_machine,
+   confirmation:$confirmation,destructive:$destructive,requires_root:true,requires_exclusive_lock:true,
+   secret_transport:(if $action == "rotate-credential" then "root-readable password file; never JSON, arguments, state, or audit" else null end),
+   ready_for_execution:true}')
+[ "$mode" = apply ] || { printf '%s\n' "$plan"; exit 0; }
+[ "${BEDROCK_NAS_TEST_MODE:-0}" = 1 ] || [ "$(id -u)" -eq 0 ] || fail "applying NAS changes requires root"
+
+directory=$(dirname -- "$state")
+mkdir -p "$directory" "$(dirname -- "$audit")"
+lock=$directory/.nas-operation.lock
+mkdir "$lock" 2>/dev/null || fail "another NAS operation is already running"
+temporary=
+secret_copy=
+cleanup() {
+  [ -z "$temporary" ] || rm -f "$temporary"
+  [ -z "$secret_copy" ] || rm -f "$secret_copy"
+  rmdir "$lock" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+if [ -e "$state" ]; then
+  [ -s "$state" ] && [ ! -L "$state" ] || fail "NAS state is empty or indirect"
+else
+  printf '%s\n' '{"schema":1,"users":[],"groups":[],"datasets":[],"shares":[],"snapshots":[]}' > "$state"
+fi
+jq -e '.schema == 1 and (.users|type=="array") and (.groups|type=="array") and (.datasets|type=="array") and (.shares|type=="array") and (.snapshots|type=="array") and
+  ([.users[].name]|length==(unique|length)) and ([.groups[].name]|length==(unique|length)) and
+  ([.datasets[]|(.pool+"/"+.name)]|length==(unique|length)) and ([.shares[].name]|length==(unique|length)) and
+  ([.snapshots[]|(.pool+"/"+.name)]|length==(unique|length))' "$state" >/dev/null || fail "NAS state is invalid"
+
+user_exists=$(jq --arg n "$name" '[.users[]|select(.name==$n)]|length' "$state")
+group_exists=$(jq --arg n "$name" '[.groups[]|select(.name==$n)]|length' "$state")
+dataset_exists=$(jq --arg p "$pool" --arg n "$name" '[.datasets[]|select(.pool==$p and .name==$n)]|length' "$state")
+subject_user=$(jq --arg n "$subject" '[.users[]|select(.name==$n)]|length' "$state")
+subject_group=$(jq --arg n "$subject" '[.groups[]|select(.name==$n)]|length' "$state")
+case "$action" in
+  create-user) [ "$user_exists" -eq 0 ] && [ "$group_exists" -eq 0 ] || fail "user already exists" ;;
+  create-group) [ "$group_exists" -eq 0 ] && [ "$user_exists" -eq 0 ] || fail "group already exists" ;;
+  add-member) [ "$group_exists" -eq 1 ] && [ "$subject_user" -eq 1 ] || fail "membership user or group is missing" ;;
+  rotate-credential)
+    [ "$user_exists" -eq 1 ] || fail "credential user is missing"
+    secret=${BEDROCK_NAS_PASSWORD_FILE:-}
+    [ -n "$secret" ] && [ -s "$secret" ] && [ ! -L "$secret" ] || fail "a direct non-empty password file is required"
+    [ "$(wc -c < "$secret" | tr -d ' ')" -le 1024 ] || fail "password file is too large"
+    secret_copy=$(mktemp "$directory/.credential.XXXXXX")
+    chmod 0600 "$secret_copy"
+    cp "$secret" "$secret_copy"
+    [ "$(wc -l < "$secret_copy" | tr -d ' ')" -eq 1 ] || fail "password must be one line"
+    [ "$(wc -c < "$secret_copy" | tr -d ' ')" -ge 13 ] || fail "password must contain at least twelve characters"
+    ;;
+  create-dataset) [ "$dataset_exists" -eq 0 ] || fail "dataset already exists" ;;
+  set-quota|set-acl) [ "$dataset_exists" -eq 1 ] || fail "dataset is missing" ;;
+  create-share)
+    [ "$dataset_exists" -eq 1 ] || fail "dataset is missing"
+    [ "$(jq --arg n "$name" '[.shares[]|select(.name==$n)]|length' "$state")" -eq 0 ] || fail "share already exists"
+    if [ "$time_machine" = true ]; then
+      jq -e --arg p "$pool" --arg n "$name" 'any(.datasets[]; .pool==$p and .name==$n and (.quota_bytes|type=="number") and .quota_bytes>0)' "$state" >/dev/null || fail "Time Machine shares require a dataset quota"
+    fi
+    ;;
+  snapshot)
+    [ "$dataset_exists" -eq 1 ] || fail "dataset is missing"
+    [ "$(jq --arg p "$pool" --arg n "$name" '[.snapshots[]|select(.pool==$p and .name==$n)]|length' "$state")" -eq 0 ] || fail "a manual snapshot already exists"
+    ;;
+  destroy-snapshot)
+    [ "$(jq --arg p "$pool" --arg n "$name" '[.snapshots[]|select(.pool==$p and .name==$n)]|length' "$state")" -eq 1 ] || fail "snapshot is missing"
+    ;;
+esac
+[ "$action" != create-share ] || [ "$subject_group" -eq 1 ] || fail "share access group is missing"
+[ "$action" != set-acl ] || { [ "$subject_user" -eq 1 ] || [ "$subject_group" -eq 1 ]; } || fail "ACL subject is missing"
+
+path="/srv/bedrock/pools/$pool/$name"
+if [ "${BEDROCK_NAS_TEST_MODE:-0}" != 1 ]; then
+  case "$action" in
+    create-user) useradd --no-create-home --shell /usr/sbin/nologin -- "$name" ;;
+    create-group) groupadd -- "$name" ;;
+    add-member) usermod -a -G "$name" -- "$subject" ;;
+    rotate-credential)
+      { cat "$secret_copy"; cat "$secret_copy"; } | smbpasswd -s -a "$name" >/dev/null
+      ;;
+    create-dataset)
+      if zpool list -H -o name -- "$pool" >/dev/null 2>&1; then
+        zfs create -o "mountpoint=$path" -o compression=zstd -o atime=off -- "$pool/$name"
+      else
+        install -d -m 0770 -- "$path"
+      fi
+      ;;
+    set-quota)
+      if zfs list -H -o name -- "$pool/$name" >/dev/null 2>&1; then zfs set "quota=$quota" -- "$pool/$name"; else fail "quotas on Linux RAID require a quota-enabled filesystem"; fi
+      ;;
+    set-acl) setfacl -m "g:$subject:rwx" -m "d:g:$subject:rwx" -- "$path" ;;
+    create-share)
+      : # Service configuration is rendered atomically from committed state below.
+      ;;
+    snapshot) zfs snapshot -- "$pool/$name@manual-$now" ;;
+    destroy-snapshot)
+      snapshot_tag=$(jq -r --arg p "$pool" --arg n "$name" '.snapshots[]|select(.pool==$p and .name==$n)|.snapshot' "$state")
+      printf '%s' "$snapshot_tag" | grep -Eq '^manual-[0-9]+$' || fail "snapshot state is unsafe"
+      zfs destroy -- "$pool/$name@$snapshot_tag"
+      ;;
+  esac
+fi
+
+temporary=$(mktemp "$directory/.nas.XXXXXX")
+jq -S --arg action "$action" --arg name "$name" --arg pool "$pool" --arg subject "$subject" --arg path "$path" \
+  --argjson now "$now" --argjson quota "$quota" --argjson protocols "$(jq '.protocols' "$request")" \
+  --argjson read_only "$read_only" --argjson recycle "$recycle" --argjson time_machine "$time_machine" '
+  if $action == "create-user" then .users += [{name:$name,credential_generation:0,created_unix:$now}]
+  elif $action == "create-group" then .groups += [{name:$name,members:[],created_unix:$now}]
+  elif $action == "add-member" then .groups |= map(if .name==$name then .members=([.members[],$subject]|unique) else . end)
+  elif $action == "rotate-credential" then .users |= map(if .name==$name then .credential_generation+=1 | .credential_rotated_unix=$now else . end)
+  elif $action == "create-dataset" then .datasets += [{pool:$pool,name:$name,path:$path,quota_bytes:null,acl_subjects:[],created_unix:$now}]
+  elif $action == "set-quota" then .datasets |= map(if .pool==$pool and .name==$name then .quota_bytes=$quota else . end)
+  elif $action == "set-acl" then .datasets |= map(if .pool==$pool and .name==$name then .acl_subjects=([.acl_subjects[],$subject]|unique) else . end)
+  elif $action == "create-share" then .shares += [{pool:$pool,name:$name,path:$path,access_group:$subject,protocols:$protocols,read_only:$read_only,recycle:$recycle,time_machine:$time_machine,created_unix:$now}]
+  elif $action == "snapshot" then .snapshots += [{pool:$pool,name:$name,snapshot:("manual-"+($now|tostring)),created_unix:$now,integrity:"pending-scrub"}]
+  elif $action == "destroy-snapshot" then .snapshots |= map(select(.pool!=$pool or .name!=$name))
+  else . end
+' "$state" > "$temporary"
+chmod 0600 "$temporary" && mv "$temporary" "$state" && temporary=
+[ -z "$secret_copy" ] || { rm -f "$secret_copy"; secret_copy=; }
+jq -c -n --argjson occurred_unix "$now" --arg action "$action" --arg resource "${pool:+$pool/}$name" \
+  '{schema:1,occurred_unix:$occurred_unix,action:$action,resource:$resource,result:"completed",secret_recorded:false}' >> "$audit"
+chmod 0600 "$audit"
+if [ "$action" = create-share ] && [ "${BEDROCK_NAS_TEST_MODE:-0}" != 1 ]; then
+  /usr/lib/bedrock/render-nas-services
+  systemctl reload-or-restart smbd
+  jq -r '.[] | [.client,.path,.options] | @tsv' /var/lib/bedrock/storage/services/nfs-exports.json |
+  while IFS="$(printf '\t')" read -r client export_path options; do exportfs -i -o "$options" "$client:$export_path"; done
+fi
+jq -S -n --argjson completed_unix "$now" --arg action "$action" --arg resource "${pool:+$pool/}$name" \
+  '{schema:1,completed_unix:$completed_unix,action:$action,resource:$resource,result:"completed"}'
