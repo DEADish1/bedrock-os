@@ -48,6 +48,7 @@ CI runs two clean ISO replicas and `scripts/compare-reproducible-builds.sh` requ
 - `config/includes.chroot/usr/lib/bedrock/mark-boot-healthy`: validates persistent state, records the healthy slot, and tells systemd-boot to bless it.
 - `tests/test-uefi-boot.sh`: boots the raw image with OVMF/QEMU and requires an exact healthy-slot serial marker.
 - `tests/validate-boot-test-report.sh`: validates privacy-safe acceptance evidence from VMware, Hyper-V, and physical Intel/AMD systems.
+- `config/includes.chroot/usr/sbin/bedrock-boot-acceptance`: prepares and completes a privacy-safe report only after the exact VMware/Hyper-V/physical DMI, UEFI/Secure Boot state, complete hardware inventory, healthy marker, and a second distinct healthy boot are observed.
 - `tests/test-ab-rollback.sh`: fails either slot on a disposable image, verifies all three counted attempts, and requires automatic recovery into the other healthy slot.
 - `tests/test-update-install.sh`: verifies both a healthy signed update and a correctly signed but unbootable update, including automatic recovery to the previous slot.
 - `scripts/create-update-bundle.sh`: creates a canonical manifest for the four inactive-slot artifacts and signs it with the protected update key.

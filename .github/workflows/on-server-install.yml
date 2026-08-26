@@ -14,6 +14,9 @@ on:
       - "os/tests/test-install-acceptance-report.sh"
       - "os/tests/validate-install-acceptance-report.sh"
       - "os/tests/test-0.2-0.3-acceptance.sh"
+      - "os/tests/test-boot-acceptance-capture.sh"
+      - "os/tests/validate-boot-test-report.sh"
+      - "os/config/includes.chroot/usr/sbin/bedrock-boot-acceptance"
       - "os/tests/validate-0.2-0.3-acceptance.sh"
       - "installer/acceptance/validate-real-device-report.sh"
       - "os/tests/test-protected-system-writer.sh"
@@ -39,6 +42,7 @@ jobs:
           sh os/tests/test-guided-install.sh
           sh os/tests/test-install-acceptance-report.sh
           sh os/tests/test-0.2-0.3-acceptance.sh
+          sh os/tests/test-boot-acceptance-capture.sh
           sh os/tests/test-install-image-simulator.sh
           sh os/tests/test-protected-install-request.sh
           sh os/tests/test-protected-system-writer.sh

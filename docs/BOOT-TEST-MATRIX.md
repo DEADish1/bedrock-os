@@ -17,13 +17,27 @@ The final 0.2 release gate requires the same signed amd64 image to boot on every
 3. Boot the image and wait for `BEDROCK_BOOT_HEALTHY slot=A` on the serial console or diagnostics view.
 4. Confirm `/var/lib/bedrock/hardware/inventory.json` exists and contains CPU, memory, disk, and network records.
 5. Reboot without changing the disk and confirm the system remains healthy and persistent state is retained.
-6. Copy `os/tests/boot-test-report.example.json`, change `mode` to `physical`, enter the observed values, record `generation-2` only for Hyper-V, and run:
+6. On the first healthy boot, prepare the on-image collector with the verified artifact hash and exact platform:
+
+   ```sh
+   sudo bedrock-boot-acceptance prepare vmware IMAGE_SHA256
+   ```
+
+   Use `hyper-v` or `physical` for the other rows. The collector rejects mismatched VMware/Hyper-V DMI, virtual hardware presented as physical, incomplete inventory, non-UEFI boot, and a stale health marker.
+7. Reboot the same Bedrock disk. After the next healthy boot, create the report:
+
+   ```sh
+   sudo bedrock-boot-acceptance complete path/to/report.json
+   ```
+
+   Completion requires a different kernel boot ID and a healthy marker belonging to the second boot. The generated report contains only the schema allowlist and no host, user, network-address, or hardware-serial identifiers.
+8. Validate the generated report from the source checkout:
 
    ```sh
    sh ./os/tests/validate-boot-test-report.sh path/to/report.json
    ```
 
-The validator rejects fixture-mode reports during normal acceptance. Do not add serial numbers, MAC addresses, public IP addresses, usernames, hostnames, notes, or other personal data to reports committed to GitHub.
+The validator rejects fixture-mode reports during normal acceptance. Do not add serial numbers, MAC addresses, public IP addresses, usernames, hostnames, notes, or other personal data to reports committed to GitHub. The image hash remains a tester-supplied observation: compare it with the downloaded artifact before `prepare`; the collector cannot derive the hash of the enclosing ISO from a running installed system.
 
 ## Completion rule
 

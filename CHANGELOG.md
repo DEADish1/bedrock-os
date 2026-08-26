@@ -17,6 +17,11 @@ This file records completed work, decisions, validation, and the next starting p
 - Passed [Storage and NAS acceptance run #1](https://github.com/DEADish1/bedrock-os/actions/runs/33016715779): the real disposable OpenZFS/Linux RAID recovery job and every protected/guided storage and NAS contract completed without skips.
 - Marked all ten v0.4 storage and NAS checklist items complete. Physical controller qualification remains model-specific, and abrupt-power hardware soak remains part of the v0.9 release-candidate gate.
 
+### Physical acceptance preparation
+
+- Added an on-image two-boot collector for VMware, Hyper-V Generation 2, physical Intel, and physical AMD acceptance. It verifies UEFI and Secure Boot state, exact platform DMI, x86-64 CPU/memory/disk/network inventory, a healthy marker tied to the running kernel boot ID, and a different healthy boot before emitting schema-2 evidence.
+- Generated boot reports contain only the strict privacy-safe allowlist. The collector rejects virtual DMI presented as physical hardware, wrong VMware/Hyper-V identity, incomplete inventory, stale health state, missing UEFI variables, reuse without reboot, and indirect output paths.
+
 ### Desktop installer packaging
 
 - Added a Tauri 2 desktop packaging shell for the shared Windows, macOS, and Linux installer interface.
@@ -87,6 +92,7 @@ This file records completed work, decisions, validation, and the next starting p
 ### Next starting point
 
 - Boot-test the v0.2 image on physical Intel and AMD systems and the remaining common VM platforms.
+- Use `bedrock-boot-acceptance prepare` and `complete` during each of those sessions so the report is generated from two observed healthy boots rather than hand-authored JSON.
 - Build the updated image and perform the local-console first-run acceptance run, including one forced network failure followed by a successful retry.
 - Run the guarded writer on an explicitly approved disposable USB drive, boot it, and archive privacy-safe evidence; then repeat the protected on-server install on an approved disposable system disk.
 - Require the new disposable Linux storage acceptance job to pass, then archive model-specific physical hardware RAID evidence as supported controllers are qualified.
