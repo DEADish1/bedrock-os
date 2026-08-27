@@ -30,6 +30,23 @@ Replace `vmware` with `hyper-v` or `physical` for the matching session. Then com
 
 This note does not authorize writing to any physical disk. At test time, the operator must separately identify and explicitly approve each exact disposable target containing no needed data.
 
+### Prepare the evidence folder
+
+After the desktop installer has verified the downloaded image signature and checksum, bind a new evidence folder to that exact file:
+
+```sh
+sh os/scripts/bedrock-acceptance-workspace.sh init \
+  path/to/verified-bedrock.iso evidence/0.2-0.3
+```
+
+The helper calculates and stores the image SHA-256, prints the six required filenames, and does not open or write any disk. Reusing the folder with a different image is rejected. As reports are collected, check the remaining work with:
+
+```sh
+sh os/scripts/bedrock-acceptance-workspace.sh status evidence/0.2-0.3
+```
+
+The status command validates every report that is present, labels missing or invalid roles, and runs the complete release gate only when all six distinct reports match the folder's image SHA-256.
+
 ## One-command release gate
 
 After each individual report passes its documented validator, run the complete bundle check from the repository root:
