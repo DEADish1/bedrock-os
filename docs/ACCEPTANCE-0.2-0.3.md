@@ -15,6 +15,21 @@ Keep six separate, privacy-reviewed JSON reports:
 
 Use the procedures and example reports in `docs/BOOT-TEST-MATRIX.md`, `docs/INSTALLER-REAL-DEVICE-ACCEPTANCE.md`, and `docs/ON-SERVER-INSTALL.md`. Never include serial numbers, MAC addresses, IP addresses, usernames, hostnames, or free-form notes.
 
+## Deferred desktop acceptance — 2026-08-26
+
+The project owner intentionally deferred these six hardware acceptance sessions to a later desktop session. This is a scheduling note, not acceptance evidence: v0.2 remains at seven of eight requirements and v0.3 remains at six of eight requirements until all six reports above pass the final bundle check.
+
+Resume with one exact verified signed amd64 image and use its SHA-256 for every report. For each VMware, Hyper-V, physical Intel, and physical AMD session, run the following on the first healthy boot, reboot the same installed disk, and complete the report on the second healthy boot:
+
+```sh
+sudo bedrock-boot-acceptance prepare vmware IMAGE_SHA256
+sudo bedrock-boot-acceptance complete path/to/report.json
+```
+
+Replace `vmware` with `hyper-v` or `physical` for the matching session. Then complete the approved disposable USB and disposable internal system-disk sessions and run the one-command release gate below with all six reports.
+
+This note does not authorize writing to any physical disk. At test time, the operator must separately identify and explicitly approve each exact disposable target containing no needed data.
+
 ## One-command release gate
 
 After each individual report passes its documented validator, run the complete bundle check from the repository root:

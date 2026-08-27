@@ -91,6 +91,8 @@ This file records completed work, decisions, validation, and the next starting p
 
 ### Next starting point
 
+- Hardware acceptance was intentionally deferred on 2026-08-26 for a later desktop session. Keep v0.2 at seven of eight and v0.3 at six of eight until the six reports in `docs/ACCEPTANCE-0.2-0.3.md` pass together for one exact signed image SHA-256.
+- No physical disk was authorized by the deferral. Explicitly identify and approve each disposable USB or internal target at the time of testing before any write begins.
 - Boot-test the v0.2 image on physical Intel and AMD systems and the remaining common VM platforms.
 - Use `bedrock-boot-acceptance prepare` and `complete` during each of those sessions so the report is generated from two observed healthy boots rather than hand-authored JSON.
 - Build the updated image and perform the local-console first-run acceptance run, including one forced network failure followed by a successful retry.
