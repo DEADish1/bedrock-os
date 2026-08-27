@@ -1,0 +1,191 @@
+#!/bin/sh
+set -eu
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+LC_ALL=C
+export PATH LC_ALL
+[ "$#" -eq 2 ] || { printf 'usage: %s INVENTORY.json REQUEST.json\n' "$0" >&2; exit 2; }
+inventory_source=$1
+request_source=$2
+for tool in cp grep jq mktemp tr wc; do
+  command -v "$tool" >/dev/null 2>&1 || { printf 'error: storage planning requires %s\n' "$tool" >&2; exit 2; }
+done
+for input in "$inventory_source" "$request_source"; do
+  [ -f "$input" ] && [ -s "$input" ] && [ ! -L "$input" ] || { printf 'error: storage planning input is missing or indirect\n' >&2; exit 1; }
+  [ "$(wc -c < "$input" | tr -d ' ')" -le 1048576 ] || { printf 'error: storage planning input is too large\n' >&2; exit 1; }
+done
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT INT TERM
+cp "$inventory_source" "$work/inventory.json"
+cp "$request_source" "$work/request.json"
+inventory=$work/inventory.json
+request=$work/request.json
+if [ "${BEDROCK_STORAGE_PLAN_TEST_MODE:-0}" = 1 ]; then
+  generated_unix=${BEDROCK_STORAGE_PLAN_TEST_NOW:-0}
+else
+  generated_unix=$(date +%s)
+fi
+printf '%s' "$generated_unix" | grep -Eq '^[0-9]+$' || { printf 'error: storage plan timestamp is invalid\n' >&2; exit 1; }
+
+jq -e '
+  (keys | sort) == (["disks","generated_unix","schema"] | sort) and
+  .schema == 1 and (.generated_unix | type == "number" and floor == . and . >= 0) and
+  (.disks | type == "array" and length <= 256) and
+  ([.disks[].id] | length == (unique | length)) and
+  ([.disks[].path] | length == (unique | length)) and
+  all(.disks[];
+    (keys | sort) == (["hardware_raid_logical","health","id","in_use","logical_sector_bytes","model","mounted","path","read_only","removable","size_bytes","system"] | sort) and
+    (.id | type == "string" and test("^[A-Za-z0-9._:-]{1,128}$")) and
+    (.path | type == "string" and test("^/dev/[A-Za-z0-9._/-]+$") and (test("(^|/)\\.\\.(/|$)") | not) and length <= 128) and
+    (.model | type == "string" and length > 0 and length <= 256 and (test("[\\r\\n]") | not)) and
+    (.size_bytes | type == "number" and floor == . and . > 0 and . <= 9007199254740991) and
+    (.logical_sector_bytes | type == "number" and floor == . and (. == 512 or . == 4096)) and
+    (.system | type == "boolean") and (.removable | type == "boolean") and
+    (.mounted | type == "boolean") and (.read_only | type == "boolean") and
+    (.in_use | type == "boolean") and (.hardware_raid_logical | type == "boolean") and
+    (.health == "healthy" or .health == "failing" or .health == "unknown"))
+' "$inventory" >/dev/null || { printf 'error: storage inventory schema is invalid\n' >&2; exit 1; }
+
+jq -e '
+  (keys | sort) == (["advanced_hardware_raid_ack","backend","confirmation","disk_ids","layout","name","schema"] | sort) and
+  .schema == 1 and (.name | type == "string" and test("^[a-z][a-z0-9_-]{0,31}$")) and
+  (.backend == "zfs" or .backend == "mdraid") and
+  (.layout | type == "string") and
+  (.disk_ids | type == "array" and length >= 2 and length <= 24) and
+  all(.disk_ids[]; type == "string" and test("^[A-Za-z0-9._:-]{1,128}$")) and
+  (.disk_ids | length == (unique | length)) and
+  (.confirmation | type == "string" and length <= 4096 and (test("[\\r\\n]") | not)) and
+  (.advanced_hardware_raid_ack | type == "boolean")
+' "$request" >/dev/null || { printf 'error: storage plan request schema is invalid\n' >&2; exit 1; }
+
+name=$(jq -r .name "$request")
+backend=$(jq -r .backend "$request")
+layout=$(jq -r .layout "$request")
+confirmation=$(jq -r .confirmation "$request")
+advanced_ack=$(jq -r .advanced_hardware_raid_ack "$request")
+count=$(jq '.disk_ids | length' "$request")
+
+case "$backend:$layout" in
+  zfs:mirror)
+    [ "$count" -ge 2 ] && [ "$count" -le 3 ] || { printf 'error: a ZFS mirror requires two or three disks\n' >&2; exit 1; }
+    data_disks=1
+    tolerated_failures=$((count - 1))
+    resilience="Every disk contains a complete copy; the pool survives until the final mirror member is lost."
+    ;;
+  zfs:raidz1)
+    [ "$count" -ge 3 ] || { printf 'error: RAID-Z1 requires at least three disks\n' >&2; exit 1; }
+    data_disks=$((count - 1))
+    tolerated_failures=1
+    resilience="RAID-Z1 tolerates one failed disk; a second failure before recovery loses the pool."
+    ;;
+  zfs:raidz2)
+    [ "$count" -ge 4 ] || { printf 'error: RAID-Z2 requires at least four disks\n' >&2; exit 1; }
+    data_disks=$((count - 2))
+    tolerated_failures=2
+    resilience="RAID-Z2 tolerates up to two failed disks."
+    ;;
+  mdraid:raid1)
+    data_disks=1
+    tolerated_failures=$((count - 1))
+    resilience="Every member contains a complete copy; the array survives until the final member is lost."
+    ;;
+  mdraid:raid5)
+    [ "$count" -ge 3 ] || { printf 'error: Linux RAID 5 requires at least three disks\n' >&2; exit 1; }
+    data_disks=$((count - 1))
+    tolerated_failures=1
+    resilience="RAID 5 tolerates one failed disk; a second failure before recovery loses the array."
+    ;;
+  mdraid:raid6)
+    [ "$count" -ge 4 ] || { printf 'error: Linux RAID 6 requires at least four disks\n' >&2; exit 1; }
+    data_disks=$((count - 2))
+    tolerated_failures=2
+    resilience="RAID 6 tolerates up to two failed disks."
+    ;;
+  mdraid:raid10)
+    [ "$count" -ge 4 ] && [ $((count % 2)) -eq 0 ] || { printf 'error: Linux RAID 10 requires an even number of at least four disks\n' >&2; exit 1; }
+    data_disks=$((count / 2))
+    tolerated_failures=1
+    resilience="RAID 10 always tolerates at least one failed disk; additional tolerance depends on which mirror pairs fail."
+    ;;
+  *) printf 'error: unsupported storage backend or layout\n' >&2; exit 1 ;;
+esac
+
+jq -n --slurpfile inventory "$inventory" --slurpfile request "$request" '
+  $request[0].disk_ids as $ids |
+  [$ids[] as $id | $inventory[0].disks[] | select(.id == $id)]
+' > "$work/selected.json"
+selected=$work/selected.json
+selected_count=$(jq 'length' "$selected")
+[ "$selected_count" -eq "$count" ] || { printf 'error: a selected disk is missing from inventory\n' >&2; exit 1; }
+jq -e '
+  all(.[];
+    .system == false and .removable == false and .mounted == false and .read_only == false and
+    .in_use == false and .size_bytes >= 68719476736 and
+    ((.hardware_raid_logical == false and .health == "healthy") or
+     (.hardware_raid_logical == true and .health == "unknown")))
+' "$selected" >/dev/null || {
+  printf 'error: selected storage disks must be eligible, unused, writable, non-system, non-removable, and at least 64 GiB\n' >&2
+  exit 1
+}
+sector_count=$(jq '[.[].logical_sector_bytes] | unique | length' "$selected")
+[ "$sector_count" -eq 1 ] || { printf 'error: selected disks use incompatible logical sector sizes\n' >&2; exit 1; }
+hardware_count=$(jq '[.[] | select(.hardware_raid_logical == true)] | length' "$selected")
+if [ "$hardware_count" -gt 0 ] && [ "$hardware_count" -ne "$count" ]; then
+  printf 'error: direct disks and hardware RAID logical volumes cannot be mixed\n' >&2
+  exit 1
+fi
+if [ "$backend" = mdraid ] && [ "$hardware_count" -gt 0 ]; then
+  printf 'error: stacking Linux software RAID on hardware RAID logical volumes is not supported\n' >&2
+  exit 1
+fi
+if [ "$backend" = zfs ] && [ "$hardware_count" -gt 0 ] && [ "$advanced_ack" != true ]; then
+  printf 'error: ZFS on hardware RAID requires the advanced limited-visibility acknowledgement\n' >&2
+  exit 1
+fi
+
+paths=$(jq -r '[.[].path] | join(", ")' "$selected")
+expected=$(jq -nr --arg name "$name" --arg backend "$backend" --arg layout "$layout" --arg paths "$paths" \
+  '"REVIEW ERASE — " + $name + " — " + $backend + " " + $layout + " — " + $paths')
+[ "$confirmation" = "$expected" ] || { printf 'error: confirmation must exactly name the proposed pool and every selected disk\n' >&2; exit 1; }
+
+minimum_size=$(jq '[.[].size_bytes] | min' "$selected")
+maximum_size=$(jq '[.[].size_bytes] | max' "$selected")
+total_size=$(jq '[.[].size_bytes] | add' "$selected")
+estimated_usable=$((minimum_size * data_disks))
+unused_due_to_size=$((total_size - (minimum_size * count)))
+logical_sector_bytes=$(jq '.[0].logical_sector_bytes' "$selected")
+warnings='["Creating this storage would permanently erase every selected disk. Backups must exist before execution is ever enabled."]'
+if [ "$unused_due_to_size" -gt 0 ]; then
+  warnings=$(printf '%s' "$warnings" | jq -c --argjson bytes "$unused_due_to_size" \
+    '. + [(($bytes | tostring) + " bytes would be unavailable because protected layouts use the smallest selected disk as the capacity limit.")]')
+fi
+if [ "$hardware_count" -gt 0 ]; then
+  warnings=$(printf '%s' "$warnings" | jq -c \
+    '. + ["Hardware RAID hides physical-member error and recovery details from ZFS. Bedrock cannot claim end-to-end member health."]')
+fi
+if [ "$backend:$layout" = mdraid:raid10 ]; then
+  warnings=$(printf '%s' "$warnings" | jq -c \
+    '. + ["RAID 10 failure tolerance depends on which mirror pairs lose members; two failures are not always survivable."]')
+fi
+
+jq -S -n --argjson generated_unix "$generated_unix" --arg name "$name" --arg backend "$backend" \
+  --arg layout "$layout" --arg confirmation "$confirmation" --arg resilience "$resilience" \
+  --slurpfile selected_disks "$selected" --argjson count "$count" \
+  --argjson minimum_size "$minimum_size" --argjson maximum_size "$maximum_size" \
+  --argjson estimated_usable "$estimated_usable" --argjson unused_due_to_size "$unused_due_to_size" \
+  --argjson logical_sector_bytes "$logical_sector_bytes" --argjson tolerated_failures "$tolerated_failures" \
+  --argjson hardware_raid_logical "$([ "$hardware_count" -gt 0 ] && printf true || printf false)" \
+  --argjson warnings "$warnings" '
+  {schema:1,operation:"review-storage-creation",generated_unix:$generated_unix,
+   name:$name,backend:$backend,layout:$layout,
+   selected_disks:($selected_disks[0] | map({id,path,model,size_bytes,logical_sector_bytes,hardware_raid_logical})),
+   disk_count:$count,capacity:{smallest_disk_bytes:$minimum_size,largest_disk_bytes:$maximum_size,
+     estimated_usable_bytes:$estimated_usable,unused_due_to_size_difference_bytes:$unused_due_to_size},
+   resilience:{minimum_tolerated_failures:$tolerated_failures,explanation:$resilience},
+   hardware_raid_logical:$hardware_raid_logical,logical_sector_bytes:$logical_sector_bytes,
+   confirmation:$confirmation,warnings:$warnings,
+   destructive:true,preserve_existing_data:false,requires_fresh_inventory:true,
+   requires_exclusive_whole_disks:true,review_only:true,execution_material_present:false,
+   ready_for_execution:false,
+   blocked_reason:"Review-only plan. No storage command, authorization token, or disk-writing path is present."}
+'

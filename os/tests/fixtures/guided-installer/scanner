@@ -1,0 +1,3 @@
+#!/bin/sh
+set -eu
+cat "${BEDROCK_TEST_INSTALL_INVENTORY:?scanner fixture requires BEDROCK_TEST_INSTALL_INVENTORY}"

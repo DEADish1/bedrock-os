@@ -1,0 +1,28 @@
+#!/bin/sh
+set -eu
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+LC_ALL=C
+export PATH LC_ALL
+[ "$(id -u)" -eq 0 ] || { printf 'error: storage activation requires root\n' >&2; exit 1; }
+state=/var/lib/bedrock/storage/resources.json
+[ -e "$state" ] || exit 0
+[ -s "$state" ] && [ ! -L "$state" ] || { printf 'error: storage state is empty or indirect\n' >&2; exit 1; }
+jq -e '.schema==1 and (.pools|type=="array") and all(.pools[]; (.name|test("^[a-z][a-z0-9_-]{0,31}$")) and (.backend=="zfs" or .backend=="mdraid") and (.state|type=="string"))' "$state" >/dev/null || {
+  printf 'error: storage state is invalid\n' >&2; exit 1;
+}
+if jq -e 'any(.pools[]; .backend=="mdraid" and .state!="exported")' "$state" >/dev/null; then
+  mdadm --assemble --scan || true
+fi
+jq -r '.pools[] | select(.backend=="mdraid" and .state!="exported") | .name' "$state" | while IFS= read -r name; do
+  path="/srv/bedrock/pools/$name"
+  mkdir -p "$path"
+  if ! mountpoint -q "$path"; then mount "/dev/md/$name" "$path"; fi
+done
+if [ -s /var/lib/bedrock/storage/nas.json ]; then
+  /usr/lib/bedrock/render-nas-services
+  if command -v exportfs >/dev/null 2>&1; then
+    jq -r '.[] | [.client,.path,.options] | @tsv' /var/lib/bedrock/storage/services/nfs-exports.json |
+    while IFS="$(printf '\t')" read -r client export_path options; do exportfs -i -o "$options" "$client:$export_path"; done
+  fi
+fi

@@ -1,0 +1,116 @@
+#!/bin/sh
+set -eu
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+LC_ALL=C
+export PATH LC_ALL
+[ "$#" -le 1 ] && { [ "$#" -eq 0 ] || [ "$1" = --manual ]; } || {
+  printf 'usage: %s [--manual]\n' "$0" >&2
+  exit 2
+}
+manual=false
+[ "$#" -eq 0 ] || manual=true
+
+if [ "${BEDROCK_UPDATE_TEST_MODE:-0}" = 1 ]; then
+  policy=${BEDROCK_UPDATE_POLICY_FILE:?test mode requires BEDROCK_UPDATE_POLICY_FILE}
+  default_policy=${BEDROCK_UPDATE_DEFAULT_POLICY:?test mode requires BEDROCK_UPDATE_DEFAULT_POLICY}
+  state_dir=${BEDROCK_UPDATE_STATE_DIR:?test mode requires BEDROCK_UPDATE_STATE_DIR}
+  cert=${BEDROCK_UPDATE_CERT:?test mode requires BEDROCK_UPDATE_CERT}
+  now=${BEDROCK_TEST_NOW:-0}
+  source_dir=${BEDROCK_UPDATE_SOURCE_DIR:-}
+else
+  policy=/var/lib/bedrock/settings/update-policy.json
+  default_policy=/usr/share/bedrock/default-update-policy.json
+  state_dir=/var/lib/bedrock/update
+  cert=/usr/share/bedrock/update-ca.crt
+  now=$(date +%s)
+  source_dir=
+fi
+
+for tool in curl jq openssl; do
+  command -v "$tool" >/dev/null 2>&1 || { printf 'error: update checks require %s\n' "$tool" >&2; exit 2; }
+done
+selected_policy=$policy
+[ -s "$selected_policy" ] || selected_policy=$default_policy
+[ -f "$selected_policy" ] && [ ! -L "$selected_policy" ] || {
+  printf 'error: update policy is missing or indirect\n' >&2
+  exit 1
+}
+jq -e '
+  (keys | sort) == (["automatic_checks","channel","endpoint","schema","setup_choice_recorded"] | sort) and
+  .schema == 1 and (.automatic_checks | type == "boolean") and
+  (.setup_choice_recorded | type == "boolean") and .channel == "stable" and
+  (.endpoint | type == "string" and test("^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._/-]*)?$"))
+' "$selected_policy" >/dev/null || { printf 'error: update policy is invalid\n' >&2; exit 1; }
+
+automatic=$(jq -r .automatic_checks "$selected_policy")
+if [ "$manual" = false ] && [ "$automatic" = false ]; then
+  jq -n -c '{schema:1,status:"disabled",automatic_checks:false,network_contacted:false}'
+  exit 0
+fi
+
+if [ "${BEDROCK_UPDATE_TEST_MODE:-0}" != 1 ]; then
+  [ "$(id -u)" -eq 0 ] || { printf 'error: checking for Bedrock updates requires root\n' >&2; exit 1; }
+fi
+[ -s "$cert" ] && [ ! -L "$cert" ] || { printf 'error: trusted update certificate is missing or indirect\n' >&2; exit 1; }
+mkdir -p "$state_dir"
+work=$(mktemp -d)
+result_tmp=
+cleanup() {
+  rm -rf "$work"
+  [ -z "$result_tmp" ] || rm -f "$result_tmp"
+}
+trap cleanup EXIT INT TERM
+manifest="$work/manifest.json"
+signature="$work/manifest.p7s"
+
+if [ -n "$source_dir" ]; then
+  [ -d "$source_dir" ] && [ ! -L "$source_dir" ] || { printf 'error: test update source is invalid\n' >&2; exit 1; }
+  cp "$source_dir/manifest.json" "$manifest"
+  cp "$source_dir/manifest.p7s" "$signature"
+else
+  endpoint=$(jq -r .endpoint "$selected_policy")
+  curl --fail --silent --show-error --location --max-redirs 2 --proto '=https' --tlsv1.2 \
+    --connect-timeout 10 --max-time 60 --max-filesize 262144 \
+    "$endpoint/manifest.json" -o "$manifest"
+  curl --fail --silent --show-error --location --max-redirs 2 --proto '=https' --tlsv1.2 \
+    --connect-timeout 10 --max-time 60 --max-filesize 262144 \
+    "$endpoint/manifest.p7s" -o "$signature"
+fi
+[ -s "$manifest" ] && [ ! -L "$manifest" ] && [ -s "$signature" ] && [ ! -L "$signature" ] || {
+  printf 'error: update service returned incomplete metadata\n' >&2
+  exit 1
+}
+openssl cms -verify -binary -inform DER -in "$signature" -content "$manifest" \
+  -CAfile "$cert" -purpose any -out /dev/null >/dev/null 2>&1 || {
+  printf 'error: update service metadata signature is invalid\n' >&2
+  exit 1
+}
+jq -e '
+  (keys | sort) == (["architecture","artifacts","generation","product","schema","version"] | sort) and
+  .schema == 1 and .product == "Bedrock Server OS" and .architecture == "amd64" and
+  (.version | type == "string" and test("^[0-9]+\\.[0-9]+\\.[0-9]+([+-][A-Za-z0-9.-]+)?$")) and
+  (.generation | type == "number" and . > 0 and floor == .) and
+  ([.artifacts[].name] == ["root.erofs","root.verity","verity-sig.json","uki.efi"]) and
+  (.artifacts | length == 4) and
+  all(.artifacts[]; (.sha256 | type == "string" and test("^[0-9a-f]{64}$")) and
+    (.size | type == "number" and . > 0 and floor == .))
+' "$manifest" >/dev/null || { printf 'error: update service metadata schema is invalid\n' >&2; exit 1; }
+
+installed=0
+[ ! -s "$state_dir/generation" ] || installed=$(cat "$state_dir/generation")
+printf '%s' "$installed" | grep -Eq '^[0-9]+$' || { printf 'error: installed update generation is invalid\n' >&2; exit 1; }
+available=$(jq -r .generation "$manifest")
+version=$(jq -r .version "$manifest")
+status=up-to-date
+[ "$available" -le "$installed" ] || status=available
+result_tmp=$(mktemp "$state_dir/.last-check.XXXXXX")
+jq -n \
+  --arg status "$status" --arg version "$version" \
+  --argjson checked_unix "$now" --argjson installed "$installed" --argjson available "$available" \
+  '{schema:1,status:$status,checked_unix:$checked_unix,installed_generation:$installed,available_generation:$available,available_version:$version}' \
+  > "$result_tmp"
+chmod 0644 "$result_tmp"
+mv "$result_tmp" "$state_dir/last-check.json"
+result_tmp=
+cat "$state_dir/last-check.json"

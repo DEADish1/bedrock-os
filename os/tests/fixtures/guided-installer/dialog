@@ -1,0 +1,18 @@
+#!/bin/sh
+set -eu
+
+responses=${BEDROCK_TEST_DIALOG_RESPONSES:?dialog fixture requires BEDROCK_TEST_DIALOG_RESPONSES}
+operation=
+for argument in "$@"; do
+  case $argument in --menu|--inputbox|--yesno|--msgbox|--infobox) operation=$argument ;; esac
+done
+case $operation in
+  --menu|--inputbox)
+    [ -s "$responses" ] || { printf 'error: dialog fixture has no response\n' >&2; exit 2; }
+    sed -n '1p' "$responses"
+    sed '1d' "$responses" > "$responses.next"
+    mv "$responses.next" "$responses"
+    ;;
+  --yesno|--msgbox|--infobox) : ;;
+  *) printf 'error: unexpected dialog operation\n' >&2; exit 2 ;;
+esac

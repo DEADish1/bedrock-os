@@ -13,7 +13,10 @@ iso=$(find "$OUT_DIR" -maxdepth 1 -name '*.iso' -type f -print -quit)
 [ -n "$checksum" ] && [ -s "$checksum" ] || { printf 'error: checksum missing\n' >&2; exit 1; }
 [ -n "$iso" ] && [ -s "$iso" ] || { printf 'error: ISO missing\n' >&2; exit 1; }
 
-command -v jq >/dev/null 2>&1 && jq -e '.schema == 1 and .product == "Bedrock Server OS" and .architecture == "amd64"' "$manifest" >/dev/null
+command -v jq >/dev/null 2>&1 && jq -e '
+  .schema == 1 and .product == "Bedrock Server OS" and .architecture == "amd64" and
+  (.protected_system_writer_enabled | type == "boolean")
+' "$manifest" >/dev/null
 (cd "$OUT_DIR" && sha256sum -c "$(basename "$checksum")")
 
 if [ -e "$OUT_DIR/bedrock-os-amd64.raw" ]; then

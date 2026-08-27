@@ -1,0 +1,104 @@
+#!/bin/sh
+set -eu
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+LC_ALL=C
+export PATH LC_ALL
+[ "$(id -u)" -eq 0 ] || { printf 'error: first-run setup requires root\n' >&2; exit 1; }
+for tool in dialog jq openssl; do
+  command -v "$tool" >/dev/null 2>&1 || { printf 'error: first-run setup requires %s\n' "$tool" >&2; exit 2; }
+done
+marker=/var/lib/bedrock/setup/complete.json
+if [ -s "$marker" ]; then
+  dialog --title 'Bedrock setup' --msgbox 'Initial setup is already complete.' 7 54
+  exit 0
+fi
+
+cancelled() {
+  dialog --title 'Setup paused' --msgbox 'No settings were applied. Run bedrock-first-run from the local console when you are ready.' 8 64 || true
+  exit 1
+}
+ask() {
+  title=$1 prompt=$2 default=${3:-}
+  dialog --stdout --title "$title" --inputbox "$prompt" 10 70 "$default" || cancelled
+}
+
+dialog --title 'Welcome to Bedrock Server OS' --msgbox \
+  'This guided setup configures the server name, administrator, network, clock, and software-update checks. Nothing is saved until the final review.' 10 70 || cancelled
+
+hostname=$(ask 'Server name' 'Choose a lowercase hostname used to find this server on your network.' 'bedrock')
+username=$(ask 'Administrator account' 'Choose the administrator sign-in name.' 'admin')
+display_name=$(ask 'Administrator name' 'Enter the name shown for this administrator.' 'Bedrock Administrator')
+while :; do
+  password=$(dialog --stdout --insecure --title 'Administrator password' --passwordbox \
+    'Enter a password or passphrase of at least 12 characters.' 10 70) || cancelled
+  password_again=$(dialog --stdout --insecure --title 'Confirm password' --passwordbox \
+    'Enter the same password again.' 10 70) || cancelled
+  if [ "$password" = "$password_again" ] && [ "${#password}" -ge 12 ]; then break; fi
+  password= password_again=
+  dialog --title 'Password not accepted' --msgbox 'Passwords must match and contain at least 12 characters.' 8 62
+done
+password_hash=$(printf '%s' "$password" | openssl passwd -6 -stdin)
+password= password_again=
+
+interfaces=
+for device in /sys/class/net/*; do
+  [ -e "$device" ] || continue
+  interface=${device##*/}
+  [ "$interface" = lo ] || interfaces="$interfaces $interface"
+done
+set -- $interfaces
+[ "$#" -gt 0 ] || { dialog --title 'Network unavailable' --msgbox 'No usable network interface was detected. Setup cannot continue.' 8 64; exit 1; }
+menu_items=
+for interface in "$@"; do menu_items="$menu_items $interface Interface"; done
+interface=$(dialog --stdout --title 'Network interface' --menu 'Choose the connection Bedrock should configure.' 14 70 6 $menu_items) || cancelled
+network_mode=$(dialog --stdout --title 'Network addressing' --menu \
+  'Automatic (DHCP) is recommended. Choose static only when your network requires fixed settings.' 14 74 2 \
+  dhcp 'Automatic address (recommended)' static 'Static IPv4 address') || cancelled
+address_cidr=null
+gateway=null
+dns_text=
+if [ "$network_mode" = static ]; then
+  address=$(ask 'Static address' 'Enter the IPv4 address and prefix, for example 192.168.1.20/24.')
+  gateway_value=$(ask 'Gateway' 'Enter the IPv4 gateway, for example 192.168.1.1.')
+  dns_text=$(ask 'DNS servers' 'Enter up to three IPv4 DNS servers separated by commas.' "$gateway_value")
+  address_cidr=$(jq -Rn --arg value "$address" '$value')
+  gateway=$(jq -Rn --arg value "$gateway_value" '$value')
+else
+  dns_text=$(ask 'DNS servers' 'Optional: enter up to three IPv4 DNS servers separated by commas, or leave blank.' '')
+fi
+dns=$(jq -n --arg value "$dns_text" '$value | split(",") | map(gsub("^[[:space:]]+|[[:space:]]+$";"")) | map(select(length > 0))')
+
+timezone=$(ask 'Time zone' 'Enter an installed time zone such as America/New_York or UTC.' 'UTC')
+if dialog --title 'Automatic time' --yesno 'Keep the server clock synchronized automatically?' 8 62; then ntp=true; else ntp=false; fi
+if dialog --title 'Software updates' --yesno \
+  'Check automatically for signed Bedrock updates? Updates are never installed automatically.' 9 68; then automatic_checks=true; else automatic_checks=false; fi
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+trap 'exit 130' INT TERM
+umask 077
+jq -S -n --arg hostname "$hostname" --arg username "$username" --arg display_name "$display_name" \
+  --arg password_hash "$password_hash" --arg interface "$interface" --arg mode "$network_mode" \
+  --argjson address_cidr "$address_cidr" --argjson gateway "$gateway" --argjson dns "$dns" \
+  --arg timezone "$timezone" --argjson ntp "$ntp" --argjson automatic_checks "$automatic_checks" '
+  {schema:1,hostname:$hostname,
+   administrator:{username:$username,display_name:$display_name,password_hash:$password_hash},
+   network:{interface:$interface,mode:$mode,address_cidr:$address_cidr,gateway:$gateway,dns:$dns},
+   time:{timezone:$timezone,ntp:$ntp},updates:{automatic_checks:$automatic_checks}}
+' > "$work/config.json"
+password_hash=
+if ! /usr/lib/bedrock/validate-first-run-config "$work/config.json" > "$work/plan.json"; then
+  dialog --title 'Check your settings' --msgbox 'One or more values are invalid or unavailable. No settings were applied. Restart setup and correct the highlighted type of value.' 10 68
+  exit 1
+fi
+summary=$(jq -r '
+  "Server: \(.hostname)\nAdministrator: \(.administrator.username)\nNetwork: \(.network.interface), \(.network.mode)\nTime zone: \(.time.timezone)\nAutomatic time: \(.time.ntp)\nAutomatic update checks: \(.updates.automatic_checks)"
+' "$work/plan.json")
+dialog --title 'Review setup' --yesno "$summary\n\nApply these settings now? Network connectivity may briefly restart." 16 72 || cancelled
+if /usr/sbin/bedrock-apply-first-run "$work/config.json" > "$work/result.json"; then
+  dialog --title 'Setup complete' --msgbox 'Bedrock initial setup is complete. You can now sign in with the administrator account.' 9 68
+else
+  dialog --title 'Setup failed safely' --msgbox 'Bedrock could not apply every setting and attempted to restore the previous state. Review the local system log and run setup again.' 10 70
+  exit 1
+fi

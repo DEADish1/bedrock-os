@@ -1,0 +1,15 @@
+[Unit]
+Description=Collect read-only Bedrock storage and RAID health
+After=local-fs.target systemd-udev-settle.service
+ConditionPathIsMountPoint=/var
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/bedrock/collect-storage-health
+ExecStart=/usr/lib/bedrock/process-storage-alerts
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/bedrock/storage
+RestrictAddressFamilies=AF_UNIX

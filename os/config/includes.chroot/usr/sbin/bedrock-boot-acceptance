@@ -1,0 +1,112 @@
+#!/bin/sh
+set -eu
+
+LC_ALL=C
+export LC_ALL
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+if [ "${BEDROCK_BOOT_ACCEPTANCE_TEST_MODE:-0}" = 1 ]; then
+  root=${BEDROCK_BOOT_ACCEPTANCE_TEST_ROOT:?test mode requires BEDROCK_BOOT_ACCEPTANCE_TEST_ROOT}
+  state=${BEDROCK_BOOT_ACCEPTANCE_TEST_STATE:?test mode requires BEDROCK_BOOT_ACCEPTANCE_TEST_STATE}
+  now=${BEDROCK_BOOT_ACCEPTANCE_TEST_NOW:?test mode requires BEDROCK_BOOT_ACCEPTANCE_TEST_NOW}
+else
+  [ "$(id -u)" -eq 0 ] || fail "boot acceptance collection requires root"
+  root=/
+  state=/var/lib/bedrock/acceptance/boot-session.json
+  now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+fi
+for tool in jq mktemp; do command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"; done
+case "$now" in ????-??-??T??:??:??Z) ;; *) fail "acceptance timestamp is invalid" ;; esac
+
+inventory="${root%/}/var/lib/bedrock/hardware/inventory.json"
+health="${root%/}/var/lib/bedrock/boot-health/last-good.json"
+boot_id_file="${root%/}/proc/sys/kernel/random/boot_id"
+efi="${root%/}/sys/firmware/efi"
+dmi="${root%/}/sys/class/dmi/id"
+
+validate_runtime() {
+  [ -d "$efi" ] || fail "the running system did not boot in UEFI mode"
+  [ -s "$inventory" ] && [ ! -L "$inventory" ] || fail "hardware inventory is missing or indirect"
+  [ -s "$health" ] && [ ! -L "$health" ] || fail "healthy-boot marker is missing or indirect"
+  [ -s "$boot_id_file" ] && [ ! -L "$boot_id_file" ] || fail "kernel boot identity is missing or indirect"
+  current_boot_id=$(cat "$boot_id_file")
+  printf '%s' "$current_boot_id" | grep -Eq '^[0-9a-f-]{36}$' || fail "kernel boot identity is invalid"
+  jq -e --arg boot_id "$current_boot_id" '.schema==1 and .healthy==true and .boot_id==$boot_id and (.slot=="a" or .slot=="b")' "$health" >/dev/null || fail "healthy marker does not belong to the running boot"
+  jq -e '
+    .schema==2 and .cpu.architecture=="x86_64" and (.cpu.model|type=="string" and length>0) and
+    (.memory.total_bytes|type=="number" and .>0) and (.disks|type=="array" and length>0) and
+    (.networks|type=="array" and length>0)
+  ' "$inventory" >/dev/null || fail "CPU, memory, disk, or network inventory is incomplete"
+  model=$(jq -r .cpu.model "$inventory")
+  case "$model" in *Intel*|*intel*) cpu_vendor=intel ;; *AMD*|*amd*) cpu_vendor=amd ;; *) fail "CPU vendor cannot be proven from hardware inventory" ;; esac
+  secure_boot=disabled
+  [ -d "$efi/efivars" ] || fail "UEFI variables are unavailable; Secure Boot state cannot be proven"
+  secure_file=$(find "$efi/efivars" -maxdepth 1 -type f -name 'SecureBoot-*' -print -quit 2>/dev/null || true)
+  [ -n "$secure_file" ] || fail "Secure Boot UEFI variable is unavailable"
+  secure_value=$(od -An -t u1 "$secure_file" | awk '{value=$NF} END{print value+0}')
+  [ "$secure_value" -eq 0 ] || secure_boot=bedrock-key-trusted
+}
+
+case ${1:-} in
+  prepare)
+    [ "$#" -eq 3 ] || fail "usage: bedrock-boot-acceptance prepare vmware|hyper-v|physical IMAGE_SHA256"
+    platform=$2 image_sha=$3
+    printf '%s' "$image_sha" | grep -Eq '^[0-9a-f]{64}$' || fail "image SHA-256 is invalid"
+    case "$platform" in vmware|hyper-v|physical) ;; *) fail "platform must be vmware, hyper-v, or physical" ;; esac
+    validate_runtime
+    sys_vendor=$(cat "$dmi/sys_vendor" 2>/dev/null || true)
+    product=$(cat "$dmi/product_name" 2>/dev/null || true)
+    [ -n "$sys_vendor" ] && [ -n "$product" ] || fail "DMI platform identity is incomplete"
+    identity="$sys_vendor $product"
+    case "$platform" in
+      vmware) printf '%s' "$identity" | grep -Eqi 'vmware' || fail "DMI does not identify VMware" ;;
+      hyper-v) printf '%s' "$identity" | grep -Eqi 'microsoft.*virtual machine' || fail "DMI does not identify a Hyper-V virtual machine" ;;
+      physical) printf '%s' "$identity" | grep -Eqi 'vmware|virtual machine|qemu|kvm|virtualbox|parallels' && fail "DMI identifies a virtual machine, not physical hardware" ;;
+    esac
+    directory=$(dirname -- "$state"); mkdir -p "$directory"
+    [ ! -L "$state" ] || fail "acceptance session cannot be a symbolic link"
+    temporary=$(mktemp "$directory/.boot-session.XXXXXX")
+    trap 'rm -f "$temporary"' EXIT INT TERM
+    jq -S -n --arg prepared_at "$now" --arg image_sha256 "$image_sha" --arg platform "$platform" \
+      --arg platform_generation "$([ "$platform" = hyper-v ] && printf generation-2 || printf null)" \
+      --arg cpu_vendor "$cpu_vendor" --arg secure_boot "$secure_boot" --arg initial_boot_id "$current_boot_id" '
+      {schema:1,prepared_at:$prepared_at,image_sha256:$image_sha256,platform:$platform,
+       platform_generation:(if $platform_generation=="null" then null else $platform_generation end),
+       cpu_vendor:$cpu_vendor,firmware_mode:"uefi",secure_boot:$secure_boot,initial_boot_id:$initial_boot_id,
+       initial_healthy_boot:true,inventory:{cpu:true,memory:true,disk:true,network:true}}
+    ' > "$temporary"
+    chmod 0600 "$temporary" && mv "$temporary" "$state"
+    trap - EXIT INT TERM
+    printf 'Boot acceptance prepared. Reboot this same machine without changing its Bedrock disk, then run: bedrock-boot-acceptance complete OUTPUT.json\n'
+    ;;
+  complete)
+    [ "$#" -eq 2 ] || fail "usage: bedrock-boot-acceptance complete OUTPUT.json"
+    output=$2
+    [ -s "$state" ] && [ ! -L "$state" ] || fail "prepared boot-acceptance session is missing or indirect"
+    jq -e '
+      (keys|sort)==(["cpu_vendor","firmware_mode","image_sha256","initial_boot_id","initial_healthy_boot","inventory","platform","platform_generation","prepared_at","schema","secure_boot"]|sort) and
+      .schema==1 and (.image_sha256|test("^[0-9a-f]{64}$")) and (.platform=="vmware" or .platform=="hyper-v" or .platform=="physical") and
+      (if .platform=="hyper-v" then .platform_generation=="generation-2" else .platform_generation==null end) and
+      (.cpu_vendor=="intel" or .cpu_vendor=="amd") and .firmware_mode=="uefi" and
+      (.secure_boot=="disabled" or .secure_boot=="bedrock-key-trusted") and .initial_healthy_boot==true and
+      (.initial_boot_id|test("^[0-9a-f-]{36}$")) and all(.inventory[];.==true)
+    ' "$state" >/dev/null || fail "prepared boot-acceptance session is invalid"
+    validate_runtime
+    initial_boot_id=$(jq -r .initial_boot_id "$state")
+    [ "$current_boot_id" != "$initial_boot_id" ] || fail "a persistent reboot has not occurred since preparation"
+    [ "$cpu_vendor" = "$(jq -r .cpu_vendor "$state")" ] || fail "CPU vendor changed between acceptance boots"
+    directory=$(dirname -- "$output"); mkdir -p "$directory"
+    [ ! -L "$output" ] || fail "acceptance report cannot be a symbolic link"
+    temporary=$(mktemp "$directory/.boot-report.XXXXXX")
+    trap 'rm -f "$temporary"' EXIT INT TERM
+    jq -S --arg completed_at "$now" '
+      {schema:2,mode:"physical",completed_at:$completed_at,image_sha256:.image_sha256,
+       platform:.platform,platform_generation:.platform_generation,cpu_vendor:.cpu_vendor,
+       firmware_mode:.firmware_mode,secure_boot:.secure_boot,same_image_verified:true,
+       healthy_boot:true,persistent_reboot:true,inventory:.inventory,privacy_reviewed:true}
+    ' "$state" > "$temporary"
+    chmod 0600 "$temporary" && mv "$temporary" "$output"
+    trap - EXIT INT TERM
+    printf 'Boot acceptance report created: %s\n' "$output"
+    ;;
+  *) fail "usage: bedrock-boot-acceptance prepare vmware|hyper-v|physical IMAGE_SHA256 | complete OUTPUT.json" ;;
+esac

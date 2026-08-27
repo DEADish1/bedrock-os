@@ -1,0 +1,4 @@
+#!/bin/sh
+[ "$*" = "list -Hp -o name,size,alloc,free,health" ] || exit 2
+printf 'safe-pool\t4000000000000\t1000000000000\t3000000000000\tONLINE\n'
+printf 'archive-pool\t8000000000000\t7000000000000\t1000000000000\tDEGRADED\n'

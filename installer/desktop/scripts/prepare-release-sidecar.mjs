@@ -1,0 +1,84 @@
+import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+const desktopDir = resolve(scriptDir, "..");
+const tauriDir = join(desktopDir, "src-tauri");
+const development = process.argv.slice(2).includes("--development");
+
+if (!development) {
+  if (process.env.BEDROCK_REQUIRE_PRODUCTION_TRUST !== "1") {
+    throw new Error("release sidecars require BEDROCK_REQUIRE_PRODUCTION_TRUST=1");
+  }
+  const certificate = process.env.BEDROCK_INSTALLER_TRUST_CERT;
+  if (!certificate || !existsSync(certificate)) {
+    throw new Error("release sidecars require a readable BEDROCK_INSTALLER_TRUST_CERT");
+  }
+  if (process.platform === "darwin") {
+    if (!/^[A-Z0-9]{10}$/.test(process.env.BEDROCK_APPLE_TEAM_ID || "")) {
+      throw new Error("macOS release sidecars require a valid BEDROCK_APPLE_TEAM_ID");
+    }
+    if (!process.env.BEDROCK_APPLE_SIGNING_IDENTITY) {
+      throw new Error("macOS release sidecars require BEDROCK_APPLE_SIGNING_IDENTITY");
+    }
+  }
+}
+
+const cargo = process.env.CARGO || "cargo";
+const rustc = process.env.RUSTC || "rustc";
+const triple = execFileSync(rustc, ["--print", "host-tuple"], { encoding: "utf8" }).trim();
+if (!/^[A-Za-z0-9_.-]+$/.test(triple)) throw new Error("Rust returned an invalid host target triple");
+
+const build = spawnSync(
+  cargo,
+  ["build", "--release", "--bin", "bedrock-media-writer", "--manifest-path", join(tauriDir, "Cargo.toml")],
+  { cwd: tauriDir, env: process.env, stdio: "inherit" },
+);
+if (build.status !== 0) throw new Error("the protected writer helper did not compile");
+
+const extension = process.platform === "win32" ? ".exe" : "";
+const targetRoot = process.env.CARGO_TARGET_DIR
+  ? resolve(tauriDir, process.env.CARGO_TARGET_DIR)
+  : join(tauriDir, "target");
+const source = join(targetRoot, "release", `bedrock-media-writer${extension}`);
+const destination = join(tauriDir, "binaries", `bedrock-media-writer-${triple}${extension}`);
+if (!existsSync(source)) throw new Error("the protected writer helper output is missing");
+
+if (process.platform === "darwin" && !development) {
+  const codesign = process.env.CODESIGN || "codesign";
+  execFileSync(codesign, [
+    "--force",
+    "--options", "runtime",
+    "--timestamp",
+    "--identifier", "com.bedrock.server.installer.writer",
+    "--sign", process.env.BEDROCK_APPLE_SIGNING_IDENTITY,
+    source,
+  ], { cwd: tauriDir, stdio: "inherit" });
+  execFileSync(codesign, ["--verify", "--strict", "--verbose=2", source], {
+    cwd: tauriDir,
+    stdio: "inherit",
+  });
+}
+
+// Tauri's build resource gives every Windows binary the unprivileged app manifest.
+// Replace resource 1 only in the separately built helper after linking so the main
+// desktop application remains unprivileged and the helper alone requests UAC.
+if (process.platform === "win32") {
+  const mt = process.env.MT || "mt.exe";
+  const helperManifest = join(tauriDir, "elevation", "windows", "bedrock-media-writer.exe.manifest");
+  execFileSync(mt, ["-nologo", "-manifest", helperManifest, `-outputresource:${source};#1`], {
+    cwd: tauriDir,
+    stdio: "inherit",
+  });
+}
+
+mkdirSync(dirname(destination), { recursive: true });
+copyFileSync(source, destination);
+if (process.platform !== "win32") chmodSync(destination, 0o755);
+
+const digest = path => createHash("sha256").update(readFileSync(path)).digest("hex");
+if (digest(source) !== digest(destination)) throw new Error("the packaged helper does not match the compiled helper");
+process.stdout.write(`${destination}\n`);

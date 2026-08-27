@@ -1,0 +1,8 @@
+{
+  "root_parent": "disk0",
+  "disks": [
+    {"name":"disk0","path":"/dev/disk0","model":"Apple SSD","size_bytes":494332366848,"removable":false,"read_only":false,"mounted":true},
+    {"name":"disk8","path":"/dev/disk8","model":"Bedrock Test USB","size_bytes":17179869184,"removable":true,"read_only":false,"mounted":false},
+    {"name":"disk9","path":"/dev/disk9","model":"Mounted USB","size_bytes":17179869184,"removable":true,"read_only":false,"mounted":true}
+  ]
+}

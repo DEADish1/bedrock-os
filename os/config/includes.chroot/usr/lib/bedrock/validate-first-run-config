@@ -1,0 +1,89 @@
+#!/bin/sh
+set -eu
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+LC_ALL=C
+export PATH LC_ALL
+[ "$#" -eq 1 ] || { printf 'usage: %s CONFIG.json\n' "$0" >&2; exit 2; }
+config=$1
+[ -f "$config" ] && [ -s "$config" ] && [ ! -L "$config" ] || {
+  printf 'error: first-run configuration is missing or indirect\n' >&2
+  exit 1
+}
+[ "$(wc -c < "$config" | tr -d ' ')" -le 65536 ] || {
+  printf 'error: first-run configuration is too large\n' >&2
+  exit 1
+}
+if [ "${BEDROCK_FIRST_RUN_TEST_MODE:-0}" = 1 ]; then
+  timezone_root=${BEDROCK_FIRST_RUN_TIMEZONE_ROOT:?test mode requires BEDROCK_FIRST_RUN_TIMEZONE_ROOT}
+  generated_unix=${BEDROCK_FIRST_RUN_TEST_NOW:-0}
+else
+  timezone_root=/usr/share/zoneinfo
+  generated_unix=$(date +%s)
+fi
+printf '%s' "$generated_unix" | grep -Eq '^[0-9]+$' || { printf 'error: first-run timestamp is invalid\n' >&2; exit 1; }
+
+jq -e '
+  (keys | sort) == (["administrator","hostname","network","schema","time","updates"] | sort) and
+  .schema == 1 and
+  (.hostname | type == "string" and length <= 253 and
+    test("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$")) and
+  (.administrator | keys | sort) == (["display_name","password_hash","username"] | sort) and
+  (.administrator.username | type == "string" and test("^[a-z_][a-z0-9_-]{0,30}$") and
+    . != "root" and . != "bedrock" and . != "nobody") and
+  (.administrator.display_name | type == "string" and length > 0 and length <= 128 and (test("[,:=\\r\\n]") | not)) and
+  (.administrator.password_hash | type == "string" and test("^\\$6\\$[./A-Za-z0-9]{1,16}\\$[./A-Za-z0-9]{86}$")) and
+  (.network | keys | sort) == (["address_cidr","dns","gateway","interface","mode"] | sort) and
+  (.network.interface | type == "string" and test("^[A-Za-z0-9_.:-]{1,32}$") and . != "lo") and
+  (.network.mode == "dhcp" or .network.mode == "static") and
+  (.network.dns | type == "array" and length <= 3 and all(.[]; type == "string")) and
+  (if .network.mode == "dhcp" then .network.address_cidr == null and .network.gateway == null
+   else (.network.address_cidr | type == "string") and (.network.gateway | type == "string") end) and
+  (.time | keys | sort) == (["ntp","timezone"] | sort) and
+  (.time.timezone | type == "string" and length > 0 and length <= 128 and
+    test("^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+)*$") and (test("(^|/)\\.\\.(/|$)") | not)) and
+  (.time.ntp | type == "boolean") and
+  (.updates | keys) == ["automatic_checks"] and (.updates.automatic_checks | type == "boolean")
+' "$config" >/dev/null || { printf 'error: first-run configuration schema is invalid\n' >&2; exit 1; }
+
+timezone=$(jq -r .time.timezone "$config")
+[ -e "$timezone_root/$timezone" ] || { printf 'error: selected timezone is unavailable\n' >&2; exit 1; }
+
+valid_ipv4() {
+  value=$1
+  printf '%s' "$value" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' || return 1
+  old_ifs=$IFS
+  IFS=.
+  set -- $value
+  IFS=$old_ifs
+  [ "$#" -eq 4 ] || return 1
+  for octet in "$@"; do
+    [ "$octet" -ge 0 ] 2>/dev/null && [ "$octet" -le 255 ] || return 1
+  done
+}
+mode=$(jq -r .network.mode "$config")
+if [ "$mode" = static ]; then
+  address_cidr=$(jq -r .network.address_cidr "$config")
+  address=${address_cidr%/*}
+  prefix=${address_cidr##*/}
+  [ "$address" != "$address_cidr" ] && valid_ipv4 "$address" &&
+    printf '%s' "$prefix" | grep -Eq '^[0-9]{1,2}$' && [ "$prefix" -ge 1 ] && [ "$prefix" -le 32 ] || {
+    printf 'error: static IPv4 address and prefix are invalid\n' >&2
+    exit 1
+  }
+  gateway=$(jq -r .network.gateway "$config")
+  valid_ipv4 "$gateway" || { printf 'error: static IPv4 gateway is invalid\n' >&2; exit 1; }
+fi
+jq -r '.network.dns[]' "$config" | while IFS= read -r server; do
+  valid_ipv4 "$server" || { printf 'error: DNS server address is invalid\n' >&2; exit 1; }
+done
+
+jq -S -n --argjson generated_unix "$generated_unix" --slurpfile config "$config" '
+  $config[0] as $source |
+  {schema:1,operation:"apply-first-run-configuration",generated_unix:$generated_unix,
+   hostname:$source.hostname,
+   administrator:{username:$source.administrator.username,display_name:$source.administrator.display_name,password_configured:true},
+   network:$source.network,time:$source.time,updates:$source.updates,
+   secrets_included:false,requires_root:true,requires_local_console_confirmation:true,
+   ready_to_apply:true}
+'

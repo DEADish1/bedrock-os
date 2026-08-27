@@ -1,0 +1,25 @@
+{
+  "bundle": {
+    "externalBin": [
+      "binaries/bedrock-media-writer"
+    ],
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/share/polkit-1/actions/com.bedrock.server.installer.write.policy": "elevation/linux/com.bedrock.server.installer.write.policy"
+        }
+      },
+      "rpm": {
+        "files": {
+          "/usr/share/polkit-1/actions/com.bedrock.server.installer.write.policy": "elevation/linux/com.bedrock.server.installer.write.policy"
+        }
+      }
+    },
+    "macOS": {
+      "files": {
+        "Library/LaunchDaemons/com.bedrock.server.installer.writer.plist": "elevation/macos/com.bedrock.server.installer.writer.plist"
+      },
+      "minimumSystemVersion": "13.0"
+    }
+  }
+}

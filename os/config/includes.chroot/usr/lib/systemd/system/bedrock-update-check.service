@@ -1,0 +1,14 @@
+[Unit]
+Description=Check for signed Bedrock Server OS updates
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/bedrock/check-for-updates
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/bedrock
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

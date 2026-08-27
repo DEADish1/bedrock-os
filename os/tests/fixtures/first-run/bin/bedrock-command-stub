@@ -1,0 +1,35 @@
+#!/bin/sh
+set -eu
+
+name=${0##*/}
+log=${BEDROCK_FIRST_RUN_TEST_LOG:?test command requires BEDROCK_FIRST_RUN_TEST_LOG}
+case $name in
+  getent)
+    printf 'getent %s\n' "$*" >> "$log"
+    exit 2
+    ;;
+  hostnamectl)
+    if [ "$*" = --static ]; then printf '%s\n' old-host; exit 0; fi
+    printf 'hostnamectl %s\n' "$*" >> "$log"
+    ;;
+  timedatectl)
+    case $* in
+      'show --property=Timezone --value') printf '%s\n' UTC; exit 0 ;;
+      'show --property=NTP --value') printf '%s\n' yes; exit 0 ;;
+    esac
+    printf 'timedatectl %s\n' "$*" >> "$log"
+    ;;
+  useradd|userdel)
+    printf '%s %s\n' "$name" "$*" >> "$log"
+    ;;
+  chpasswd)
+    IFS=: read -r username ignored_hash
+    printf 'chpasswd %s [REDACTED]\n' "$username" >> "$log"
+    ;;
+  nmcli)
+    printf 'nmcli %s\n' "$*" >> "$log"
+    if [ "${BEDROCK_FIRST_RUN_TEST_FAIL_COMMAND:-}" = nmcli-up ] &&
+      [ "${1:-} ${2:-} ${3:-}" = 'connection up bedrock-setup' ]; then exit 1; fi
+    ;;
+  *) printf 'error: unexpected test command: %s\n' "$name" >&2; exit 2 ;;
+esac

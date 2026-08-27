@@ -1,0 +1,248 @@
+#!/bin/sh
+set -eu
+
+LC_ALL=C
+export LC_ALL
+
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+if [ "${BEDROCK_STORAGE_OPERATION_TEST_MODE:-0}" = 1 ]; then
+  [ "$#" -eq 3 ] || fail "usage: bedrock-storage plan|apply REQUEST.json STATE.json"
+  mode=$1 request=$2 state=$3
+  PATH=${BEDROCK_STORAGE_OPERATION_TEST_PATH:?test mode requires BEDROCK_STORAGE_OPERATION_TEST_PATH}:/usr/bin:/bin
+  now=${BEDROCK_STORAGE_OPERATION_TEST_NOW:-0}
+  audit=${BEDROCK_STORAGE_OPERATION_TEST_AUDIT:?test mode requires BEDROCK_STORAGE_OPERATION_TEST_AUDIT}
+else
+  [ "$#" -eq 2 ] || fail "usage: bedrock-storage plan|apply REQUEST.json"
+  mode=$1 request=$2
+  state=/var/lib/bedrock/storage/resources.json
+  audit=/var/lib/bedrock/storage/operations.jsonl
+  PATH=/usr/sbin:/usr/bin:/sbin:/bin
+  now=$(date +%s)
+fi
+export PATH
+[ "$mode" = plan ] || [ "$mode" = apply ] || fail "mode must be plan or apply"
+[ -s "$request" ] && [ ! -L "$request" ] || fail "request is missing, empty, or indirect"
+[ "$(wc -c < "$request" | tr -d ' ')" -le 1048576 ] || fail "request is too large"
+for tool in jq mktemp; do command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"; done
+printf '%s' "$now" | grep -Eq '^[0-9]+$' || fail "operation timestamp is invalid"
+
+jq -e '
+  (keys | sort) == (["action","backend","confirmation","devices","layout","name","pool","schema"] | sort) and
+  .schema == 1 and
+  (.action == "create" or .action == "expand" or .action == "scrub" or .action == "export" or
+   .action == "import" or .action == "replace") and
+  (.backend == "zfs" or .backend == "mdraid") and
+  (.name | type == "string" and test("^[a-z][a-z0-9_-]{0,31}$")) and
+  (.pool | type == "string" and test("^[a-z][a-z0-9_-]{0,31}$")) and
+  (.layout | type == "string" and length <= 16) and
+  (.devices | type == "array" and length <= 24 and
+    all(.[]; type == "string" and test("^/dev/[A-Za-z0-9._/-]+$") and (test("(^|/)\\.\\.(/|$)") | not))) and
+  (.devices | length == (unique | length)) and
+  (.confirmation | type == "string" and length <= 4096 and (test("[\\r\\n]") | not))
+' "$request" >/dev/null || fail "request schema is invalid"
+
+action=$(jq -r .action "$request")
+backend=$(jq -r .backend "$request")
+name=$(jq -r .name "$request")
+pool=$(jq -r .pool "$request")
+layout=$(jq -r .layout "$request")
+devices=$(jq -r '.devices | join(", ")' "$request")
+device_count=$(jq '.devices | length' "$request")
+confirmation=$(jq -r .confirmation "$request")
+
+case "$action" in
+  create)
+    [ "$name" = "$pool" ] || fail "new storage name and pool must match"
+    case "$backend:$layout" in
+      zfs:mirror) [ "$device_count" -ge 2 ] && [ "$device_count" -le 3 ] || fail "a ZFS mirror needs two or three disks" ;;
+      zfs:raidz1) [ "$device_count" -ge 3 ] || fail "RAID-Z1 needs at least three disks" ;;
+      zfs:raidz2) [ "$device_count" -ge 4 ] || fail "RAID-Z2 needs at least four disks" ;;
+      mdraid:raid1) [ "$device_count" -ge 2 ] || fail "RAID 1 needs at least two disks" ;;
+      mdraid:raid5) [ "$device_count" -ge 3 ] || fail "RAID 5 needs at least three disks" ;;
+      mdraid:raid6) [ "$device_count" -ge 4 ] || fail "RAID 6 needs at least four disks" ;;
+      mdraid:raid10) [ "$device_count" -ge 4 ] && [ $((device_count % 2)) -eq 0 ] || fail "RAID 10 needs an even number of at least four disks" ;;
+      *) fail "unsupported storage layout" ;;
+    esac
+    expected="ERASE AND CREATE — $pool — $backend $layout — $devices"
+    destructive=true
+    ;;
+  expand)
+    [ "$name" = "$pool" ] || fail "expansion must name the existing pool"
+    [ "$device_count" -ge 1 ] || fail "expansion requires new disks"
+    case "$backend:$layout" in
+      zfs:mirror) [ "$device_count" -ge 2 ] && [ "$device_count" -le 3 ] || fail "a new ZFS mirror vdev needs two or three disks" ;;
+      zfs:raidz1) [ "$device_count" -ge 3 ] || fail "a new RAID-Z1 vdev needs at least three disks" ;;
+      zfs:raidz2) [ "$device_count" -ge 4 ] || fail "a new RAID-Z2 vdev needs at least four disks" ;;
+      mdraid:raid1|mdraid:raid5|mdraid:raid6) : ;;
+      mdraid:raid10) fail "changing the member count of Linux RAID 10 is not supported safely" ;;
+      *) fail "unsupported expansion layout" ;;
+    esac
+    expected="EXPAND — $pool — $devices"
+    destructive=true
+    ;;
+  replace)
+    [ "$name" = "$pool" ] || fail "replacement must name the existing pool"
+    [ "$device_count" -eq 2 ] || fail "replacement requires old and new disk paths"
+    expected="REPLACE — $pool — $devices"
+    destructive=true
+    ;;
+  scrub)
+    [ "$name" = "$pool" ] && [ "$device_count" -eq 0 ] || fail "scrub does not accept disks"
+    expected="SCRUB — $pool"
+    destructive=false
+    ;;
+  export)
+    [ "$name" = "$pool" ] && [ "$device_count" -eq 0 ] || fail "export does not accept disks"
+    expected="EXPORT — $pool"
+    destructive=false
+    ;;
+  import)
+    [ "$name" = "$pool" ] && [ "$device_count" -eq 0 ] || fail "import does not accept disks"
+    expected="IMPORT — $pool"
+    destructive=false
+    ;;
+esac
+[ "$confirmation" = "$expected" ] || fail "confirmation must exactly match: $expected"
+
+plan=$(jq -S -n --argjson generated_unix "$now" --arg action "$action" --arg backend "$backend" \
+  --arg pool "$pool" --arg layout "$layout" --arg confirmation "$confirmation" \
+  --argjson devices "$(jq '.devices' "$request")" --argjson destructive "$destructive" '
+  {schema:1,generated_unix:$generated_unix,action:$action,backend:$backend,pool:$pool,layout:$layout,
+   devices:$devices,confirmation:$confirmation,destructive:$destructive,
+   warnings:(if $destructive then ["This operation can permanently change or erase storage. A current backup is required."] else [] end),
+   requires_root:true,requires_fresh_health:true,requires_exclusive_lock:true,ready_for_execution:true}')
+[ "$mode" = apply ] || { printf '%s\n' "$plan"; exit 0; }
+[ "${BEDROCK_STORAGE_OPERATION_TEST_MODE:-0}" = 1 ] || [ "$(id -u)" -eq 0 ] || fail "applying storage changes requires root"
+
+directory=$(dirname -- "$state")
+mkdir -p "$directory" "$(dirname -- "$audit")"
+lock=$directory/.operation.lock
+mkdir "$lock" 2>/dev/null || fail "another storage operation is already running"
+temporary=
+cleanup() {
+  [ -z "$temporary" ] || rm -f "$temporary"
+  rmdir "$lock" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+if [ -e "$state" ]; then
+  [ -s "$state" ] && [ ! -L "$state" ] || fail "storage state is empty or indirect"
+else
+  printf '%s\n' '{"schema":1,"pools":[]}' > "$state"
+fi
+jq -e '.schema == 1 and (.pools | type == "array") and ([.pools[].name] | length == (unique | length))' "$state" >/dev/null || fail "storage state is invalid"
+
+exists=$(jq --arg pool "$pool" '[.pools[] | select(.name == $pool)] | length' "$state")
+case "$action" in create) [ "$exists" -eq 0 ] || fail "storage already exists" ;; *) [ "$exists" -eq 1 ] || fail "storage does not exist" ;; esac
+if [ "$action" != create ]; then
+  stored_backend=$(jq -r --arg pool "$pool" '.pools[]|select(.name==$pool)|.backend' "$state")
+  stored_layout=$(jq -r --arg pool "$pool" '.pools[]|select(.name==$pool)|.layout' "$state")
+  stored_state=$(jq -r --arg pool "$pool" '.pools[]|select(.name==$pool)|.state' "$state")
+  [ "$backend" = "$stored_backend" ] || fail "request technology does not match managed storage"
+  [ "$action" != expand ] || [ "$layout" = "$stored_layout" ] || fail "expansion protection must match the managed layout"
+  case "$action:$stored_state" in
+    import:exported|export:online|export:degraded|scrub:online|scrub:degraded|scrub:rebuilding|replace:online|replace:degraded|expand:online) : ;;
+    *) fail "storage state does not allow this operation" ;;
+  esac
+fi
+
+if [ "${BEDROCK_STORAGE_OPERATION_TEST_MODE:-0}" != 1 ]; then
+  # Refresh whole-device safety immediately before any new disk can be written.
+  case "$action" in
+    create|expand) preflight_devices=$(jq -r '.devices[]' "$request") ;;
+    replace) preflight_devices=$(jq -r '.devices[1]' "$request") ;;
+    *) preflight_devices= ;;
+  esac
+  if [ -n "$preflight_devices" ]; then
+    for required in lsblk findmnt smartctl; do command -v "$required" >/dev/null 2>&1 || fail "$required is required for fresh disk safety checks"; done
+    system_source=$(findmnt -n -o SOURCE /) || fail "cannot identify the running system disk"
+    system_ancestors=$(lsblk -s -n -p -o PATH -- "$system_source") || fail "cannot identify system-disk ancestry"
+    for device in $preflight_devices; do
+      case "$device" in
+        /dev/disk/by-id/*) resolved=$(readlink -f -- "$device") || fail "cannot resolve stable disk identity: $device" ;;
+        *) [ ! -L "$device" ] || fail "only /dev/disk/by-id links are accepted"; resolved=$device ;;
+      esac
+      [ -b "$resolved" ] || fail "new storage member is not a block device: $device"
+      identity=$(lsblk -d -n -p -o TYPE,RO -- "$resolved") || fail "cannot refresh disk identity: $device"
+      [ "$(printf '%s\n' "$identity" | awk '{print $1}')" = disk ] || fail "storage members must be whole disks: $device"
+      [ "$(printf '%s\n' "$identity" | awk '{print $2}')" = 0 ] || fail "storage member is read-only: $device"
+      if lsblk -n -p -o MOUNTPOINTS -- "$resolved" | grep -Eq '[^[:space:]]'; then fail "storage member or one of its partitions is mounted: $device"; fi
+      if printf '%s\n' "$system_ancestors" | grep -Fx -- "$resolved" >/dev/null; then fail "storage member belongs to the running system: $device"; fi
+      smart_file=$(mktemp "$directory/.smart-preflight.XXXXXX")
+      if smartctl -n standby -j -H -- "$device" > "$smart_file" 2>/dev/null; then :; fi
+      if jq -e '.smart_status.passed == false' "$smart_file" >/dev/null 2>&1; then rm -f "$smart_file"; fail "storage member reports failing SMART health: $device"; fi
+      rm -f "$smart_file"
+    done
+  fi
+  case "$action:$backend" in
+    create:zfs)
+      command -v zpool >/dev/null 2>&1 || fail "OpenZFS tools are unavailable"
+      # shellcheck disable=SC2046
+      zpool create -f -o ashift=12 -O compression=zstd -O atime=off "$pool" "$layout" $(jq -r '.devices[]' "$request")
+      ;;
+    create:mdraid)
+      command -v mdadm >/dev/null 2>&1 || fail "Linux RAID tools are unavailable"
+      # shellcheck disable=SC2046
+      mdadm --create "/dev/md/$pool" --metadata=1.2 --level="${layout#raid}" --raid-devices="$device_count" $(jq -r '.devices[]' "$request")
+      mkfs.ext4 -F -L "BEDROCK_$pool" "/dev/md/$pool"
+      mkdir -p "/srv/bedrock/pools/$pool"
+      mount "/dev/md/$pool" "/srv/bedrock/pools/$pool"
+      ;;
+    expand:zfs)
+      # Add a complete protected vdev. Single-disk expansion is intentionally rejected below.
+      [ "$layout" = mirror ] || [ "$layout" = raidz1 ] || [ "$layout" = raidz2 ] || fail "ZFS expansion requires a protected vdev layout"
+      [ "$device_count" -ge 2 ] || fail "ZFS expansion will not add an unprotected single disk"
+      # shellcheck disable=SC2046
+      zpool add "$pool" "$layout" $(jq -r '.devices[]' "$request")
+      ;;
+    expand:mdraid)
+      for device in $(jq -r '.devices[]' "$request"); do mdadm --manage "/dev/md/$pool" --add -- "$device"; done
+      mdadm --grow "/dev/md/$pool" --raid-devices="$(($device_count + $(mdadm --detail "/dev/md/$pool" | awk '/Raid Devices/ {print $4; exit}')))"
+      resize2fs "/dev/md/$pool"
+      ;;
+    scrub:zfs) zpool scrub -- "$pool" ;;
+    scrub:mdraid) printf check | tee "/sys/block/$pool/md/sync_action" >/dev/null ;;
+    export:zfs) zpool export "$pool" ;;
+    export:mdraid) umount "/srv/bedrock/pools/$pool" && mdadm --stop "/dev/md/$pool" ;;
+    import:zfs) zpool import "$pool" ;;
+    import:mdraid) mdadm --assemble --scan && mount "/dev/md/$pool" "/srv/bedrock/pools/$pool" ;;
+    replace:zfs)
+      old=$(jq -r '.devices[0]' "$request"); new=$(jq -r '.devices[1]' "$request")
+      zpool replace "$pool" "$old" "$new"
+      ;;
+    replace:mdraid)
+      old=$(jq -r '.devices[0]' "$request"); new=$(jq -r '.devices[1]' "$request")
+      mdadm --manage "/dev/md/$pool" --add "$new"
+      mdadm --manage "/dev/md/$pool" --replace "$old" --with "$new"
+      ;;
+  esac
+fi
+if [ "${BEDROCK_STORAGE_OPERATION_TEST_FAIL_BEFORE_COMMIT:-0}" = 1 ]; then
+  fail "injected interruption before durable state commit"
+fi
+
+temporary=$(mktemp "$directory/.resources.XXXXXX")
+jq -S --arg action "$action" --arg backend "$backend" --arg pool "$pool" --arg layout "$layout" \
+  --argjson now "$now" --argjson devices "$(jq '.devices' "$request")" '
+  if $action == "create" then
+    .pools += [{name:$pool,backend:$backend,layout:$layout,devices:$devices,state:"online",last_scrub_unix:null,last_operation_unix:$now}]
+  elif $action == "expand" then
+    .pools |= map(if .name == $pool then .devices += $devices | .last_operation_unix = $now else . end)
+  elif $action == "replace" then
+    .pools |= map(if .name == $pool then .devices = ([.devices[] | select(. != $devices[0])] + [$devices[1]]) | .state="rebuilding" | .last_operation_unix=$now else . end)
+  elif $action == "scrub" then
+    .pools |= map(if .name == $pool then .last_scrub_unix=$now | .state="online" | .last_operation_unix=$now else . end)
+  elif $action == "export" then
+    .pools |= map(if .name == $pool then .state="exported" | .last_operation_unix=$now else . end)
+  elif $action == "import" then
+    .pools |= map(if .name == $pool then .state="online" | .last_operation_unix=$now else . end)
+  else . end
+' "$state" > "$temporary"
+chmod 0600 "$temporary"
+mv "$temporary" "$state"
+temporary=
+jq -c -n --argjson occurred_unix "$now" --arg action "$action" --arg backend "$backend" --arg pool "$pool" \
+  '{schema:1,occurred_unix:$occurred_unix,action:$action,backend:$backend,pool:$pool,result:"completed"}' >> "$audit"
+chmod 0600 "$audit"
+jq -S -n --argjson completed_unix "$now" --arg action "$action" --arg pool "$pool" \
+  '{schema:1,completed_unix:$completed_unix,action:$action,pool:$pool,result:"completed"}'

@@ -1,0 +1,21 @@
+{
+  "schema": 2,
+  "mode": "fixture",
+  "completed_at": "2026-08-25T00:00:00Z",
+  "image_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "platform": "vmware",
+  "platform_generation": null,
+  "cpu_vendor": "intel",
+  "firmware_mode": "uefi",
+  "secure_boot": "disabled",
+  "same_image_verified": true,
+  "healthy_boot": true,
+  "persistent_reboot": true,
+  "inventory": {
+    "cpu": true,
+    "memory": true,
+    "disk": true,
+    "network": true
+  },
+  "privacy_reviewed": true
+}

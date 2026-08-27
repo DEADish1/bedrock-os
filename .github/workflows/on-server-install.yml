@@ -1,0 +1,59 @@
+name: On-server install plan
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/on-server-install.yml"
+      - ".github/workflows/os-image.yml"
+      - "installer/adapters/linux-list-targets.sh"
+      - "installer/tests/linux-lsblk.json"
+      - "os/installer/**"
+      - "os/layout/**"
+      - "os/tests/install-targets.json"
+      - "os/tests/test-install-plan.sh"
+      - "os/tests/test-guided-install.sh"
+      - "os/tests/test-install-acceptance-report.sh"
+      - "os/tests/validate-install-acceptance-report.sh"
+      - "os/scripts/bedrock-acceptance-workspace.sh"
+      - "os/tests/test-acceptance-workspace.sh"
+      - "os/tests/test-acceptance-kit-workflow.sh"
+      - "os/tests/test-0.2-0.3-acceptance.sh"
+      - "os/tests/test-boot-acceptance-capture.sh"
+      - "os/tests/validate-boot-test-report.sh"
+      - "os/config/includes.chroot/usr/sbin/bedrock-boot-acceptance"
+      - "os/tests/validate-0.2-0.3-acceptance.sh"
+      - "installer/acceptance/validate-real-device-report.sh"
+      - "os/tests/test-protected-system-writer.sh"
+      - "os/tests/test-protected-loop-install.sh"
+      - "os/tests/test-protected-installer-package.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  safety-contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate live-media protection and installation planning
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes e2fsprogs gdisk
+          sh installer/tests/test-linux-list-targets.sh
+          sh os/scripts/validate-layout.sh
+          sh os/tests/test-install-plan.sh
+          sh os/tests/test-guided-install.sh
+          sh os/tests/test-install-acceptance-report.sh
+          sh os/tests/test-acceptance-workspace.sh
+          sh os/tests/test-acceptance-kit-workflow.sh
+          sh os/tests/test-0.2-0.3-acceptance.sh
+          sh os/tests/test-boot-acceptance-capture.sh
+          sh os/tests/test-install-image-simulator.sh
+          sh os/tests/test-protected-install-request.sh
+          sh os/tests/test-protected-system-writer.sh
+          sh os/tests/test-protected-installer-package.sh
+          RUSTUP_HOME=$(rustup show home)
+          CARGO_HOME=$(dirname "$(command -v cargo)")
+          sudo env "PATH=$PATH" "RUSTUP_HOME=$RUSTUP_HOME" "CARGO_HOME=$CARGO_HOME" \
+            BEDROCK_RUN_LOOP_INSTALL_TEST=1 sh os/tests/test-protected-loop-install.sh

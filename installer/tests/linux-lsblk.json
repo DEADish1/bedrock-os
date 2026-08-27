@@ -1,0 +1,19 @@
+{
+  "blockdevices": [
+    {
+      "name": "nvme0n1", "path": "/dev/nvme0n1", "type": "disk", "size": 512110190592,
+      "model": "Internal SSD", "rm": 0, "ro": 0, "mountpoints": [null], "pkname": null,
+      "children": [
+        {"name":"nvme0n1p2","path":"/dev/nvme0n1p2","type":"part","size":511000000000,"model":null,"rm":0,"ro":0,"mountpoints":["/"],"pkname":"nvme0n1"}
+      ]
+    },
+    {
+      "name": "sdb", "path": "/dev/sdb", "type": "disk", "size": 17179869184,
+      "model": " Bedrock USB ", "rm": 1, "ro": 0, "mountpoints": [null], "pkname": null
+    },
+    {
+      "name": "sdc", "path": "/dev/sdc", "type": "disk", "size": 17179869184,
+      "model": "Mounted USB", "rm": 1, "ro": 0, "mountpoints": ["/media/usb"], "pkname": null
+    }
+  ]
+}

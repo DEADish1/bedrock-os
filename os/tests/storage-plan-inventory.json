@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "generated_unix": 1787602000,
+  "disks": [
+    {"id":"disk-a","path":"/dev/sdb","model":"Bedrock 1 TB A","size_bytes":1000000000000,"logical_sector_bytes":512,"system":false,"removable":false,"mounted":false,"read_only":false,"in_use":false,"health":"healthy","hardware_raid_logical":false},
+    {"id":"disk-b","path":"/dev/sdc","model":"Bedrock 1 TB B","size_bytes":1000000000000,"logical_sector_bytes":512,"system":false,"removable":false,"mounted":false,"read_only":false,"in_use":false,"health":"healthy","hardware_raid_logical":false},
+    {"id":"disk-c","path":"/dev/sdd","model":"Bedrock 1.2 TB C","size_bytes":1200000000000,"logical_sector_bytes":512,"system":false,"removable":false,"mounted":false,"read_only":false,"in_use":false,"health":"healthy","hardware_raid_logical":false},
+    {"id":"disk-d","path":"/dev/sde","model":"Bedrock 1.2 TB D","size_bytes":1200000000000,"logical_sector_bytes":512,"system":false,"removable":false,"mounted":false,"read_only":false,"in_use":false,"health":"healthy","hardware_raid_logical":false},
+    {"id":"system","path":"/dev/nvme0n1","model":"Bedrock System","size_bytes":500000000000,"logical_sector_bytes":512,"system":true,"removable":false,"mounted":true,"read_only":false,"in_use":true,"health":"healthy","hardware_raid_logical":false},
+    {"id":"failing","path":"/dev/sdf","model":"Failing Disk","size_bytes":1000000000000,"logical_sector_bytes":512,"system":false,"removable":false,"mounted":false,"read_only":false,"in_use":false,"health":"failing","hardware_raid_logical":false},
+    {"id":"sector-4k","path":"/dev/sdg","model":"4K Disk","size_bytes":1000000000000,"logical_sector_bytes":4096,"system":false,"removable":false,"mounted":false,"read_only":false,"in_use":false,"health":"healthy","hardware_raid_logical":false},
+    {"id":"raid-a","path":"/dev/sdh","model":"Hardware RAID Volume A","size_bytes":2000000000000,"logical_sector_bytes":512,"system":false,"removable":false,"mounted":false,"read_only":false,"in_use":false,"health":"unknown","hardware_raid_logical":true},
+    {"id":"raid-b","path":"/dev/sdi","model":"Hardware RAID Volume B","size_bytes":2000000000000,"logical_sector_bytes":512,"system":false,"removable":false,"mounted":false,"read_only":false,"in_use":false,"health":"unknown","hardware_raid_logical":true}
+  ]
+}

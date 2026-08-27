@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodically refresh Bedrock storage and RAID health
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=10min
+RandomizedDelaySec=30s
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,66 @@
+#!/bin/sh
+set -eu
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+LC_ALL=C
+export PATH LC_ALL
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+if [ "${BEDROCK_NAS_RENDER_TEST_MODE:-0}" = 1 ]; then
+  [ "$#" -eq 2 ] || fail "usage: render-nas-services STATE.json OUTPUT-DIRECTORY"
+  state=$1 output=$2
+else
+  [ "$#" -eq 0 ] || fail "usage: render-nas-services"
+  [ "$(id -u)" -eq 0 ] || fail "NAS configuration rendering requires root"
+  state=/var/lib/bedrock/storage/nas.json
+  output=/var/lib/bedrock/storage/services
+fi
+[ -s "$state" ] && [ ! -L "$state" ] || fail "NAS state is missing, empty, or indirect"
+jq -e '
+  .schema==1 and (.shares|type=="array") and ([.shares[].name]|length==(unique|length)) and
+  all(.shares[]; (.name|test("^[a-z][a-z0-9_-]{0,31}$")) and
+    (.path|test("^/srv/bedrock/pools/[a-z][a-z0-9_-]{0,31}/[a-z][a-z0-9_-]{0,31}$")) and
+    (.access_group|test("^[a-z][a-z0-9_-]{0,31}$")) and
+    (.protocols|type=="array" and all(.[];.=="smb" or .=="nfs")) and
+    (.read_only|type=="boolean") and (.recycle|type=="boolean") and (.time_machine|type=="boolean"))
+' "$state" >/dev/null || fail "NAS state cannot be rendered safely"
+mkdir -p "$output"
+[ ! -L "$output/smb.conf" ] && [ ! -L "$output/nfs-exports.json" ] || fail "NAS service output cannot be indirect"
+smb=$(mktemp "$output/.smb.XXXXXX")
+nfs=$(mktemp "$output/.nfs.XXXXXX")
+cleanup() { rm -f "$smb" "$nfs"; }
+trap cleanup EXIT INT TERM
+cat > "$smb" <<'EOF'
+[global]
+   server role = standalone server
+   security = user
+   map to guest = never
+   server min protocol = SMB2_10
+   client min protocol = SMB2_10
+   smb encrypt = desired
+   log file = /var/log/samba/log.%m
+   max log size = 1000
+   load printers = no
+   printing = bsd
+   printcap name = /dev/null
+   disable spoolss = yes
+EOF
+jq -r '.shares[] | select(.protocols|index("smb")) |
+  [.name,.path,.access_group,(.read_only|tostring),(.recycle|tostring),(.time_machine|tostring)] | @tsv' "$state" |
+while IFS="$(printf '\t')" read -r name path group read_only recycle time_machine; do
+  {
+    printf '\n[%s]\n   path = %s\n   valid users = @%s\n   read only = %s\n' "$name" "$path" "$group" "$( [ "$read_only" = true ] && printf yes || printf no )"
+    if [ "$time_machine" = true ]; then
+      printf '   vfs objects = fruit streams_xattr\n   fruit:time machine = yes\n'
+    elif [ "$recycle" = true ]; then
+      printf '   vfs objects = recycle catia fruit streams_xattr\n   recycle:repository = .recycle/%%U\n   recycle:keeptree = yes\n   recycle:versions = yes\n'
+    fi
+  } >> "$smb"
+done
+jq -S '[.shares[] | select(.protocols|index("nfs")) | {name,path,read_only,client:"*",options:((if .read_only then "ro" else "rw" end)+",sync,no_subtree_check,root_squash")} ]' "$state" > "$nfs"
+if [ "${BEDROCK_NAS_RENDER_TEST_MODE:-0}" != 1 ]; then testparm -s "$smb" >/dev/null; fi
+chmod 0600 "$smb" "$nfs"
+mv "$smb" "$output/smb.conf"; smb=
+mv "$nfs" "$output/nfs-exports.json"; nfs=
+printf 'BEDROCK_NAS_SERVICES_READY smb=%s nfs=%s\n' \
+  "$(jq '[.shares[]|select(.protocols|index("smb"))]|length' "$state")" \
+  "$(jq '[.shares[]|select(.protocols|index("nfs"))]|length' "$state")"

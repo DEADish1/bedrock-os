@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+log=${BEDROCK_FIRST_RUN_TEST_LOG:?test command requires BEDROCK_FIRST_RUN_TEST_LOG}
+case ${1:-} in
+  show) printf '%s\n' '{"automatic_checks":false}' ;;
+  automatic-checks)
+    [ "$#" -eq 2 ] || exit 2
+    printf 'update-settings automatic-checks %s\n' "$2" >> "$log"
+    ;;
+  *) exit 2 ;;
+esac

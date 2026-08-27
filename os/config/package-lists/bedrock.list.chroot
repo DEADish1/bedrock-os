@@ -1,18 +1,23 @@
 
+acl
 ca-certificates
 cryptsetup-bin
 cryptsetup-initramfs
 curl
+dialog
 dmidecode
 dracut-core
+e2fsprogs
 efibootmgr
 erofs-utils
 ethtool
+gdisk
 iproute2
 iputils-ping
 jq
 kmod
 less
+linux-headers-amd64
 linux-image-amd64
 live-boot
 live-config-systemd
@@ -20,10 +25,13 @@ locales
 lvm2
 mdadm
 network-manager
+nfs-kernel-server
 nvme-cli
 openssh-client
 openssl
 pciutils
+quota
+samba
 sg3-utils
 smartmontools
 sudo
@@ -35,4 +43,6 @@ systemd-timesyncd
 systemd-ukify
 udev
 usbutils
+zfs-dkms
+zfsutils-linux
 zstd

@@ -1,0 +1,21 @@
+name: Storage plans
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/storage-plans.yml"
+      - "os/config/includes.chroot/usr/lib/bedrock/create-storage-plan"
+      - "os/tests/storage-plan-inventory.json"
+      - "os/tests/test-storage-plan.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  review-only-contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate non-writing ZFS and Linux RAID plans
+        run: sh os/tests/test-storage-plan.sh

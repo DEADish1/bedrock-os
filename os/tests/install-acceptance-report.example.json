@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "mode": "fixture",
+  "completed_at": "2026-08-25T00:00:00Z",
+  "image_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "target": {
+    "path": "/dev/test-system",
+    "model": "Disposable acceptance disk",
+    "size_bytes": 68719476736,
+    "disposable": true
+  },
+  "checks": {
+    "acceptance_writer_enabled": true,
+    "fresh_inventory": true,
+    "exact_confirmation": true,
+    "terminal_free_install": true,
+    "raw_write_complete": true,
+    "reread_verified": true,
+    "gpt_verified": true,
+    "persistent_state_checked": true,
+    "booted_from_target": true,
+    "boot_health_marker": true,
+    "hardware_inventory_present": true,
+    "first_run_completed": true,
+    "persistent_reboot": true
+  }
+}

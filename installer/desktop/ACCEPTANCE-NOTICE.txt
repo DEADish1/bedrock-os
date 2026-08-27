@@ -1,0 +1,21 @@
+BEDROCK 0.2/0.3 HARDWARE ACCEPTANCE BUILD — NOT A RELEASE
+
+This short-lived package is only for the named Bedrock acceptance sessions. It
+uses an ephemeral development certificate, is unsigned as an operating-system
+package, and is not release-eligible or suitable for ordinary users.
+
+The included installer has the guarded physical-media writer compiled in. It
+can permanently erase the exact removable drive selected by the operator, but
+only after fresh drive discovery, signed-image verification, capacity checks,
+administrator approval, and the complete exact-drive confirmation flow.
+
+Before continuing:
+
+1. Read START-HERE.txt and repository/docs/ACCEPTANCE-0.2-0.3.md.
+2. Use only a disposable drive containing no needed data.
+3. Disconnect other removable storage when practical.
+4. Confirm the displayed model, whole-device path, and capacity independently.
+5. Stop if any identity, size, signature, or confirmation value is unexpected.
+
+Creating this package does not authorize a disk write. The operator must choose
+and approve the exact disposable target at the time of the physical test.

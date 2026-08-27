@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+[ "$#" -eq 1 ]
+jq -e '
+  .schema == 1 and .operation == "install-bedrock-system" and
+  .target_id == "linux:install-safe" and
+  .confirmation == "INSTALL BEDROCK — Test System SSD — /dev/nvme1n1 — 68719476736"
+' "$1" >/dev/null
+printf 'writer %s\n' "$(jq -r .target_id "$1")" >> "${BEDROCK_TEST_INSTALL_LOG:?writer fixture requires BEDROCK_TEST_INSTALL_LOG}"
+printf '%s\n' '{"schema":1,"installation_complete":true,"raw_write_complete":true,"reread_verified":true,"layout_finalized":true,"gpt_verified":true,"persistent_state_checked":true,"persistent_state_expanded":true}'

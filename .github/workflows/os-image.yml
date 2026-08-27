@@ -2,6 +2,12 @@ name: Bedrock OS image
 
 on:
   workflow_dispatch:
+    inputs:
+      protected_writer_acceptance:
+        description: Build an acceptance-only image with the protected system-disk writer enabled
+        required: true
+        default: false
+        type: boolean
   push:
     branches: [main]
     paths:
@@ -38,14 +44,24 @@ jobs:
         env:
           BEDROCK_BUILD_RAW: ${{ matrix.replica == 1 && '1' || '0' }}
           BEDROCK_ALLOW_EPHEMERAL_KEYS: '1'
+          BEDROCK_ENABLE_SYSTEM_PHYSICAL_WRITER: ${{ inputs.protected_writer_acceptance && 'I_ACCEPT_REAL_SYSTEM_DISK_DATA_LOSS' || '' }}
+          BEDROCK_REQUIRE_PRODUCTION_TRUST: ${{ inputs.protected_writer_acceptance && '1' || '0' }}
         run: |
+          SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$GITHUB_SHA")
+          export SOURCE_DATE_EPOCH
+          BEDROCK_SOURCE_COMMIT=$GITHUB_SHA
+          export BEDROCK_SOURCE_COMMIT
           docker run --rm --privileged \
             --volume "$GITHUB_WORKSPACE:/workspace" \
             --workdir /workspace \
             --env BEDROCK_BUILD_RAW \
             --env BEDROCK_ALLOW_EPHEMERAL_KEYS \
+            --env BEDROCK_ENABLE_SYSTEM_PHYSICAL_WRITER \
+            --env BEDROCK_REQUIRE_PRODUCTION_TRUST \
+            --env SOURCE_DATE_EPOCH \
+            --env BEDROCK_SOURCE_COMMIT \
             debian:13.6-slim \
-            bash -lc 'apt-get update && apt-get install --yes --no-install-recommends ca-certificates cryptsetup-bin dosfstools e2fsprogs erofs-utils gdisk git jq live-build mtools openssl ovmf qemu-system-x86 sbsigntool systemd-boot-efi systemd-ukify xorriso xxd zstd squashfs-tools grub-efi-amd64-bin shim-signed && ./os/scripts/build-image.sh'
+            bash -lc 'apt-get update && apt-get install --yes --no-install-recommends ca-certificates cryptsetup-bin dosfstools e2fsprogs erofs-utils gdisk git jq live-build mtools nodejs openssl ovmf qemu-system-x86 rustc sbsigntool systemd-boot-efi systemd-ukify xorriso xxd zstd squashfs-tools grub-efi-amd64-bin shim-signed && ./os/scripts/build-image.sh'
       - name: Upload image and metadata
         uses: actions/upload-artifact@v4
         with:
@@ -83,3 +99,105 @@ jobs:
           path: build-b
       - name: Require identical clean ISO builds
         run: ./os/scripts/compare-reproducible-builds.sh build-a build-b
+
+  acceptance-kit:
+    if: ${{ inputs.protected_writer_acceptance }}
+    needs: [build, reproducibility]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bedrock-os-amd64-1
+          path: acceptance-image
+      - name: Verify exact acceptance-only image
+        run: |
+          cd acceptance-image
+          sha256sum -c bedrock-os-amd64.iso.sha256
+          jq -e --arg commit "$GITHUB_SHA" '
+            .commit == $commit and .protected_system_writer_enabled == true
+          ' bedrock-build-manifest.json >/dev/null
+          jq -e '
+            .signing_mode == "development-ephemeral" and .release_eligible == false
+          ' bedrock-signing-manifest.json >/dev/null
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: installer/desktop/package-lock.json
+      - name: Install Linux desktop packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libayatana-appindicator3-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libwebkit2gtk-4.1-dev \
+            patchelf \
+            xdg-utils
+          npm ci --prefix installer/desktop --ignore-scripts
+      - name: Build signed acceptance media and guarded Linux installer
+        run: |
+          signing_root=$(mktemp -d)
+          trap 'rm -rf "$signing_root"' EXIT
+          BEDROCK_ALLOW_EPHEMERAL_KEYS=1 \
+            sh os/scripts/generate-development-keys.sh "$signing_root/keys" >/dev/null
+          export BEDROCK_RELEASE_KEY="$signing_root/keys/DO-NOT-SHIP-development.key"
+          export BEDROCK_RELEASE_CERT="$signing_root/keys/DO-NOT-SHIP-development.crt"
+          export BEDROCK_INSTALLER_TRUST_CERT="$BEDROCK_RELEASE_CERT"
+          export BEDROCK_REQUIRE_PRODUCTION_TRUST=1
+          export BEDROCK_ENABLE_PHYSICAL_WRITER=I_ACCEPT_REAL_DEVICE_DATA_LOSS
+
+          sh installer/core/create-signed-image-release.sh \
+            "0.3.0-acceptance-$GITHUB_RUN_ID" iso \
+            acceptance-image/bedrock-os-amd64.iso acceptance-kit/media
+          sh installer/core/verify-signed-image.sh acceptance-kit/media \
+            "$BEDROCK_RELEASE_CERT" bedrock-os-amd64.iso
+          node installer/desktop/scripts/prepare-release-sidecar.mjs
+          npm --prefix installer/desktop run tauri -- build \
+            --config src-tauri/tauri.release.conf.json --bundles deb
+
+          mkdir -p acceptance-kit/installer acceptance-kit/repository/docs \
+            acceptance-kit/repository/os/scripts acceptance-kit/repository/os/tests \
+            acceptance-kit/repository/installer/acceptance
+          cp installer/desktop/src-tauri/target/release/bundle/deb/*.deb \
+            acceptance-kit/installer/
+          cp installer/desktop/ACCEPTANCE-NOTICE.txt acceptance-kit/
+          cp "$BEDROCK_RELEASE_CERT" acceptance-kit/media/acceptance-trust-certificate.pem
+          cp acceptance-image/bedrock-build-manifest.json \
+            acceptance-image/bedrock-signing-manifest.json acceptance-kit/media/
+          cp docs/ACCEPTANCE-0.2-0.3.md docs/BOOT-TEST-MATRIX.md \
+            docs/INSTALLER-REAL-DEVICE-ACCEPTANCE.md docs/ON-SERVER-INSTALL.md \
+            acceptance-kit/repository/docs/
+          cp os/scripts/bedrock-acceptance-workspace.sh \
+            acceptance-kit/repository/os/scripts/
+          cp os/tests/validate-0.2-0.3-acceptance.sh \
+            os/tests/validate-boot-test-report.sh \
+            os/tests/validate-install-acceptance-report.sh \
+            acceptance-kit/repository/os/tests/
+          cp installer/acceptance/validate-real-device-report.sh \
+            acceptance-kit/repository/installer/acceptance/
+
+          image_sha=$(jq -r '.artifact.sha256' acceptance-kit/media/manifest.json)
+          certificate_expiry=$(openssl x509 -in "$BEDROCK_RELEASE_CERT" -noout -enddate | cut -d= -f2-)
+          printf '%s\n' \
+            'BEDROCK 0.2/0.3 ACCEPTANCE KIT — NOT A RELEASE' \
+            '' \
+            "Source commit: $GITHUB_SHA" \
+            "Exact ISO SHA-256: $image_sha" \
+            "Acceptance certificate expires: $certificate_expiry" \
+            '' \
+            'Read ACCEPTANCE-NOTICE.txt before installing the included Linux desktop writer.' \
+            'Start with repository/docs/ACCEPTANCE-0.2-0.3.md.' \
+            'The installer can erase a selected drive only after its exact confirmation flow.' \
+            > acceptance-kit/START-HERE.txt
+      - name: Upload short-lived desktop acceptance kit
+        uses: actions/upload-artifact@v4
+        with:
+          name: bedrock-0.2-0.3-acceptance-${{ github.run_id }}
+          path: acceptance-kit
+          if-no-files-found: error
+          retention-days: 7

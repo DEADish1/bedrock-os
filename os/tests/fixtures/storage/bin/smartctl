@@ -1,0 +1,17 @@
+#!/bin/sh
+[ "$1" = -n ] && [ "$2" = standby ] && [ "$3" = -j ] && [ "$4" = -H ] &&
+  [ "$5" = -A ] && [ "$6" = -- ] || exit 2
+case $7 in
+  /dev/sda)
+    cat <<'EOF'
+{"smart_status":{"passed":true},"temperature":{"current":31},"power_on_time":{"hours":1200},"power_mode":"ACTIVE"}
+EOF
+    ;;
+  /dev/sdb)
+    cat <<'EOF'
+{"smart_status":{"passed":false},"temperature":{"current":49},"power_on_time":{"hours":42000},"power_mode":"ACTIVE"}
+EOF
+    exit 8
+    ;;
+  *) exit 2 ;;
+esac

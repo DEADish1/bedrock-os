@@ -1,0 +1,12 @@
+#!/bin/sh
+[ "$*" = "-J -b -d -o PATH,TYPE,SIZE,MODEL,SERIAL,TRAN" ] || exit 2
+if [ "${BEDROCK_STORAGE_UNSAFE_FIXTURE:-0}" = 1 ]; then
+  printf '%s\n' '{"blockdevices":[{"path":"/dev/sda;unsafe","type":"disk","size":1,"model":"Unsafe","serial":null,"tran":"sata"}]}'
+  exit 0
+fi
+cat <<'EOF'
+{"blockdevices":[
+  {"path":"/dev/sda","type":"disk","size":1000000000000,"model":"Bedrock SSD","serial":"SAFE-001","tran":"sata"},
+  {"path":"/dev/sdb","type":"disk","size":2000000000000,"model":"Archive Disk","serial":"WARN-002","tran":"sas"}
+]}
+EOF

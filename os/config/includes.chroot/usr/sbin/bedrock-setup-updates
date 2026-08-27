@@ -1,0 +1,27 @@
+#!/bin/sh
+set -eu
+
+if [ "${BEDROCK_UPDATE_TEST_MODE:-0}" = 1 ]; then
+  settings=${BEDROCK_UPDATE_SETTINGS:?test mode requires BEDROCK_UPDATE_SETTINGS}
+else
+  settings=/usr/sbin/bedrock-update-settings
+fi
+if [ "${BEDROCK_UPDATE_TEST_MODE:-0}" != 1 ]; then
+  [ "$(id -u)" -eq 0 ] || { printf 'error: update setup requires root\n' >&2; exit 1; }
+fi
+
+choice=${1:-}
+if [ -z "$choice" ] && [ -t 0 ]; then
+  printf 'Software update checks\n\n'
+  printf '1) Check automatically (recommended)\n'
+  printf '   Bedrock checks for signed updates about every six hours. Updates are not installed automatically.\n'
+  printf '2) Manual checks only\n'
+  printf '   Bedrock makes no scheduled update requests. You can use Check now at any time.\n\n'
+  printf 'Choose 1 or 2: '
+  IFS= read -r choice
+fi
+case $choice in
+  1|automatic) exec "$settings" automatic-checks on ;;
+  2|manual) exec "$settings" automatic-checks off ;;
+  *) printf 'usage: %s automatic|manual\n' "$0" >&2; exit 2 ;;
+esac

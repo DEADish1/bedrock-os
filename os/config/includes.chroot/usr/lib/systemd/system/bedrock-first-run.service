@@ -1,0 +1,23 @@
+[Unit]
+Description=Bedrock guided first-run setup
+After=NetworkManager.service systemd-user-sessions.service
+Wants=NetworkManager.service
+Conflicts=getty@tty1.service
+ConditionPathExists=!/var/lib/bedrock/setup/complete.json
+ConditionPathExists=!/run/live/medium/bedrock/bedrock-os-amd64.raw
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/bedrock-first-run
+ExecStopPost=/bin/systemctl --no-block start getty@tty1.service
+StandardInput=tty-force
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=no
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
