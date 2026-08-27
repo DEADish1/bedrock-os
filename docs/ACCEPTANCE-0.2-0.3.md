@@ -47,6 +47,16 @@ sh os/scripts/bedrock-acceptance-workspace.sh status evidence/0.2-0.3
 
 The status command validates every report that is present, labels missing or invalid roles, and runs the complete release gate only when all six distinct reports match the folder's image SHA-256.
 
+### Generate the short-lived desktop kit
+
+When the hardware sessions are ready to begin, manually run the **Bedrock OS image** GitHub workflow on the exact acceptance branch with **protected_writer_acceptance** selected. After both reproducible builders and the raw-image boot/rollback tests pass, the workflow creates a seven-day `bedrock-0.2-0.3-acceptance-*` artifact containing:
+
+- the exact acceptance-only ISO, detached signed manifest, and embedded-trust Linux desktop installer;
+- the image/build/signing metadata and public ephemeral acceptance certificate;
+- this runbook, the platform procedures, the evidence-folder helper, and all final validators.
+
+The kit is deliberately not created by ordinary builds. It contains a physical-media-capable installer, uses a short-lived development trust chain, and is explicitly not release-eligible. Creating or downloading it does not authorize a disk write; the exact disposable target still requires separate approval during the test.
+
 ## One-command release gate
 
 After each individual report passes its documented validator, run the complete bundle check from the repository root:

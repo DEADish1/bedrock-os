@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/on-server-install.yml"
+      - ".github/workflows/os-image.yml"
       - "installer/adapters/linux-list-targets.sh"
       - "installer/tests/linux-lsblk.json"
       - "os/installer/**"
@@ -15,6 +16,7 @@ on:
       - "os/tests/validate-install-acceptance-report.sh"
       - "os/scripts/bedrock-acceptance-workspace.sh"
       - "os/tests/test-acceptance-workspace.sh"
+      - "os/tests/test-acceptance-kit-workflow.sh"
       - "os/tests/test-0.2-0.3-acceptance.sh"
       - "os/tests/test-boot-acceptance-capture.sh"
       - "os/tests/validate-boot-test-report.sh"
@@ -44,6 +46,7 @@ jobs:
           sh os/tests/test-guided-install.sh
           sh os/tests/test-install-acceptance-report.sh
           sh os/tests/test-acceptance-workspace.sh
+          sh os/tests/test-acceptance-kit-workflow.sh
           sh os/tests/test-0.2-0.3-acceptance.sh
           sh os/tests/test-boot-acceptance-capture.sh
           sh os/tests/test-install-image-simulator.sh
