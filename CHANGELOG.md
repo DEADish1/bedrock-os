@@ -4,6 +4,10 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+### Update delivery
+
+- Added a verified update download transport that resumes partial artifacts, rejects indirect paths and changed signed metadata, repairs corrupt completed files, atomically promotes only exact-size SHA-256 matches, verifies the complete signed bundle, and never installs automatically.
+
 ### Storage and NAS 0.4
 
 - Added guarded OpenZFS mirror/RAID-Z and Linux RAID 1/5/6/10 creation, protected-vdev expansion, scrub/check, export/import, and failed-disk replacement workflows with exact destructive confirmation, fresh whole-disk checks, exclusive mutation locking, and durable audit state.

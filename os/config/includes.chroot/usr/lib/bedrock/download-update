@@ -1,0 +1,114 @@
+#!/bin/sh
+set -eu
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+LC_ALL=C
+export PATH LC_ALL
+[ "$#" -eq 0 ] || { printf 'usage: %s\n' "$0" >&2; exit 2; }
+
+if [ "${BEDROCK_UPDATE_TEST_MODE:-0}" = 1 ]; then
+  policy=${BEDROCK_UPDATE_POLICY_FILE:?test mode requires BEDROCK_UPDATE_POLICY_FILE}
+  default_policy=${BEDROCK_UPDATE_DEFAULT_POLICY:?test mode requires BEDROCK_UPDATE_DEFAULT_POLICY}
+  state_dir=${BEDROCK_UPDATE_STATE_DIR:?test mode requires BEDROCK_UPDATE_STATE_DIR}
+  cert=${BEDROCK_UPDATE_CERT:?test mode requires BEDROCK_UPDATE_CERT}
+  verifier=${BEDROCK_VERIFY_UPDATE:?test mode requires BEDROCK_VERIFY_UPDATE}
+  source_dir=${BEDROCK_UPDATE_SOURCE_DIR:-}
+else
+  policy=/var/lib/bedrock/settings/update-policy.json
+  default_policy=/usr/share/bedrock/default-update-policy.json
+  state_dir=/var/lib/bedrock/update
+  cert=/usr/share/bedrock/update-ca.crt
+  verifier=/usr/lib/bedrock/verify-update-bundle
+  source_dir=
+  [ "$(id -u)" -eq 0 ] || { printf 'error: downloading Bedrock updates requires root\n' >&2; exit 1; }
+fi
+
+for tool in curl jq openssl sha256sum stat; do
+  command -v "$tool" >/dev/null 2>&1 || { printf 'error: update downloads require %s\n' "$tool" >&2; exit 2; }
+done
+[ -d "$state_dir" ] && [ ! -L "$state_dir" ] || { printf 'error: update state is missing or indirect\n' >&2; exit 1; }
+[ -s "$state_dir/last-check.json" ] && [ ! -L "$state_dir/last-check.json" ] || {
+  printf 'error: check for updates before downloading\n' >&2
+  exit 1
+}
+generation=$(jq -r '.available_generation' "$state_dir/last-check.json")
+printf '%s' "$generation" | grep -Eq '^[1-9][0-9]*$' || { printf 'error: available update generation is invalid\n' >&2; exit 1; }
+metadata="$state_dir/metadata-$generation"
+[ -d "$metadata" ] && [ ! -L "$metadata" ] || { printf 'error: verified update metadata is unavailable\n' >&2; exit 1; }
+[ -s "$cert" ] && [ ! -L "$cert" ] || { printf 'error: trusted update certificate is missing or indirect\n' >&2; exit 1; }
+openssl cms -verify -binary -inform DER -in "$metadata/manifest.p7s" -content "$metadata/manifest.json" \
+  -CAfile "$cert" -purpose any -out /dev/null >/dev/null 2>&1 || {
+  printf 'error: cached update metadata signature is invalid\n' >&2
+  exit 1
+}
+
+selected_policy=$policy
+[ -s "$selected_policy" ] || selected_policy=$default_policy
+endpoint=$(jq -r '.endpoint' "$selected_policy")
+printf '%s' "$endpoint" | grep -Eq '^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._/-]*)?$' || {
+  printf 'error: update endpoint is invalid\n' >&2
+  exit 1
+}
+
+bundle_root="$state_dir/bundles"
+bundle="$bundle_root/$generation"
+mkdir -p "$bundle_root" "$bundle"
+chmod 0700 "$bundle_root" "$bundle"
+[ ! -L "$bundle" ] || { printf 'error: update bundle path is indirect\n' >&2; exit 1; }
+cp "$metadata/manifest.json" "$bundle/manifest.json"
+cp "$metadata/manifest.p7s" "$bundle/manifest.p7s"
+chmod 0600 "$bundle/manifest.json" "$bundle/manifest.p7s"
+
+jq -c '.artifacts[]' "$metadata/manifest.json" | while IFS= read -r item; do
+  name=$(printf '%s' "$item" | jq -r .name)
+  expected_size=$(printf '%s' "$item" | jq -r .size)
+  expected_hash=$(printf '%s' "$item" | jq -r .sha256)
+  case $name in
+    root.erofs) maximum_size=4294967296 ;;
+    root.verity) maximum_size=536870912 ;;
+    verity-sig.json) maximum_size=1048576 ;;
+    uki.efi) maximum_size=1073741824 ;;
+    *) printf 'error: update artifact name is not allowed\n' >&2; exit 1 ;;
+  esac
+  [ "$expected_size" -le "$maximum_size" ] || { printf 'error: update artifact %s exceeds its partition bound\n' "$name" >&2; exit 1; }
+  final="$bundle/$name"
+  partial="$bundle/.$name.part"
+  if [ -f "$final" ] && [ ! -L "$final" ]; then
+    actual_size=$(stat -c %s "$final" 2>/dev/null || stat -f %z "$final")
+    actual_hash=$(sha256sum "$final" | awk '{print $1}')
+    if [ "$actual_size" = "$expected_size" ] && [ "$actual_hash" = "$expected_hash" ]; then
+      continue
+    fi
+    rm -f "$final"
+  fi
+  [ ! -e "$partial" ] || { [ -f "$partial" ] && [ ! -L "$partial" ]; } || {
+    printf 'error: partial update artifact %s is indirect or invalid\n' "$name" >&2
+    exit 1
+  }
+  offset=0
+  if [ -f "$partial" ]; then
+    offset=$(stat -c %s "$partial" 2>/dev/null || stat -f %z "$partial")
+    [ "$offset" -le "$expected_size" ] || { rm -f "$partial"; offset=0; }
+    [ "$offset" -lt "$expected_size" ] || { rm -f "$partial"; offset=0; }
+  fi
+  if [ -n "$source_dir" ]; then
+    source="$source_dir/$name"
+    [ -f "$source" ] && [ ! -L "$source" ] || { printf 'error: update source artifact %s is missing\n' "$name" >&2; exit 1; }
+    dd if="$source" bs=1 skip="$offset" 2>/dev/null >> "$partial"
+  else
+    remaining=$((expected_size - offset))
+    curl --fail --silent --show-error --location --max-redirs 2 --proto '=https' --tlsv1.2 \
+      --connect-timeout 10 --max-time 1800 --max-filesize "$remaining" \
+      --continue-at - --output "$partial" "$endpoint/$name"
+  fi
+  chmod 0600 "$partial"
+  actual_size=$(stat -c %s "$partial" 2>/dev/null || stat -f %z "$partial")
+  [ "$actual_size" = "$expected_size" ] || { printf 'error: update artifact %s has the wrong size after download\n' "$name" >&2; exit 1; }
+  actual_hash=$(sha256sum "$partial" | awk '{print $1}')
+  [ "$actual_hash" = "$expected_hash" ] || { printf 'error: update artifact %s failed checksum verification\n' "$name" >&2; exit 1; }
+  mv "$partial" "$final"
+done
+
+"$verifier" "$bundle" "$cert" >/dev/null
+jq -n -c --argjson generation "$generation" --arg bundle "$bundle" \
+  '{schema:1,status:"downloaded",generation:$generation,bundle:$bundle,installed:false}'

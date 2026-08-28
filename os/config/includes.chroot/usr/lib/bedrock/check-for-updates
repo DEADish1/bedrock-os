@@ -104,6 +104,22 @@ available=$(jq -r .generation "$manifest")
 version=$(jq -r .version "$manifest")
 status=up-to-date
 [ "$available" -le "$installed" ] || status=available
+metadata_dir="$state_dir/metadata-$available"
+if [ -e "$metadata_dir" ]; then
+  [ -d "$metadata_dir" ] && [ ! -L "$metadata_dir" ] &&
+    cmp -s "$manifest" "$metadata_dir/manifest.json" &&
+    cmp -s "$signature" "$metadata_dir/manifest.p7s" || {
+      printf 'error: cached metadata for generation %s differs from signed metadata\n' "$available" >&2
+      exit 1
+    }
+else
+  metadata_tmp=$(mktemp -d "$state_dir/.metadata-$available.XXXXXX")
+  cp "$manifest" "$metadata_tmp/manifest.json"
+  cp "$signature" "$metadata_tmp/manifest.p7s"
+  chmod 0755 "$metadata_tmp"
+  chmod 0644 "$metadata_tmp/manifest.json" "$metadata_tmp/manifest.p7s"
+  mv "$metadata_tmp" "$metadata_dir"
+fi
 result_tmp=$(mktemp "$state_dir/.last-check.XXXXXX")
 jq -n \
   --arg status "$status" --arg version "$version" \
