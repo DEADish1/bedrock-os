@@ -14,7 +14,7 @@ else
   checker=/usr/lib/bedrock/check-for-updates
 fi
 
-usage() { printf 'usage: %s show | automatic-checks on|off | check-now\n' "$0" >&2; exit 2; }
+usage() { printf 'usage: %s show | automatic-checks on|off | channel stable | channel beta I_ACCEPT_PRERELEASE_UPDATE_RISK | check-now\n' "$0" >&2; exit 2; }
 select_policy() {
   selected_policy=$policy
   [ -s "$selected_policy" ] || selected_policy=$default_policy
@@ -23,10 +23,9 @@ select_policy() {
     exit 1
   }
   jq -e '
-    (keys | sort) == (["automatic_checks","channel","endpoint","schema","setup_choice_recorded"] | sort) and
-    .schema == 1 and (.automatic_checks | type == "boolean") and
-    (.setup_choice_recorded | type == "boolean") and .channel == "stable" and
-    (.endpoint | type == "string" and test("^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._/-]*)?$"))
+    (keys | sort) == (["automatic_checks","channel","schema","setup_choice_recorded"] | sort) and
+    .schema == 2 and (.automatic_checks | type == "boolean") and
+    (.setup_choice_recorded | type == "boolean") and (.channel == "stable" or .channel == "beta")
   ' "$selected_policy" >/dev/null || { printf 'error: update policy is invalid\n' >&2; exit 1; }
 }
 [ "$#" -ge 1 ] || usage
@@ -54,6 +53,25 @@ case $1 in
     mv "$temporary" "$policy"
     trap - EXIT INT TERM
     printf 'Automatic update checks are %s. Manual checks remain available.\n' "$2"
+    ;;
+  channel)
+    [ "$#" -ge 2 ] || usage
+    [ "$2" = stable ] || [ "$2" = beta ] || usage
+    if [ "$2" = stable ]; then [ "$#" -eq 2 ] || usage
+    else [ "$#" -eq 3 ] && [ "$3" = I_ACCEPT_PRERELEASE_UPDATE_RISK ] || usage
+    fi
+    if [ "${BEDROCK_UPDATE_TEST_MODE:-0}" != 1 ]; then
+      [ "$(id -u)" -eq 0 ] || { printf 'error: changing the release channel requires root\n' >&2; exit 1; }
+    fi
+    select_policy
+    mkdir -p "$(dirname -- "$policy")"
+    temporary=$(mktemp "$(dirname -- "$policy")/.update-policy.XXXXXX")
+    trap 'rm -f "$temporary"' EXIT INT TERM
+    jq --arg channel "$2" '.channel = $channel | .setup_choice_recorded = true' "$selected_policy" > "$temporary"
+    chmod 0644 "$temporary"
+    mv "$temporary" "$policy"
+    trap - EXIT INT TERM
+    printf 'Bedrock update channel is now %s. Updates are still never installed automatically.\n' "$2"
     ;;
   check-now)
     [ "$#" -eq 1 ] || usage

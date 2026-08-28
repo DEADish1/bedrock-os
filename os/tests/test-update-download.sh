@@ -6,6 +6,7 @@ checker="$ROOT/os/config/includes.chroot/usr/lib/bedrock/check-for-updates"
 downloader="$ROOT/os/config/includes.chroot/usr/lib/bedrock/download-update"
 verifier="$ROOT/os/config/includes.chroot/usr/lib/bedrock/verify-update-bundle"
 default_policy="$ROOT/os/config/includes.chroot/usr/share/bedrock/default-update-policy.json"
+channels="$ROOT/os/config/includes.chroot/usr/share/bedrock/release-channels.json"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
 mkdir -p "$work/remote" "$work/state" "$work/settings"
@@ -23,7 +24,7 @@ for name in root.erofs root.verity verity-sig.json uki.efi; do
     '. + [{name:$name,size:$size,sha256:$sha256}]')
 done
 jq -S -c -n --argjson artifacts "$items" \
-  '{architecture:"amd64",artifacts:$artifacts,generation:4,product:"Bedrock Server OS",schema:1,version:"0.4.0-test"}' \
+  '{architecture:"amd64",artifacts:$artifacts,generation:4,product:"Bedrock Server OS",schema:1,version:"0.4.0+test"}' \
   > "$work/remote/manifest.json"
 openssl cms -sign -binary -noattr -md sha256 -in "$work/remote/manifest.json" \
   -signer "$work/cert.pem" -inkey "$work/key.pem" -outform DER -out "$work/remote/manifest.p7s"
@@ -31,13 +32,13 @@ openssl cms -sign -binary -noattr -md sha256 -in "$work/remote/manifest.json" \
 run_checker() {
   BEDROCK_UPDATE_TEST_MODE=1 BEDROCK_UPDATE_POLICY_FILE="$work/settings/policy.json" \
   BEDROCK_UPDATE_DEFAULT_POLICY="$default_policy" BEDROCK_UPDATE_STATE_DIR="$work/state" \
-  BEDROCK_UPDATE_CERT="$work/cert.pem" BEDROCK_UPDATE_SOURCE_DIR="$work/remote" \
+  BEDROCK_UPDATE_CERT="$work/cert.pem" BEDROCK_UPDATE_CHANNELS_FILE="$channels" BEDROCK_UPDATE_SOURCE_DIR="$work/remote" \
   BEDROCK_TEST_NOW=1787900000 "$checker" --manual
 }
 run_downloader() {
   BEDROCK_UPDATE_TEST_MODE=1 BEDROCK_UPDATE_POLICY_FILE="$work/settings/policy.json" \
   BEDROCK_UPDATE_DEFAULT_POLICY="$default_policy" BEDROCK_UPDATE_STATE_DIR="$work/state" \
-  BEDROCK_UPDATE_CERT="$work/cert.pem" BEDROCK_UPDATE_SOURCE_DIR="$work/remote" \
+  BEDROCK_UPDATE_CERT="$work/cert.pem" BEDROCK_UPDATE_CHANNELS_FILE="$channels" BEDROCK_UPDATE_SOURCE_DIR="$work/remote" \
   BEDROCK_VERIFY_UPDATE="$verifier" "$downloader"
 }
 run_checker >/dev/null

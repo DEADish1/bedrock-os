@@ -1,0 +1,1 @@
+{"schema":1,"channels":{"stable":{"endpoint":"https://haven-server.deadish1.chatgpt.site/updates/stable/amd64","prerelease":false},"beta":{"endpoint":"https://haven-server.deadish1.chatgpt.site/updates/beta/amd64","prerelease":true}}}

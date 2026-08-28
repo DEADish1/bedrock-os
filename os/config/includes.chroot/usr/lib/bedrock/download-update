@@ -11,6 +11,7 @@ if [ "${BEDROCK_UPDATE_TEST_MODE:-0}" = 1 ]; then
   default_policy=${BEDROCK_UPDATE_DEFAULT_POLICY:?test mode requires BEDROCK_UPDATE_DEFAULT_POLICY}
   state_dir=${BEDROCK_UPDATE_STATE_DIR:?test mode requires BEDROCK_UPDATE_STATE_DIR}
   cert=${BEDROCK_UPDATE_CERT:?test mode requires BEDROCK_UPDATE_CERT}
+  channels=${BEDROCK_UPDATE_CHANNELS_FILE:?test mode requires BEDROCK_UPDATE_CHANNELS_FILE}
   verifier=${BEDROCK_VERIFY_UPDATE:?test mode requires BEDROCK_VERIFY_UPDATE}
   source_dir=${BEDROCK_UPDATE_SOURCE_DIR:-}
 else
@@ -18,6 +19,7 @@ else
   default_policy=/usr/share/bedrock/default-update-policy.json
   state_dir=/var/lib/bedrock/update
   cert=/usr/share/bedrock/update-ca.crt
+  channels=/usr/share/bedrock/release-channels.json
   verifier=/usr/lib/bedrock/verify-update-bundle
   source_dir=
   [ "$(id -u)" -eq 0 ] || { printf 'error: downloading Bedrock updates requires root\n' >&2; exit 1; }
@@ -45,7 +47,11 @@ openssl cms -verify -binary -inform DER -in "$metadata/manifest.p7s" -content "$
 
 selected_policy=$policy
 [ -s "$selected_policy" ] || selected_policy=$default_policy
-endpoint=$(jq -r '.endpoint' "$selected_policy")
+[ -f "$channels" ] && [ ! -L "$channels" ] || { printf 'error: release-channel configuration is missing or indirect\n' >&2; exit 1; }
+selected_channel=$(jq -r '.channel' "$selected_policy")
+checked_channel=$(jq -r '.available_channel' "$state_dir/last-check.json")
+[ "$selected_channel" = "$checked_channel" ] || { printf 'error: release channel changed; check for updates again\n' >&2; exit 1; }
+endpoint=$(jq -r --arg channel "$selected_channel" '.channels[$channel].endpoint' "$channels")
 printf '%s' "$endpoint" | grep -Eq '^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._/-]*)?$' || {
   printf 'error: update endpoint is invalid\n' >&2
   exit 1

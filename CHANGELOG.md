@@ -6,6 +6,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ### Update delivery
 
+- Added immutable packaged stable/beta endpoints, schema-2 channel policy, explicit beta risk acknowledgement, channel-change recheck requirements, and stable-channel prerelease rejection without changing the no-automatic-install rule.
 - Added a verified update download transport that resumes partial artifacts, rejects indirect paths and changed signed metadata, repairs corrupt completed files, atomically promotes only exact-size SHA-256 matches, verifies the complete signed bundle, and never installs automatically.
 
 ### Storage and NAS 0.4

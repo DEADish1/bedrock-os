@@ -16,6 +16,7 @@ if [ "${BEDROCK_UPDATE_TEST_MODE:-0}" = 1 ]; then
   default_policy=${BEDROCK_UPDATE_DEFAULT_POLICY:?test mode requires BEDROCK_UPDATE_DEFAULT_POLICY}
   state_dir=${BEDROCK_UPDATE_STATE_DIR:?test mode requires BEDROCK_UPDATE_STATE_DIR}
   cert=${BEDROCK_UPDATE_CERT:?test mode requires BEDROCK_UPDATE_CERT}
+  channels=${BEDROCK_UPDATE_CHANNELS_FILE:?test mode requires BEDROCK_UPDATE_CHANNELS_FILE}
   now=${BEDROCK_TEST_NOW:-0}
   source_dir=${BEDROCK_UPDATE_SOURCE_DIR:-}
 else
@@ -23,6 +24,7 @@ else
   default_policy=/usr/share/bedrock/default-update-policy.json
   state_dir=/var/lib/bedrock/update
   cert=/usr/share/bedrock/update-ca.crt
+  channels=/usr/share/bedrock/release-channels.json
   now=$(date +%s)
   source_dir=
 fi
@@ -38,11 +40,19 @@ selected_policy=$policy
   exit 1
 }
 jq -e '
-  (keys | sort) == (["automatic_checks","channel","endpoint","schema","setup_choice_recorded"] | sort) and
-  .schema == 1 and (.automatic_checks | type == "boolean") and
-  (.setup_choice_recorded | type == "boolean") and .channel == "stable" and
-  (.endpoint | type == "string" and test("^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._/-]*)?$"))
+  (keys | sort) == (["automatic_checks","channel","schema","setup_choice_recorded"] | sort) and
+  .schema == 2 and (.automatic_checks | type == "boolean") and
+  (.setup_choice_recorded | type == "boolean") and (.channel == "stable" or .channel == "beta")
 ' "$selected_policy" >/dev/null || { printf 'error: update policy is invalid\n' >&2; exit 1; }
+[ -f "$channels" ] && [ ! -L "$channels" ] || { printf 'error: release-channel configuration is missing or indirect\n' >&2; exit 1; }
+jq -e '(keys|sort)==(["channels","schema"]|sort) and .schema==1 and
+  (.channels|keys|sort)==["beta","stable"] and
+  all(.channels[]; (keys|sort)==["endpoint","prerelease"] and
+    (.endpoint|type=="string" and test("^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._/-]*)?$")) and (.prerelease|type=="boolean")) and
+  .channels.stable.prerelease==false and .channels.beta.prerelease==true' "$channels" >/dev/null || {
+  printf 'error: release-channel configuration is invalid\n' >&2; exit 1;
+}
+selected_channel=$(jq -r .channel "$selected_policy")
 
 automatic=$(jq -r .automatic_checks "$selected_policy")
 if [ "$manual" = false ] && [ "$automatic" = false ]; then
@@ -70,7 +80,7 @@ if [ -n "$source_dir" ]; then
   cp "$source_dir/manifest.json" "$manifest"
   cp "$source_dir/manifest.p7s" "$signature"
 else
-  endpoint=$(jq -r .endpoint "$selected_policy")
+  endpoint=$(jq -r --arg channel "$selected_channel" '.channels[$channel].endpoint' "$channels")
   curl --fail --silent --show-error --location --max-redirs 2 --proto '=https' --tlsv1.2 \
     --connect-timeout 10 --max-time 60 --max-filesize 262144 \
     "$endpoint/manifest.json" -o "$manifest"
@@ -103,6 +113,7 @@ installed=0
 printf '%s' "$installed" | grep -Eq '^[0-9]+$' || { printf 'error: installed update generation is invalid\n' >&2; exit 1; }
 available=$(jq -r .generation "$manifest")
 version=$(jq -r .version "$manifest")
+[ "$selected_channel" != stable ] || { case $version in *-*) printf 'error: stable channel rejected a prerelease update\n' >&2; exit 1;; esac; }
 status=up-to-date
 [ "$available" -le "$installed" ] || status=available
 metadata_dir="$state_dir/metadata-$available"
@@ -124,8 +135,9 @@ fi
 result_tmp=$(mktemp "$state_dir/.last-check.XXXXXX")
 jq -n \
   --arg status "$status" --arg version "$version" \
+  --arg channel "$selected_channel" \
   --argjson checked_unix "$now" --argjson installed "$installed" --argjson available "$available" \
-  '{schema:1,status:$status,checked_unix:$checked_unix,installed_generation:$installed,available_generation:$available,available_version:$version}' \
+  '{schema:1,status:$status,checked_unix:$checked_unix,installed_generation:$installed,available_generation:$available,available_version:$version,available_channel:$channel}' \
   > "$result_tmp"
 chmod 0644 "$result_tmp"
 mv "$result_tmp" "$state_dir/last-check.json"
