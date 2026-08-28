@@ -23,9 +23,10 @@ else
   [ "$(id -u)" -eq 0 ] || { printf 'error: downloading Bedrock updates requires root\n' >&2; exit 1; }
 fi
 
-for tool in curl jq openssl sha256sum stat; do
+for tool in jq openssl sha256sum stat; do
   command -v "$tool" >/dev/null 2>&1 || { printf 'error: update downloads require %s\n' "$tool" >&2; exit 2; }
 done
+[ -n "$source_dir" ] || command -v curl >/dev/null 2>&1 || { printf 'error: update downloads require curl\n' >&2; exit 2; }
 [ -d "$state_dir" ] && [ ! -L "$state_dir" ] || { printf 'error: update state is missing or indirect\n' >&2; exit 1; }
 [ -s "$state_dir/last-check.json" ] && [ ! -L "$state_dir/last-check.json" ] || {
   printf 'error: check for updates before downloading\n' >&2

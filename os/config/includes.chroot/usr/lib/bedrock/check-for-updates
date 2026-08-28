@@ -27,9 +27,10 @@ else
   source_dir=
 fi
 
-for tool in curl jq openssl; do
+for tool in jq openssl; do
   command -v "$tool" >/dev/null 2>&1 || { printf 'error: update checks require %s\n' "$tool" >&2; exit 2; }
 done
+[ -n "$source_dir" ] || command -v curl >/dev/null 2>&1 || { printf 'error: update checks require curl\n' >&2; exit 2; }
 selected_policy=$policy
 [ -s "$selected_policy" ] || selected_policy=$default_policy
 [ -f "$selected_policy" ] && [ ! -L "$selected_policy" ] || {
