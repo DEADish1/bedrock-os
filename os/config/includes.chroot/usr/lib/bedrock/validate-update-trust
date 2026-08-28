@@ -1,0 +1,37 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 1 ] || { printf 'usage: %s TRUST_BUNDLE\n' "$0" >&2; exit 2; }
+trust=$1
+[ -f "$trust" ] && [ ! -L "$trust" ] || { printf 'error: update trust bundle is missing or indirect\n' >&2; exit 1; }
+size=$(wc -c < "$trust" | tr -d ' ')
+[ "$size" -gt 0 ] && [ "$size" -le 65536 ] || { printf 'error: update trust bundle has an invalid size\n' >&2; exit 1; }
+command -v openssl >/dev/null 2>&1 || { printf 'error: openssl is required\n' >&2; exit 1; }
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT INT TERM
+awk -v out="$work" '
+  function bad() { exit 2 }
+  /^[[:space:]]*-----BEGIN CERTIFICATE-----[[:space:]]*$/ {
+    if (inside) bad(); inside=1; count++; file=out "/cert-" count ".pem"; print "-----BEGIN CERTIFICATE-----" > file; next
+  }
+  /^[[:space:]]*-----END CERTIFICATE-----[[:space:]]*$/ {
+    if (!inside) bad(); print "-----END CERTIFICATE-----" >> file; close(file); inside=0; next
+  }
+  { if (inside) print >> file; else if ($0 !~ /^[[:space:]]*$/) bad() }
+  END { if (inside || count < 1 || count > 2) exit 2; print count > (out "/count") }
+' "$trust" || { printf 'error: update trust bundle must contain exactly one or two PEM certificates and no other data\n' >&2; exit 1; }
+
+count=$(cat "$work/count")
+fingerprints=
+i=1
+while [ "$i" -le "$count" ]; do
+  cert="$work/cert-$i.pem"
+  openssl x509 -in "$cert" -noout -checkend 0 >/dev/null 2>&1 || {
+    printf 'error: update trust bundle contains an invalid or expired certificate\n' >&2; exit 1;
+  }
+  fingerprint=$(openssl x509 -in "$cert" -noout -fingerprint -sha256 | sed 's/^[^=]*=//; s/://g')
+  case " $fingerprints " in *" $fingerprint "*) printf 'error: update trust bundle contains a duplicate certificate\n' >&2; exit 1;; esac
+  fingerprints="$fingerprints $fingerprint"
+  i=$((i + 1))
+done

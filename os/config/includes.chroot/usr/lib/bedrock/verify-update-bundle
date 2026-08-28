@@ -4,10 +4,12 @@ set -eu
 [ "$#" -eq 2 ] || { printf 'usage: %s BUNDLE_DIR TRUSTED_CERT\n' "$0" >&2; exit 2; }
 bundle=$1
 cert=$2
+trust_validator=${BEDROCK_VALIDATE_UPDATE_TRUST:-$(dirname "$0")/validate-update-trust}
 manifest="$bundle/manifest.json"
 signature="$bundle/manifest.p7s"
 [ -s "$manifest" ] && [ -s "$signature" ] && [ -s "$cert" ] || { printf 'error: update manifest, signature, or trust certificate is missing\n' >&2; exit 1; }
 for tool in jq openssl sha256sum stat; do command -v "$tool" >/dev/null 2>&1 || { printf 'error: %s is required\n' "$tool" >&2; exit 1; }; done
+"$trust_validator" "$cert"
 
 openssl cms -verify -binary -inform DER -in "$signature" -content "$manifest" \
   -CAfile "$cert" -purpose any -out /dev/null >/dev/null 2>&1 || { printf 'error: update manifest signature is invalid\n' >&2; exit 1; }

@@ -23,11 +23,12 @@ else
   policy=/var/lib/bedrock/settings/update-policy.json
   default_policy=/usr/share/bedrock/default-update-policy.json
   state_dir=/var/lib/bedrock/update
-  cert=/usr/share/bedrock/update-ca.crt
+  cert=/usr/share/bedrock/update-trust.pem
   channels=/usr/share/bedrock/release-channels.json
   now=$(date +%s)
   source_dir=
 fi
+trust_validator=${BEDROCK_VALIDATE_UPDATE_TRUST:-$(dirname "$0")/validate-update-trust}
 
 for tool in jq openssl; do
   command -v "$tool" >/dev/null 2>&1 || { printf 'error: update checks require %s\n' "$tool" >&2; exit 2; }
@@ -64,6 +65,7 @@ if [ "${BEDROCK_UPDATE_TEST_MODE:-0}" != 1 ]; then
   [ "$(id -u)" -eq 0 ] || { printf 'error: checking for Bedrock updates requires root\n' >&2; exit 1; }
 fi
 [ -s "$cert" ] && [ ! -L "$cert" ] || { printf 'error: trusted update certificate is missing or indirect\n' >&2; exit 1; }
+"$trust_validator" "$cert"
 mkdir -p "$state_dir"
 work=$(mktemp -d)
 result_tmp=

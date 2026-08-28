@@ -4,7 +4,7 @@ set -eu
 [ "$(id -u)" -eq 0 ] || { printf 'error: bedrock-update must run as root\n' >&2; exit 1; }
 [ "$#" -eq 1 ] || { printf 'usage: %s BUNDLE_DIR\n' "$0" >&2; exit 2; }
 bundle=$1
-cert=${BEDROCK_UPDATE_CERT:-/usr/share/bedrock/update-ca.crt}
+cert=${BEDROCK_UPDATE_CERT:-/usr/share/bedrock/update-trust.pem}
 verifier=${BEDROCK_VERIFY_UPDATE:-/usr/lib/bedrock/verify-update-bundle}
 "$verifier" "$bundle" "$cert"
 

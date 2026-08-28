@@ -59,7 +59,7 @@ Status: accepted for implementation; changes require a recorded architecture dec
 - Coordination service: stores routing/presence and public-key material only; it cannot decrypt server traffic.
 - Desktop clients: Tauri 2 with a Rust core and the shared React UI, signed for Windows and notarized/universal for macOS.
 - Client secrets: Windows credential protection and macOS Keychain; no raw private keys in web storage.
-- Updates: signed desktop update channel with rollback protection.
+- Updates: signed desktop update channel with rollback protection and a validated current/next certificate overlap for signing-key rotation.
 
 ## Security boundaries
 
