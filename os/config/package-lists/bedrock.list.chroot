@@ -43,6 +43,7 @@ systemd-timesyncd
 systemd-ukify
 udev
 usbutils
+xz-utils
 zfs-dkms
 zfsutils-linux
 zstd
