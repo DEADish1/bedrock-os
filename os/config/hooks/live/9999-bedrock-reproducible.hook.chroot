@@ -7,6 +7,7 @@ update-initramfs -u -k all
 
 # Remove host-specific and disposable build state before SquashFS is created.
 rm -f \
+  /etc/hostid \
   /etc/.resolv.conf.systemd-resolved.bak \
   /etc/nvme/hostid \
   /etc/nvme/hostnqn \
@@ -15,3 +16,11 @@ rm -f \
   /var/cache/apt/pkgcache.bin \
   /var/cache/apt/srcpkgcache.bin \
   /var/lib/systemd/random-seed
+
+# DKMS creates a fresh, unenrolled MOK on each clean build and appends its
+# signature to otherwise identical modules. Development images remove those
+# unusable signatures; release signing must inject an enrolled module key.
+find /usr/lib/modules /var/lib/dkms -type f -name '*.ko.xz' -exec \
+  /usr/lib/bedrock/normalize-kernel-module-signature {} \;
+rm -f /var/lib/dkms/mok.key /var/lib/dkms/mok.pub
+find /var/lib/dkms -type f -name make.log -delete

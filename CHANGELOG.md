@@ -6,6 +6,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ### Update delivery
 
+- Restored clean-build ISO reproducibility after a Debian DKMS change began generating a random, unenrolled MOK: development images now remove the unusable appended module signatures and volatile DKMS/host identity state, with production module-key injection remaining a release-signing gate.
 - Added bounded one-or-two-certificate update trust bundles, validated at build and before every CMS check, plus a tested current/next overlap and retirement procedure that rejects unrelated, duplicate, expired, malformed, indirect, and oversized trust inputs.
 - Added immutable packaged stable/beta endpoints, schema-2 channel policy, explicit beta risk acknowledgement, channel-change recheck requirements, and stable-channel prerelease rejection without changing the no-automatic-install rule.
 - Added a verified update download transport that resumes partial artifacts, rejects indirect paths and changed signed metadata, repairs corrupt completed files, atomically promotes only exact-size SHA-256 matches, verifies the complete signed bundle, and never installs automatically.

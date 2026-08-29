@@ -1,0 +1,26 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 1 ] || { printf 'usage: %s MODULE.ko.xz\n' "$0" >&2; exit 2; }
+module=$1
+[ -f "$module" ] && [ ! -L "$module" ] || { printf 'error: kernel module is missing or indirect\n' >&2; exit 1; }
+command -v xz >/dev/null 2>&1 || { printf 'error: xz is required\n' >&2; exit 1; }
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT INT TERM
+xz -dc "$module" > "$work/module.ko"
+size=$(wc -c < "$work/module.ko" | tr -d ' ')
+[ "$size" -ge 40 ] || exit 0
+magic=$(tail -c 28 "$work/module.ko")
+[ "$magic" = '~Module signature appended~' ] || exit 0
+structure_offset=$((size - 40))
+set -- $(od -An -tu1 -j $((structure_offset + 8)) -N 4 "$work/module.ko")
+[ "$#" -eq 4 ] || { printf 'error: malformed kernel module signature length\n' >&2; exit 1; }
+signature_size=$(($1 * 16777216 + $2 * 65536 + $3 * 256 + $4))
+unsigned_size=$((structure_offset - signature_size))
+[ "$unsigned_size" -gt 0 ] && [ "$unsigned_size" -lt "$size" ] || {
+  printf 'error: malformed kernel module signature bounds\n' >&2; exit 1;
+}
+truncate -s "$unsigned_size" "$work/module.ko"
+xz --threads=1 --check=crc32 --force "$work/module.ko"
+cat "$work/module.ko.xz" > "$module"
