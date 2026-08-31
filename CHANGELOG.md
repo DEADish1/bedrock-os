@@ -4,6 +4,10 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+### Management interface and API 0.6
+
+- Added a versioned, bearer-authenticated local management API on a permission-restricted Unix socket, with hash-only bounded token state, a hardened unprivileged service, and read-only health and virtualization-capability endpoints as the foundation for replacing prototype data.
+
 ### Virtual machines and images 0.5
 
 - Added guarded ZIP image imports with archive and extracted-image checksum/size binding, one regular name-bound member, extraction limits, and reuse of the existing format validation and atomic library installation boundary.

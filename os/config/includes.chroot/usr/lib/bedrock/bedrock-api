@@ -1,0 +1,91 @@
+#!/usr/bin/python3
+import hashlib
+import hmac
+import json
+import os
+import pathlib
+import socketserver
+import stat
+from http.server import BaseHTTPRequestHandler
+
+SOCKET = pathlib.Path(os.environ.get("BEDROCK_API_SOCKET", "/run/bedrock-api/api.sock"))
+TOKENS = pathlib.Path(os.environ.get("BEDROCK_API_TOKENS", "/var/lib/bedrock/api/tokens.json"))
+CAPABILITIES = pathlib.Path(os.environ.get("BEDROCK_API_CAPABILITIES", "/var/lib/bedrock/virtualization/capabilities.json"))
+
+def regular_json(path: pathlib.Path, limit: int) -> object:
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+        raise ValueError("unsafe state file")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+def authorized(value: str | None) -> bool:
+    if not value or not value.startswith("Bearer "):
+        return False
+    token = value[7:]
+    if len(token) != 64 or any(c not in "0123456789abcdef" for c in token):
+        return False
+    digest = hashlib.sha256(token.encode("ascii")).hexdigest()
+    try:
+        state = regular_json(TOKENS, 65536)
+        if set(state) != {"schema", "tokens"} or state["schema"] != 1 or not isinstance(state["tokens"], list):
+            return False
+        return any(isinstance(item, dict) and set(item) == {"name", "sha256", "created_at", "revoked"} and item["revoked"] is False and hmac.compare_digest(item["sha256"], digest) for item in state["tokens"])
+    except (OSError, ValueError, json.JSONDecodeError, TypeError):
+        return False
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    server_version = "BedrockAPI/1"
+    sys_version = ""
+
+    def send_json(self, status: int, value: object) -> None:
+        body = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:
+        if not authorized(self.headers.get("Authorization")):
+            self.send_json(401, {"schema": 1, "error": "unauthorized"})
+            return
+        if self.path == "/api/v1/health":
+            self.send_json(200, {"schema": 1, "status": "ok", "api_version": "v1"})
+        elif self.path == "/api/v1/virtualization/capabilities":
+            try:
+                data = regular_json(CAPABILITIES, 65536)
+                self.send_json(200, {"schema": 1, "data": data})
+            except (OSError, ValueError, json.JSONDecodeError):
+                self.send_json(503, {"schema": 1, "error": "capabilities-unavailable"})
+        else:
+            self.send_json(404, {"schema": 1, "error": "not-found"})
+
+    def do_POST(self) -> None:
+        if not authorized(self.headers.get("Authorization")):
+            self.send_json(401, {"schema": 1, "error": "unauthorized"})
+            return
+        self.send_json(405, {"schema": 1, "error": "read-only-foundation"})
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return
+
+class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    daemon_threads = True
+    request_queue_size = 16
+
+def main() -> None:
+    SOCKET.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
+    if SOCKET.exists() or SOCKET.is_socket():
+        info = SOCKET.lstat()
+        if not stat.S_ISSOCK(info.st_mode):
+            raise SystemExit("refusing to replace non-socket API path")
+        SOCKET.unlink()
+    with Server(str(SOCKET), Handler) as server:
+        os.chmod(SOCKET, 0o660)
+        server.serve_forever(poll_interval=0.25)
+
+if __name__ == "__main__":
+    main()

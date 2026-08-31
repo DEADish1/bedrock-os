@@ -34,6 +34,7 @@ openssh-client
 openssl
 ovmf
 pciutils
+python3-minimal
 qemu-system-x86
 qemu-utils
 quota

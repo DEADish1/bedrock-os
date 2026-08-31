@@ -142,6 +142,8 @@ sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/clone-vm"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/update-vm-resources"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/create-passthrough-plan"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/manage-vm-passthrough"
+sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/create-api-token"
+python3 -c 'compile(open(__import__("sys").argv[1], encoding="utf-8").read(), __import__("sys").argv[1], "exec")' "$OS_DIR/config/includes.chroot/usr/lib/bedrock/bedrock-api"
 sh -n "$OS_DIR/config/includes.chroot/usr/sbin/bedrock-update-settings"
 sh -n "$OS_DIR/config/includes.chroot/usr/sbin/bedrock-setup-updates"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/collect-hardware-inventory"
@@ -166,6 +168,10 @@ grep -q '^ExecStart=/usr/lib/bedrock/mark-boot-healthy$' "$OS_DIR/config/include
 [ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/multi-user.target.wants/bedrock-storage-activation.service" ] || { printf 'error: storage activation service is not enabled\n' >&2; exit 1; }
 [ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/multi-user.target.wants/bedrock-first-run.service" ] || { printf 'error: first-run service is not enabled\n' >&2; exit 1; }
 [ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/multi-user.target.wants/bedrock-virtualization-capabilities.service" ] || { printf 'error: virtualization capability service is not enabled\n' >&2; exit 1; }
+[ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/multi-user.target.wants/bedrock-api.service" ] || { printf 'error: local API service is not enabled\n' >&2; exit 1; }
+grep -q '^User=bedrock-api$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-api.service"
+grep -q '^RestrictAddressFamilies=AF_UNIX$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-api.service"
+grep -q '^ProtectSystem=strict$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-api.service"
 [ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/timers.target.wants/bedrock-vm-status.timer" ] || { printf 'error: VM status timer is not enabled\n' >&2; exit 1; }
 "$OS_DIR/scripts/validate-layout.sh"
 "$OS_DIR/scripts/validate-boot.sh"
@@ -208,6 +214,8 @@ sh "$OS_DIR/tests/test-vm-clone.sh"
 sh "$OS_DIR/tests/test-vm-resource-update.sh"
 sh "$OS_DIR/tests/test-vm-passthrough-plan.sh"
 sh "$OS_DIR/tests/test-vm-passthrough-management.sh"
+sh "$OS_DIR/tests/test-api-token.sh"
+python3 "$OS_DIR/tests/test-bedrock-api.py"
 sh "$OS_DIR/tests/test-storage-health.sh"
 sh "$OS_DIR/tests/test-storage-alerts.sh"
 sh "$OS_DIR/tests/test-storage-plan.sh"
