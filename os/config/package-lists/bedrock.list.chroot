@@ -48,6 +48,7 @@ systemd-sysv
 systemd-timesyncd
 systemd-ukify
 udev
+unzip
 usbutils
 virt-install
 xmlstarlet

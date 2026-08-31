@@ -1,0 +1,60 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 2 ] || { printf 'usage: %s REQUEST.json ARCHIVE.zip\n' "$0" >&2; exit 2; }
+request=$1
+archive=$2
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+for input in "$request" "$archive"; do [ -f "$input" ] && [ ! -L "$input" ] || fail "archive import input is missing or indirect: $input"; done
+for tool in jq sha256sum stat unzip; do command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"; done
+jq -e '
+  (keys|sort)==(["archive_sha256","archive_size_bytes","confirmation","name","schema","sha256","size_bytes","type"]|sort) and .schema==1 and
+  (.name|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+  (.type=="iso" or .type=="img" or .type=="qcow2" or .type=="vhdx" or .type=="vmdk") and
+  (.archive_sha256|type=="string" and test("^[0-9a-f]{64}$")) and
+  (.sha256|type=="string" and test("^[0-9a-f]{64}$")) and
+  (.archive_size_bytes|type=="number" and floor==. and .>=1 and .<=4398046511104) and
+  (.size_bytes|type=="number" and floor==. and .>=1 and .<=4398046511104) and
+  .confirmation==("IMPORT ZIP "+.name+" "+.archive_sha256)
+' "$request" >/dev/null || fail "archive import request or confirmation is invalid"
+name=$(jq -r .name "$request"); type=$(jq -r .type "$request")
+archive_hash=$(jq -r .archive_sha256 "$request"); archive_size=$(jq -r .archive_size_bytes "$request")
+image_hash=$(jq -r .sha256 "$request"); image_size=$(jq -r .size_bytes "$request")
+member=$name.$type
+if [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ]; then
+  base=${BEDROCK_VM_STATE_ROOT:?test mode requires BEDROCK_VM_STATE_ROOT}
+  images=${BEDROCK_VM_IMAGES:?test mode requires BEDROCK_VM_IMAGES}
+  importer=${BEDROCK_VM_IMPORTER:?test mode requires BEDROCK_VM_IMPORTER}
+else
+  [ "$(id -u)" -eq 0 ] || fail "VM archive import requires root"
+  [ "$request" = "/var/lib/bedrock/virtualization/requests/import-$name-zip.json" ] || fail "archive request path is not name-bound"
+  [ "$archive" = "/var/lib/bedrock/virtualization/uploads/$name.zip" ] || fail "archive upload path is not name-bound"
+  base=/var/lib/bedrock/virtualization
+  images=$base/images.json
+  importer=/usr/lib/bedrock/import-vm-image
+fi
+[ -x "$importer" ] && [ ! -L "$importer" ] || fail "direct image importer is unavailable or indirect"
+[ "$(stat -c %s "$archive")" = "$archive_size" ] || fail "uploaded archive size does not match request"
+[ "$(sha256sum "$archive" | awk '{print $1}')" = "$archive_hash" ] || fail "uploaded archive checksum does not match request"
+entries=$(unzip -Z1 "$archive") || fail "ZIP directory cannot be read"
+[ "$entries" = "$member" ] || fail "ZIP must contain exactly the regular image $member"
+details=$(unzip -Z -l "$archive") || fail "ZIP member metadata cannot be read"
+printf '%s\n' "$details" | awk -v member="$member" '$1 ~ /^-/ && $NF==member {found++} END {exit found==1 ? 0 : 1}' || fail "ZIP member is not one regular file"
+work=$(mktemp -d "$base/.archive-import.XXXXXX")
+extracted=$work/$member
+direct_request=$work/request.json
+cleanup() { status=$?; rm -rf "$work"; exit "$status"; }
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+max_blocks=$(( (image_size + 511) / 512 ))
+(
+  if ! ulimit -f "$max_blocks" 2>/dev/null; then
+    [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ] || exit 1
+  fi
+  unzip -p "$archive" "$member" > "$extracted"
+) || fail "ZIP extraction failed or exceeded the declared size"
+[ "$(stat -c %s "$extracted")" = "$image_size" ] || fail "extracted image size does not match request"
+[ "$(sha256sum "$extracted" | awk '{print $1}')" = "$image_hash" ] || fail "extracted image checksum does not match request"
+jq -S -n --arg name "$name" --arg type "$type" --arg hash "$image_hash" --argjson size "$image_size" \
+  '{schema:1,name:$name,type:$type,sha256:$hash,size_bytes:$size,confirmation:("IMPORT "+($type|ascii_upcase)+" "+$name+" "+$hash)}' > "$direct_request"
+BEDROCK_VM_TEST_MODE=1 BEDROCK_VM_STATE_ROOT="$base" BEDROCK_VM_IMAGES="$images" "$importer" "$direct_request" "$extracted"
