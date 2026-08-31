@@ -15,6 +15,7 @@ for file in \
 done
 jq -e '.schema==1 and .domains==[]' "$OS_DIR/config/includes.chroot/usr/share/bedrock/empty-vm-domains.json" >/dev/null
 jq -e '.schema==1 and .images==[]' "$OS_DIR/config/includes.chroot/usr/share/bedrock/empty-vm-images.json" >/dev/null
+jq -e '.schema==1 and .attachments==[]' "$OS_DIR/config/includes.chroot/usr/share/bedrock/empty-vm-attachments.json" >/dev/null
 
 (
   set -eu
@@ -58,6 +59,7 @@ sh -n "$OS_DIR/tests/test-vm-control.sh"
 sh -n "$OS_DIR/tests/test-vm-deletion.sh"
 sh -n "$OS_DIR/tests/test-vm-snapshots.sh"
 sh -n "$OS_DIR/tests/test-vm-image-import.sh"
+sh -n "$OS_DIR/tests/test-vm-image-attachment.sh"
 sh -n "$OS_DIR/tests/test-hardware-inventory.sh"
 sh -n "$OS_DIR/tests/test-storage-health.sh"
 sh -n "$OS_DIR/tests/test-storage-alerts.sh"
@@ -114,6 +116,7 @@ sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/control-vm"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/delete-vm"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/manage-vm-snapshot"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/import-vm-image"
+sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/manage-vm-image-attachment"
 sh -n "$OS_DIR/config/includes.chroot/usr/sbin/bedrock-update-settings"
 sh -n "$OS_DIR/config/includes.chroot/usr/sbin/bedrock-setup-updates"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/collect-hardware-inventory"
@@ -163,6 +166,7 @@ sh "$OS_DIR/tests/test-vm-control.sh"
 sh "$OS_DIR/tests/test-vm-deletion.sh"
 sh "$OS_DIR/tests/test-vm-snapshots.sh"
 sh "$OS_DIR/tests/test-vm-image-import.sh"
+sh "$OS_DIR/tests/test-vm-image-attachment.sh"
 sh "$OS_DIR/tests/test-storage-health.sh"
 sh "$OS_DIR/tests/test-storage-alerts.sh"
 sh "$OS_DIR/tests/test-storage-plan.sh"

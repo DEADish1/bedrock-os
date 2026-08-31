@@ -1,0 +1,105 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
+request=$1
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+[ -f "$request" ] && [ ! -L "$request" ] || fail "image attachment request is missing or indirect"
+for tool in jq sha256sum; do command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"; done
+jq -e '
+  (keys|sort)==(["action","confirmation","image","schema","vm"]|sort) and .schema==1 and
+  (.action=="attach" or .action=="detach") and
+  (.vm|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+  (.image|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+  .confirmation==(if .action=="attach" then "ATTACH IMAGE "+.image+" TO VM "+.vm else "DETACH IMAGE "+.image+" FROM VM "+.vm end)
+' "$request" >/dev/null || fail "image attachment request or confirmation is invalid"
+action=$(jq -r .action "$request")
+vm=$(jq -r .vm "$request")
+image=$(jq -r .image "$request")
+if [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ]; then
+  base=${BEDROCK_VM_STATE_ROOT:?test mode requires BEDROCK_VM_STATE_ROOT}
+  domains=${BEDROCK_VM_DOMAINS:?test mode requires BEDROCK_VM_DOMAINS}
+  images=${BEDROCK_VM_IMAGES:?test mode requires BEDROCK_VM_IMAGES}
+  attachments=${BEDROCK_VM_ATTACHMENTS:?test mode requires BEDROCK_VM_ATTACHMENTS}
+  virsh=${BEDROCK_VM_VIRSH:?test mode requires BEDROCK_VM_VIRSH}
+else
+  [ "$(id -u)" -eq 0 ] || fail "VM image attachment requires root"
+  [ "$request" = "/var/lib/bedrock/virtualization/requests/$vm-image-$action-$image.json" ] || fail "image attachment request path is not name-bound"
+  base=/var/lib/bedrock/virtualization
+  domains=$base/domains.json
+  images=$base/images.json
+  attachments=$base/attachments.json
+  virsh=/usr/bin/virsh
+fi
+[ -x "$virsh" ] && [ ! -L "$virsh" ] || fail "virsh is unavailable or indirect"
+[ -d "$base" ] && [ ! -L "$base" ] || fail "virtualization state path is indirect"
+for state in "$domains" "$images" "$attachments"; do [ -f "$state" ] && [ ! -L "$state" ] || fail "virtualization state is missing or indirect: $state"; done
+jq -e --arg vm "$vm" '.schema==1 and (.domains|type=="array") and ([.domains[]|select(.name==$vm)]|length)==1' "$domains" >/dev/null || fail "VM is not uniquely managed"
+jq -e --arg image "$image" '
+  (keys|sort)==(["images","schema"]|sort) and .schema==1 and (.images|type=="array") and
+  ([.images[]|select(.name==$image)]|length)==1 and all(.images[]; (keys|sort)==(["name","path","sha256","size_bytes","type"]|sort))
+' "$images" >/dev/null || fail "image is not uniquely present in the managed library"
+jq -e '
+  (keys|sort)==(["attachments","schema"]|sort) and .schema==1 and (.attachments|type=="array") and
+  all(.attachments[]; (keys|sort)==(["device","image","path","target","type","vm"]|sort))
+' "$attachments" >/dev/null || fail "attachment state is invalid"
+type=$(jq -r --arg image "$image" '.images[]|select(.name==$image)|.type' "$images")
+path=$(jq -r --arg image "$image" '.images[]|select(.name==$image)|.path' "$images")
+hash=$(jq -r --arg image "$image" '.images[]|select(.name==$image)|.sha256' "$images")
+expected_path="$base/images/$image.$type"
+[ "$path" = "$expected_path" ] || fail "managed image path is not name-bound: $path"
+[ -f "$path" ] && [ ! -L "$path" ] || fail "managed image is missing or indirect"
+[ "$(sha256sum "$path" | awk '{print $1}')" = "$hash" ] || fail "managed image checksum changed"
+if [ "$type" = iso ]; then device=cdrom; target=sda; bus=sata; driver=raw; else device=disk; target=vdb; bus=virtio; case "$type" in img) driver=raw ;; *) driver=$type ;; esac; fi
+lock=$base/.operation.lock
+mkdir "$lock" 2>/dev/null || fail "another VM lifecycle operation is running"
+xml=
+temporary=
+mutated=0
+cleanup() {
+  status=$?
+  if [ "$status" -ne 0 ] && [ "$mutated" -eq 1 ]; then
+    if [ "$action" = attach ]; then "$virsh" --connect qemu:///system detach-device "$vm" "$xml" --config >/dev/null 2>&1 || true; else "$virsh" --connect qemu:///system attach-device "$vm" "$xml" --config >/dev/null 2>&1 || true; fi
+  fi
+  [ -z "$xml" ] || rm -f "$xml"
+  [ -z "$temporary" ] || rm -f "$temporary"
+  rmdir "$lock" 2>/dev/null || true
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+"$virsh" --connect qemu:///system dominfo "$vm" >/dev/null 2>&1 || fail "managed VM is missing from libvirt"
+runtime=$(LC_ALL=C "$virsh" --connect qemu:///system domstate "$vm" | tr '[:upper:]' '[:lower:]' | tr -d '\r')
+[ "$runtime" = "shut off" ] || fail "VM must be shut off before persistent image changes"
+block_list=$("$virsh" --connect qemu:///system domblklist "$vm" --inactive --details) || fail "persistent VM block inventory is unavailable"
+target_present() { printf '%s\n' "$block_list" | awk -v target="$target" 'NR>2 && $3==target {found=1} END {exit !found}'; }
+record_present() { jq -e --arg vm "$vm" --arg image "$image" --arg target "$target" 'any(.attachments[]; .vm==$vm and .image==$image and .target==$target)' "$attachments" >/dev/null; }
+case "$action" in attach) ! target_present && ! record_present || fail "VM target or attachment record already exists" ;; detach) target_present && record_present || fail "managed attachment is not present" ;; esac
+xml=$(mktemp "$base/.device.XXXXXX")
+{
+  printf "<disk type='file' device='%s'>\n" "$device"
+  printf "  <driver name='qemu' type='%s'/>\n" "$driver"
+  printf "  <source file='%s'/>\n" "$path"
+  printf "  <target dev='%s' bus='%s'/>\n" "$target" "$bus"
+  printf "  <readonly/>\n</disk>\n"
+} > "$xml"
+mutated=1
+if [ "$action" = attach ]; then "$virsh" --connect qemu:///system attach-device "$vm" "$xml" --config >/dev/null; else "$virsh" --connect qemu:///system detach-device "$vm" "$xml" --config >/dev/null; fi
+block_list=$("$virsh" --connect qemu:///system domblklist "$vm" --inactive --details) || fail "persistent VM block inventory cannot be verified"
+if [ "$action" = attach ]; then target_present || fail "libvirt did not persist the attachment"; else if target_present; then fail "libvirt still reports the detached target"; fi; fi
+temporary=$(mktemp "$base/.attachments.XXXXXX")
+if [ "$action" = attach ]; then
+  jq -S --arg vm "$vm" --arg image "$image" --arg type "$type" --arg device "$device" --arg target "$target" --arg path "$path" \
+    '.attachments += [{vm:$vm,image:$image,type:$type,device:$device,target:$target,path:$path}] | .attachments |= sort_by(.vm,.target)' "$attachments" > "$temporary"
+else
+  jq -S --arg vm "$vm" --arg image "$image" --arg target "$target" '.attachments |= map(select(.vm!=$vm or .image!=$image or .target!=$target))' "$attachments" > "$temporary"
+fi
+chmod 0600 "$temporary"
+mv "$temporary" "$attachments"
+temporary=
+mutated=0
+trap - EXIT INT TERM
+rm -f "$xml"
+rmdir "$lock"
+jq -S -n --arg vm "$vm" --arg image "$image" --arg action "$action" --arg device "$device" --arg target "$target" \
+  '{schema:1,status:"completed",vm:$vm,image:$image,action:$action,device:$device,target:$target,state:"shut off",read_only:true}'
