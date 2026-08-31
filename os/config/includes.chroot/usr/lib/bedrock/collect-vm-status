@@ -1,0 +1,99 @@
+#!/bin/sh
+set -eu
+
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+command -v jq >/dev/null 2>&1 || fail "jq is required"
+if [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ]; then
+  base=${BEDROCK_VM_STATE_ROOT:?test mode requires BEDROCK_VM_STATE_ROOT}
+  domains=${BEDROCK_VM_DOMAINS:?test mode requires BEDROCK_VM_DOMAINS}
+  image_attachments=${BEDROCK_VM_ATTACHMENTS:?test mode requires BEDROCK_VM_ATTACHMENTS}
+  network_attachments=${BEDROCK_VM_NETWORK_ATTACHMENTS:?test mode requires BEDROCK_VM_NETWORK_ATTACHMENTS}
+  output=${BEDROCK_VM_STATUS:?test mode requires BEDROCK_VM_STATUS}
+  audit=${BEDROCK_VM_AUDIT:?test mode requires BEDROCK_VM_AUDIT}
+  virsh=${BEDROCK_VM_VIRSH:?test mode requires BEDROCK_VM_VIRSH}
+  now=${BEDROCK_VM_NOW:?test mode requires BEDROCK_VM_NOW}
+else
+  [ "$(id -u)" -eq 0 ] || fail "VM status collection requires root"
+  base=/var/lib/bedrock/virtualization
+  domains=$base/domains.json
+  image_attachments=$base/attachments.json
+  network_attachments=$base/network-attachments.json
+  output=$base/status.json
+  audit=$base/audit.jsonl
+  virsh=/usr/bin/virsh
+  now=$(date +%s)
+fi
+[ -x "$virsh" ] && [ ! -L "$virsh" ] || fail "virsh is unavailable or indirect"
+[ -d "$base" ] && [ ! -L "$base" ] || fail "virtualization state path is indirect"
+for state in "$domains" "$image_attachments" "$network_attachments"; do [ -f "$state" ] && [ ! -L "$state" ] || fail "VM status input is missing or indirect: $state"; done
+jq -e '
+  (keys|sort)==(["domains","schema"]|sort) and .schema==1 and (.domains|type=="array") and
+  all(.domains[]; (keys|sort)==(["memory_mib","name","vcpus"]|sort) and (.name|type=="string") and (.vcpus|type=="number") and (.memory_mib|type=="number"))
+' "$domains" >/dev/null || fail "managed VM state is invalid"
+jq -e '.schema==1 and (.attachments|type=="array")' "$image_attachments" >/dev/null || fail "image attachment state is invalid"
+jq -e '.schema==1 and (.attachments|type=="array")' "$network_attachments" >/dev/null || fail "network attachment state is invalid"
+[ ! -e "$output" ] || { [ -f "$output" ] && [ ! -L "$output" ]; } || fail "VM status output is indirect"
+[ ! -e "$audit" ] || { [ -f "$audit" ] && [ ! -L "$audit" ]; } || fail "VM audit output is indirect"
+case "$now" in ''|*[!0-9]*) fail "status timestamp is invalid" ;; esac
+
+lock=$base/.status.lock
+mkdir "$lock" 2>/dev/null || fail "another VM status collection is running"
+work=
+cleanup() { [ -z "$work" ] || rm -rf "$work"; rmdir "$lock" 2>/dev/null || true; }
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+work=$(mktemp -d "$base/.status.XXXXXX")
+: > "$work/domains.jsonl"
+jq -r '.domains[].name' "$domains" | tr -d '\r' > "$work/names"
+while IFS= read -r name; do
+  "$virsh" --connect qemu:///system dominfo "$name" > "$work/info" 2>/dev/null || fail "managed VM is missing from libvirt: $name"
+  state=$(LC_ALL=C "$virsh" --connect qemu:///system domstate "$name" | tr '[:upper:]' '[:lower:]' | tr -d '\r') || fail "VM state is unavailable: $name"
+  case "$state" in running|paused|"shut off"|crashed|"in shutdown"|pmsuspended) ;; *) fail "VM reported an unsupported lifecycle state: $state" ;; esac
+  autostart=$(awk -F: 'tolower($1)=="autostart" {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print tolower($2)}' "$work/info")
+  case "$autostart" in enable|yes) autostart=true ;; disable|no) autostart=false ;; *) fail "VM autostart state is unavailable: $name" ;; esac
+  "$virsh" --connect qemu:///system snapshot-list "$name" --name > "$work/snapshots" || fail "VM snapshot inventory is unavailable: $name"
+  snapshots=$(awk 'NF {count++} END {print count+0}' "$work/snapshots")
+  images=$(jq --arg name "$name" '[.attachments[]|select(.vm==$name)|.image]|sort' "$image_attachments")
+  networks=$(jq --arg name "$name" '[.attachments[]|select(.vm==$name)|.network]|sort' "$network_attachments")
+  allocation=$(jq -c --arg name "$name" '.domains[]|select(.name==$name)' "$domains")
+  jq -c -n --arg name "$name" --arg state "$state" --argjson autostart "$autostart" --argjson snapshots "$snapshots" \
+    --argjson images "$images" --argjson networks "$networks" --argjson allocation "$allocation" \
+    '{name:$name,state:$state,autostart:$autostart,vcpus:$allocation.vcpus,memory_mib:$allocation.memory_mib,snapshot_count:$snapshots,image_attachments:$images,network_attachments:$networks}' >> "$work/domains.jsonl"
+done < "$work/names"
+jq -S -n --argjson now "$now" --slurpfile domains "$work/domains.jsonl" '{schema:1,generated_unix:$now,domains:($domains|sort_by(.name))}' > "$work/status.json"
+
+if [ -f "$output" ]; then
+  jq -e '.schema==1 and (.domains|type=="array")' "$output" >/dev/null || fail "previous VM status is invalid"
+fi
+: > "$work/events.jsonl"
+jq -c '.domains[]' "$work/status.json" > "$work/current.jsonl"
+while IFS= read -r current; do
+  name=$(printf '%s' "$current" | jq -r .name)
+  new_state=$(printf '%s' "$current" | jq -r .state)
+  new_autostart=$(printf '%s' "$current" | jq -r .autostart)
+  previous=null
+  [ ! -f "$output" ] || previous=$(jq -c --arg name "$name" '.domains[]?|select(.name==$name)' "$output")
+  if [ -z "$previous" ] || [ "$previous" = null ]; then
+    jq -c -n --argjson now "$now" --arg name "$name" --arg state "$new_state" --argjson autostart "$new_autostart" \
+      '{schema:1,timestamp_unix:$now,event:"observed",name:$name,state:$state,autostart:$autostart}' >> "$work/events.jsonl"
+  else
+    old_state=$(printf '%s' "$previous" | jq -r .state)
+    old_autostart=$(printf '%s' "$previous" | jq -r .autostart)
+    if [ "$old_state" != "$new_state" ] || [ "$old_autostart" != "$new_autostart" ]; then
+      jq -c -n --argjson now "$now" --arg name "$name" --arg old "$old_state" --arg new "$new_state" \
+        --argjson old_auto "$old_autostart" --argjson new_auto "$new_autostart" \
+        '{schema:1,timestamp_unix:$now,event:"lifecycle-changed",name:$name,previous_state:$old,state:$new,previous_autostart:$old_auto,autostart:$new_auto}' >> "$work/events.jsonl"
+    fi
+  fi
+done < "$work/current.jsonl"
+if [ -f "$audit" ] && [ "$(stat -c %s "$audit")" -ge 10485760 ]; then mv "$audit" "$audit.1"; fi
+[ -e "$audit" ] || : > "$audit"
+chmod 0600 "$audit"
+cat "$work/events.jsonl" >> "$audit"
+chmod 0644 "$work/status.json"
+mv "$work/status.json" "$output"
+trap - EXIT INT TERM
+rm -rf "$work"
+work=
+rmdir "$lock"
+cat "$output"

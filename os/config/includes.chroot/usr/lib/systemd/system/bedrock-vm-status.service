@@ -1,0 +1,16 @@
+[Unit]
+Description=Collect Bedrock managed VM lifecycle status
+After=libvirtd.service bedrock-virtualization-capabilities.service
+ConditionPathExists=/var/lib/bedrock/virtualization/domains.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/bedrock/collect-vm-status
+User=root
+Group=root
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/bedrock/virtualization
