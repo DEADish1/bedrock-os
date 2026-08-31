@@ -6,6 +6,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ### Virtual machines and images 0.5
 
+- Added guarded offline vCPU, memory, and boot-order updates with exact review phrases, host-reservation revalidation, bounded disk or CD/DVD-then-disk policy, persistent libvirt readback verification, atomic allocation/definition updates, shared locking, and rollback.
 - Added confirmed running-guest restart and guarded offline VM cloning through packaged `virt-clone`, with fixed managed outputs, new libvirt identity/NVRAM, resource-reservation checks, attachment gates, atomic allocation state, shared locking, and partial-clone rollback.
 - Added minute-by-minute managed VM lifecycle reconciliation with atomic status reporting for power, autostart, resources, snapshots, and attachments, plus a bounded root-only audit log containing first observations and changed power/autostart transitions only.
 - Added guarded persistent attachment of shut-down managed VMs to active isolated networks using virtio and deterministic local MAC addresses, with exact confirmations, inactive-definition verification, atomic inventory, shared locking, rollback, and in-use network deletion protection.

@@ -50,6 +50,7 @@ systemd-ukify
 udev
 usbutils
 virt-install
+xmlstarlet
 xz-utils
 zfs-dkms
 zfsutils-linux

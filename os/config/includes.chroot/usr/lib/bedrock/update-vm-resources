@@ -1,0 +1,106 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
+request=$1
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+[ -f "$request" ] && [ ! -L "$request" ] || fail "VM resource request is missing or indirect"
+command -v jq >/dev/null 2>&1 || fail "jq is required"
+jq -e '
+  (keys|sort)==(["boot_order","confirmation","memory_mib","name","schema","vcpus"]|sort) and .schema==1 and
+  (.name|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+  (.vcpus|type=="number" and floor==. and .>=1 and .<=64) and
+  (.memory_mib|type=="number" and floor==. and .>=512 and .<=262144 and .%256==0) and
+  (.boot_order==["disk"] or .boot_order==["cdrom","disk"]) and
+  .confirmation==("UPDATE VM "+.name+" CPU "+(.vcpus|tostring)+" MEMORY "+(.memory_mib|tostring)+" BOOT "+(.boot_order|join(",")))
+' "$request" >/dev/null || fail "VM resource request or confirmation is invalid"
+name=$(jq -r .name "$request" | tr -d '\r')
+vcpus=$(jq -r .vcpus "$request" | tr -d '\r')
+memory=$(jq -r .memory_mib "$request" | tr -d '\r')
+boot=$(jq -r '.boot_order|join(",")' "$request" | tr -d '\r')
+if [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ]; then
+  base=${BEDROCK_VM_STATE_ROOT:?test mode requires BEDROCK_VM_STATE_ROOT}
+  state=${BEDROCK_VM_DOMAINS:?test mode requires BEDROCK_VM_DOMAINS}
+  hardware=${BEDROCK_VM_HARDWARE:?test mode requires BEDROCK_VM_HARDWARE}
+  virsh=${BEDROCK_VM_VIRSH:?test mode requires BEDROCK_VM_VIRSH}
+  xmlstarlet=${BEDROCK_VM_XMLSTARLET:?test mode requires BEDROCK_VM_XMLSTARLET}
+else
+  [ "$(id -u)" -eq 0 ] || fail "VM resource updates require root"
+  [ "$request" = "/var/lib/bedrock/virtualization/requests/$name-resources.json" ] || fail "VM resource request path is not name-bound"
+  base=/var/lib/bedrock/virtualization
+  state=$base/domains.json
+  hardware=/var/lib/bedrock/hardware/inventory.json
+  virsh=/usr/bin/virsh
+  xmlstarlet=/usr/bin/xmlstarlet
+fi
+for tool in "$virsh" "$xmlstarlet"; do [ -x "$tool" ] && [ ! -L "$tool" ] || fail "required VM resource tool is unavailable or indirect: $tool"; done
+for file in "$state" "$hardware"; do [ -f "$file" ] && [ ! -L "$file" ] || fail "VM resource state is missing or indirect: $file"; done
+jq -e --arg name "$name" '
+  (keys|sort)==(["domains","schema"]|sort) and .schema==1 and (.domains|type=="array") and
+  ([.domains[]|select(.name==$name)]|length)==1
+' "$state" >/dev/null || fail "VM is not uniquely managed"
+jq -e '.schema==2 and (.cpu.logical_processors|type=="number") and (.memory.total_bytes|type=="number")' "$hardware" >/dev/null || fail "hardware inventory is invalid"
+host_cpus=$(jq -r .cpu.logical_processors "$hardware")
+host_memory=$(($(jq -r .memory.total_bytes "$hardware") / 1048576))
+other_cpus=$(jq --arg name "$name" '[.domains[]|select(.name!=$name)|.vcpus]|add//0' "$state")
+other_memory=$(jq --arg name "$name" '[.domains[]|select(.name!=$name)|.memory_mib]|add//0' "$state")
+[ $((other_cpus + vcpus + 2)) -le "$host_cpus" ] || fail "update would consume Bedrock reserved CPU capacity"
+[ $((other_memory + memory + 2048)) -le "$host_memory" ] || fail "update would consume Bedrock reserved memory"
+[ -d "$base" ] && [ ! -L "$base" ] || fail "virtualization state path is indirect"
+definition=$base/definitions/$name.xml
+[ -f "$definition" ] && [ ! -L "$definition" ] || fail "managed VM definition is missing or indirect"
+lock=$base/.operation.lock
+mkdir "$lock" 2>/dev/null || fail "another VM lifecycle operation is running"
+work=
+mutated=0
+state_changed=0
+cleanup() {
+  status=$?
+  if [ "$status" -ne 0 ] && [ -n "$work" ]; then
+    [ "$state_changed" -eq 0 ] || cp "$work/state.before.json" "$state" 2>/dev/null || true
+    if [ "$mutated" -eq 1 ]; then "$virsh" --connect qemu:///system define "$work/domain.before.xml" >/dev/null 2>&1 || true; cp "$work/definition.before.xml" "$definition" 2>/dev/null || true; fi
+  fi
+  [ -z "$work" ] || rm -rf "$work"
+  rmdir "$lock" 2>/dev/null || true
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+work=$(mktemp -d "$base/.resource-update.XXXXXX")
+cp "$state" "$work/state.before.json"
+cp "$definition" "$work/definition.before.xml"
+"$virsh" --connect qemu:///system dominfo "$name" >/dev/null 2>&1 || fail "managed VM is missing from libvirt"
+runtime=$(LC_ALL=C "$virsh" --connect qemu:///system domstate "$name" | tr '[:upper:]' '[:lower:]' | tr -d '\r')
+[ "$runtime" = "shut off" ] || fail "VM must be shut off before resource updates"
+"$virsh" --connect qemu:///system dumpxml --inactive "$name" > "$work/domain.before.xml"
+"$xmlstarlet" ed -u '/domain/memory' -v "$memory" -u '/domain/currentMemory' -v "$memory" -u '/domain/vcpu' -v "$vcpus" -d '/domain/os/boot' "$work/domain.before.xml" > "$work/domain.base.xml"
+if [ "$boot" = disk ]; then
+  "$xmlstarlet" ed -s '/domain/os' -t elem -n boot -v '' -i '/domain/os/boot[last()]' -t attr -n dev -v hd "$work/domain.base.xml" > "$work/domain.updated.xml"
+else
+  "$xmlstarlet" ed -s '/domain/os' -t elem -n boot -v '' -i '/domain/os/boot[last()]' -t attr -n dev -v cdrom \
+    -s '/domain/os' -t elem -n boot -v '' -i '/domain/os/boot[last()]' -t attr -n dev -v hd "$work/domain.base.xml" > "$work/domain.updated.xml"
+fi
+mutated=1
+"$virsh" --connect qemu:///system define "$work/domain.updated.xml" >/dev/null
+"$virsh" --connect qemu:///system dumpxml --inactive "$name" > "$work/domain.verified.xml"
+grep -Eq "<memory[^>]*>$memory</memory>" "$work/domain.verified.xml" || fail "libvirt did not persist VM memory"
+grep -Eq "<vcpu[^>]*>$vcpus</vcpu>" "$work/domain.verified.xml" || fail "libvirt did not persist VM vCPUs"
+actual_boot=$("$xmlstarlet" sel -t -m '/domain/os/boot' -v '@dev' -n "$work/domain.verified.xml" | tr -d '\r' | paste -sd, -)
+expected_boot=$(printf '%s' "$boot" | sed 's/disk/hd/g')
+[ "$actual_boot" = "$expected_boot" ] || fail "libvirt did not persist VM boot order: $actual_boot"
+cp "$work/domain.verified.xml" "$definition"
+chmod 0600 "$definition"
+temporary=$work/state.updated.json
+jq -S --arg name "$name" --argjson vcpus "$vcpus" --argjson memory "$memory" \
+  '(.domains[]|select(.name==$name)) |= (.vcpus=$vcpus | .memory_mib=$memory)' "$state" > "$temporary"
+chmod 0600 "$temporary"
+state_changed=1
+mv "$temporary" "$state"
+state_changed=0
+mutated=0
+trap - EXIT INT TERM
+rm -rf "$work"
+work=
+rmdir "$lock"
+jq -S -n --arg name "$name" --argjson vcpus "$vcpus" --argjson memory "$memory" --arg boot "$boot" \
+  '{schema:1,status:"updated",name:$name,vcpus:$vcpus,memory_mib:$memory,boot_order:($boot|split(",")),running:false}'

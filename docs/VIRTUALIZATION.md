@@ -30,4 +30,6 @@ This foundation does not authorize VM creation or mutation. The v0.5 lifecycle l
 
 `control-vm` also supports a confirmed restart only from the running state. `clone-vm` uses Debian's packaged `virt-clone` against the system libvirt connection to copy a shut-down, uniquely managed single-disk guest into fixed Bedrock disk/definition/provenance paths with a new UUID, MAC, and NVRAM. Cloning rechecks CPU and memory reservations, requires managed removable images and isolated networks to be detached first, serializes the operation, records the cloned allocation atomically, and removes partial libvirt/storage output on failure.
 
+`update-vm-resources` changes vCPU count, memory, and boot order only while a uniquely managed guest is shut off. It rechecks total allocations while preserving two logical CPUs and 2 GiB for Bedrock, accepts only disk boot or CD/DVD-then-disk installation boot, edits the inactive domain XML with packaged XML tooling, redefines and reads back the persistent libvirt configuration, updates allocation state and the managed definition, and restores all three on failure or interruption.
+
 Production acceptance must prove the capability report on supported Intel and AMD hosts, create a UEFI guest through the system libvirt connection, confirm KVM acceleration, reboot the host, and verify that the guest definition and storage remain intact.
