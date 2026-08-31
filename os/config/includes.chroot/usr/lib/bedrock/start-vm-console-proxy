@@ -1,0 +1,36 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 2 ] || { printf 'usage: %s HANDOFF.json PORT\n' "$0" >&2; exit 2; }
+handoff=$1
+port=$2
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+[ -f "$handoff" ] && [ ! -L "$handoff" ] || fail "console proxy handoff is missing or indirect"
+for tool in jq stat websockify; do command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"; done
+jq -e '
+  (keys|sort)==(["network_listener","one_time","proxy_start_expires_at","redeemed_at","schema","socket","status","vm"]|sort) and
+  .schema==1 and .status=="redeemed" and .one_time==true and .network_listener==false and
+  (.vm|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+  .socket==("/run/libvirt/qemu/bedrock-"+.vm+".vnc") and
+  (.redeemed_at|type=="number" and floor==.) and (.proxy_start_expires_at==(.redeemed_at+10))
+' "$handoff" >/dev/null || fail "console proxy handoff is invalid"
+vm=$(jq -r .vm "$handoff" | tr -d '\r'); socket=$(jq -r .socket "$handoff" | tr -d '\r')
+redeemed=$(jq -r .redeemed_at "$handoff" | tr -d '\r'); expires=$(jq -r .proxy_start_expires_at "$handoff" | tr -d '\r')
+printf '%s' "$port" | grep -Eq '^20[0-9]{3}$' || fail "console proxy port must be between 20000 and 20999"
+[ "$port" -ge 20000 ] && [ "$port" -le 20999 ] || fail "console proxy port is outside the reserved range"
+if [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ]; then
+  now=${BEDROCK_VM_NOW:-$(date +%s)}
+  expected_handoff=${BEDROCK_VM_HANDOFF_PATH:?test mode requires BEDROCK_VM_HANDOFF_PATH}
+  test_socket=${BEDROCK_VM_TEST_CONSOLE_SOCKET:?test mode requires BEDROCK_VM_TEST_CONSOLE_SOCKET}
+  [ -f "$test_socket" ] && [ ! -L "$test_socket" ] || fail "test console socket fixture is invalid"
+else
+  [ "$(id -u)" -eq 0 ] || fail "VM console proxy requires root"
+  now=$(date +%s)
+  expected_handoff=/var/lib/bedrock/virtualization/requests/$vm-console-handoff.json
+  [ "$(stat -c %a "$handoff")" = 600 ] || fail "console proxy handoff must be root-only"
+  [ -S "$socket" ] && [ ! -L "$socket" ] || fail "VM console socket is unavailable or indirect"
+fi
+[ "$handoff" = "$expected_handoff" ] || fail "console proxy handoff path is not name-bound"
+[ "$now" -ge "$redeemed" ] && [ "$now" -le "$expires" ] || fail "console proxy handoff expired"
+rm -f "$handoff"
+exec websockify --run-once --timeout=15 --idle-timeout=300 --unix-target="$socket" "127.0.0.1:$port"

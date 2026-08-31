@@ -61,4 +61,5 @@ jq -S --arg vm "$vm" --arg hash "$token_hash" --argjson now "$now" '
 chmod 0600 "$temporary"; mv "$temporary" "$sessions"; temporary=
 [ "$production" -eq 0 ] || rm -f "$request"
 trap - EXIT INT TERM; rmdir "$lock"
-jq -S -n --arg vm "$vm" --arg socket "$socket" '{schema:1,status:"redeemed",vm:$vm,socket:$socket,one_time:true,network_listener:false}'
+jq -S -n --arg vm "$vm" --arg socket "$socket" --argjson redeemed "$now" --argjson expires "$((now + 10))" \
+  '{schema:1,status:"redeemed",vm:$vm,socket:$socket,redeemed_at:$redeemed,proxy_start_expires_at:$expires,one_time:true,network_listener:false}'

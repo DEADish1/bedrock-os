@@ -51,6 +51,7 @@ udev
 unzip
 usbutils
 virt-install
+websockify
 xmlstarlet
 xz-utils
 zfs-dkms
