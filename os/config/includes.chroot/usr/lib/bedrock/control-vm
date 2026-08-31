@@ -48,11 +48,11 @@ before=$(read_state)
 case "$action:$before" in
   start:"shut off") "$virsh" --connect qemu:///system start "$name" >/dev/null; expected=running ;;
   start:*) fail "VM must be shut off before start" ;;
-  stop:running) "$virsh" --connect qemu:///system shutdown "$name" >/dev/null; expected="shut off" ;;
+  stop:running) "$virsh" --connect qemu:///system shutdown "$name" --mode agent,acpi >/dev/null; expected="shut off" ;;
   stop:*) fail "VM must be running before graceful stop" ;;
   force-stop:running|force-stop:paused) "$virsh" --connect qemu:///system destroy "$name" >/dev/null; expected="shut off" ;;
   force-stop:*) fail "VM must be running or paused before force-stop" ;;
-  restart:running) "$virsh" --connect qemu:///system reboot "$name" >/dev/null; expected=running ;;
+  restart:running) "$virsh" --connect qemu:///system reboot "$name" --mode agent,acpi >/dev/null; expected=running ;;
   restart:*) fail "VM must be running before restart" ;;
 esac
 i=0

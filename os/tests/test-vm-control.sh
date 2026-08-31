@@ -39,7 +39,7 @@ jq '.domains=[]' "$work/domains.json" > "$work/unmanaged.json"
 request start 'START VM test-vm'
 BEDROCK_VM_DOMAINS_OVERRIDE="$work/unmanaged.json" must_fail run
 grep -q 'start test-vm' "$work/virsh.log"
-grep -q 'shutdown test-vm' "$work/virsh.log"
+grep -q 'shutdown test-vm --mode agent,acpi' "$work/virsh.log"
 grep -q 'destroy test-vm' "$work/virsh.log"
-grep -q 'reboot test-vm' "$work/virsh.log"
+grep -q 'reboot test-vm --mode agent,acpi' "$work/virsh.log"
 printf 'VM control tests passed.\n'

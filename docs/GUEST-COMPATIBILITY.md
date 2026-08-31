@@ -13,7 +13,7 @@ During Windows Setup, choose **Load driver** if the installer cannot see the sys
 - `viostor`: VirtIO block storage used by the Bedrock system disk.
 - `NetKVM`: VirtIO network adapter.
 - Balloon driver/service: cooperative memory reporting and ballooning.
-- QEMU guest agent: orderly guest integration when Bedrock adds the agent channel and authenticated API controls.
+- QEMU guest agent: orderly shutdown/restart and future authenticated guest integration through Bedrock's fixed VirtIO agent channel.
 
 Do not disable Secure Boot or Windows driver-signing enforcement to load an unsigned or test-signed build. Driver updates should follow the same snapshot, backup, signature verification, install, reboot, and Device Manager verification process as other privileged Windows drivers. The upstream project documents its distributed ISO and guest-tools installer in the [VirtIO Windows driver repository](https://github.com/virtio-win/kvm-guest-drivers-windows) and [driver installation guide](https://github.com/virtio-win/kvm-guest-drivers-windows/wiki/Driver-installation).
 

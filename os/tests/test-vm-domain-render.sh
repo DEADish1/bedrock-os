@@ -18,6 +18,7 @@ grep -q "source file='/var/lib/bedrock/virtualization/disks/test-vm.qcow2'" "$wo
 grep -q "<source network='default'/>" "$work/domain-a.xml"
 grep -q "<cpu mode='host-passthrough' check='none' migratable='off'/>" "$work/domain-a.xml"
 grep -q "<tpm model='tpm-crb'><backend type='emulator' version='2.0' persistent_state='yes'/></tpm>" "$work/domain-a.xml"
+grep -q "<channel type='unix'><target type='virtio' name='org.qemu.guest_agent.0'/></channel>" "$work/domain-a.xml"
 grep -q "<graphics type='vnc' autoport='no' socket='/run/libvirt/qemu/bedrock-test-vm.vnc' sharePolicy='ignore'/>" "$work/domain-a.xml"
 ! grep -Eq "graphics[^>]+[[:space:]](port|listen)=|type='spice'" "$work/domain-a.xml"
 ! grep -Eq 'qemu:commandline|hostdev|filesystem|script|interface type=.bridge' "$work/domain-a.xml"
