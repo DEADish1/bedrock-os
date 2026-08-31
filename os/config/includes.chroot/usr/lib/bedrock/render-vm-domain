@@ -1,0 +1,79 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 2 ] || { printf 'usage: %s PLAN.json DOMAIN.xml\n' "$0" >&2; exit 2; }
+plan=$1
+output=$2
+[ -f "$plan" ] && [ ! -L "$plan" ] || { printf 'error: VM plan is missing or indirect\n' >&2; exit 1; }
+command -v jq >/dev/null 2>&1 || { printf 'error: jq is required\n' >&2; exit 1; }
+jq -e '
+  (keys|sort)==(["autostart","confirmation_phrase","disk_size_gib","firmware","memory_mib","mutation_authorized","name","network","reservation","schema","status","vcpus"]|sort) and
+  .schema==1 and .status=="review-only" and .mutation_authorized==false and
+  (.name|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+  .confirmation_phrase==("CREATE VM "+.name) and
+  (.vcpus|type=="number" and floor==. and .>=1 and .<=64) and
+  (.memory_mib|type=="number" and floor==. and .>=512 and .<=262144 and .%256==0) and
+  (.disk_size_gib|type=="number" and floor==. and .>=8 and .<=4096) and
+  .firmware=="uefi" and .network=="default" and (.autostart|type=="boolean") and
+  (.reservation|keys|sort)==(["bedrock_reserved_cpus","bedrock_reserved_memory_mib","host_cpus","host_memory_mib","used_memory_mib","used_vcpus"]|sort) and
+  .reservation.bedrock_reserved_cpus==2 and .reservation.bedrock_reserved_memory_mib==2048 and
+  (.reservation.host_cpus >= (.reservation.used_vcpus+.vcpus+2)) and
+  (.reservation.host_memory_mib >= (.reservation.used_memory_mib+.memory_mib+2048))
+' "$plan" >/dev/null || { printf 'error: VM plan is invalid or no longer preserves host reservations\n' >&2; exit 1; }
+
+name=$(jq -r .name "$plan")
+if [ "${BEDROCK_VM_TEST_MODE:-0}" != 1 ]; then
+  [ "$(id -u)" -eq 0 ] || { printf 'error: VM domain rendering requires root\n' >&2; exit 1; }
+  [ "$output" = "/var/lib/bedrock/virtualization/definitions/$name.xml" ] || {
+    printf 'error: VM definition path must match the requested managed name\n' >&2; exit 1;
+  }
+fi
+directory=$(dirname "$output")
+mkdir -p "$directory"
+[ -d "$directory" ] && [ ! -L "$directory" ] || { printf 'error: VM definition directory is indirect\n' >&2; exit 1; }
+[ ! -e "$output" ] || { [ -f "$output" ] && [ ! -L "$output" ]; } || { printf 'error: VM definition output is indirect\n' >&2; exit 1; }
+
+vcpus=$(jq -r .vcpus "$plan")
+memory_mib=$(jq -r .memory_mib "$plan")
+temporary=$(mktemp "$directory/.domain.XXXXXX")
+trap 'rm -f "$temporary"' EXIT INT TERM
+{
+  printf '%s\n' "<domain type='kvm'>"
+  printf '  <name>%s</name>\n' "$name"
+  printf "  <memory unit='MiB'>%s</memory>\n" "$memory_mib"
+  printf "  <currentMemory unit='MiB'>%s</currentMemory>\n" "$memory_mib"
+  printf "  <vcpu placement='static'>%s</vcpu>\n" "$vcpus"
+  printf '%s\n' \
+    "  <os>" \
+    "    <type arch='x86_64' machine='q35'>hvm</type>" \
+    "    <loader readonly='yes' secure='yes' type='pflash'>/usr/share/OVMF/OVMF_CODE_4M.secboot.fd</loader>" \
+    "    <nvram template='/usr/share/OVMF/OVMF_VARS_4M.ms.fd'>/var/lib/libvirt/qemu/nvram/${name}_VARS.fd</nvram>" \
+    "    <boot dev='hd'/>" \
+    "  </os>" \
+    "  <features><acpi/><apic/></features>" \
+    "  <cpu mode='host-passthrough' check='none' migratable='off'/>" \
+    "  <clock offset='utc'/>" \
+    "  <on_poweroff>destroy</on_poweroff>" \
+    "  <on_reboot>restart</on_reboot>" \
+    "  <on_crash>preserve</on_crash>" \
+    "  <devices>" \
+    "    <emulator>/usr/bin/qemu-system-x86_64</emulator>" \
+    "    <disk type='file' device='disk'>" \
+    "      <driver name='qemu' type='qcow2' cache='none' discard='unmap'/>" \
+    "      <source file='/var/lib/bedrock/virtualization/disks/${name}.qcow2'/>" \
+    "      <target dev='vda' bus='virtio'/>" \
+    "    </disk>" \
+    "    <interface type='network'><source network='default'/><model type='virtio'/></interface>" \
+    "    <controller type='usb' model='qemu-xhci'/>" \
+    "    <serial type='pty'><target port='0'/></serial>" \
+    "    <console type='pty'><target type='serial' port='0'/></console>" \
+    "    <graphics type='spice' autoport='yes'><listen type='none'/></graphics>" \
+    "    <video><model type='virtio' primary='yes'/></video>" \
+    "    <memballoon model='virtio'/>" \
+    "  </devices>" \
+    "</domain>"
+} > "$temporary"
+chmod 0600 "$temporary"
+mv "$temporary" "$output"
+trap - EXIT INT TERM
+cat "$output"

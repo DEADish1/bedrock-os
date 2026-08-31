@@ -18,7 +18,7 @@ else
   root=
   output=/var/lib/bedrock/virtualization/capabilities.json
   qemu=/usr/bin/qemu-system-x86_64
-  ovmf=/usr/share/OVMF/OVMF_CODE_4M.fd
+  ovmf=/usr/share/OVMF/OVMF_CODE_4M.secboot.fd
   if virsh --connect qemu:///system list --all >/dev/null 2>&1; then virsh_ok=1; else virsh_ok=0; fi
 fi
 command -v jq >/dev/null 2>&1 || { printf 'error: jq is required\n' >&2; exit 1; }
