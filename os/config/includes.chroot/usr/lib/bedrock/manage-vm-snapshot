@@ -1,0 +1,79 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
+request=$1
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+[ -f "$request" ] && [ ! -L "$request" ] || fail "VM snapshot request is missing or indirect"
+command -v jq >/dev/null 2>&1 || fail "jq is required"
+jq -e '
+  (keys|sort)==(["action","confirmation","name","schema","snapshot"]|sort) and .schema==1 and
+  (.action=="create" or .action=="restore" or .action=="delete") and
+  (.name|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+  (.snapshot|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+  .confirmation==(if .action=="create" then "CREATE SNAPSHOT "+.snapshot+" FOR VM "+.name elif .action=="restore" then "RESTORE SNAPSHOT "+.snapshot+" FOR VM "+.name else "DELETE SNAPSHOT "+.snapshot+" FOR VM "+.name end)
+' "$request" >/dev/null || fail "VM snapshot request or confirmation is invalid"
+name=$(jq -r .name "$request")
+snapshot=$(jq -r .snapshot "$request")
+action=$(jq -r .action "$request")
+if [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ]; then
+  base=${BEDROCK_VM_STATE_ROOT:?test mode requires BEDROCK_VM_STATE_ROOT}
+  state=${BEDROCK_VM_DOMAINS:?test mode requires BEDROCK_VM_DOMAINS}
+  virsh=${BEDROCK_VM_VIRSH:?test mode requires BEDROCK_VM_VIRSH}
+else
+  [ "$(id -u)" -eq 0 ] || fail "VM snapshot management requires root"
+  [ "$request" = "/var/lib/bedrock/virtualization/requests/$name-snapshot-$action-$snapshot.json" ] || fail "VM snapshot request path is not name-bound"
+  base=/var/lib/bedrock/virtualization
+  state=$base/domains.json
+  virsh=/usr/bin/virsh
+fi
+[ -x "$virsh" ] && [ ! -L "$virsh" ] || fail "virsh is unavailable or indirect"
+[ -d "$base" ] && [ ! -L "$base" ] || fail "VM state path is indirect"
+[ -f "$state" ] && [ ! -L "$state" ] || fail "managed VM state is missing or indirect"
+jq -e --arg name "$name" '
+  (keys|sort)==(["domains","schema"]|sort) and .schema==1 and (.domains|type=="array") and
+  ([.domains[]|select(.name==$name)]|length)==1 and
+  all(.domains[]; (keys|sort)==(["memory_mib","name","vcpus"]|sort) and
+    (.name|type=="string") and (.vcpus|type=="number" and floor==.) and (.memory_mib|type=="number" and floor==.))
+' "$state" >/dev/null || fail "VM is not uniquely present in managed state"
+[ -f "$base/disks/$name.qcow2" ] && [ ! -L "$base/disks/$name.qcow2" ] || fail "managed VM disk is missing or indirect"
+lock=$base/.operation.lock
+mkdir "$lock" 2>/dev/null || fail "another VM lifecycle operation is running"
+snapshot_list=
+cleanup() { [ -z "$snapshot_list" ] || rm -f "$snapshot_list"; rmdir "$lock" 2>/dev/null || true; }
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+snapshot_list=$(mktemp "$base/.snapshots.XXXXXX")
+"$virsh" --connect qemu:///system dominfo "$name" >/dev/null 2>&1 || fail "managed VM is missing from libvirt"
+runtime=$(LC_ALL=C "$virsh" --connect qemu:///system domstate "$name" | tr '[:upper:]' '[:lower:]' | tr -d '\r')
+[ "$runtime" = "shut off" ] || fail "VM must be shut off for snapshot operations"
+refresh_snapshots() { "$virsh" --connect qemu:///system snapshot-list "$name" --name > "$snapshot_list" || fail "libvirt snapshot inventory is unavailable"; }
+snapshot_exists() { grep -Fqx "$snapshot" "$snapshot_list"; }
+refresh_snapshots
+case "$action" in
+  create)
+    if snapshot_exists; then fail "snapshot already exists"; fi
+    "$virsh" --connect qemu:///system snapshot-create-as "$name" "$snapshot" "Bedrock managed offline snapshot" --atomic --validate >/dev/null
+    refresh_snapshots
+    snapshot_exists || fail "libvirt did not record the snapshot"
+    ;;
+  restore)
+    snapshot_exists || fail "snapshot does not exist"
+    "$virsh" --connect qemu:///system snapshot-revert "$name" "$snapshot" >/dev/null
+    refresh_snapshots
+    snapshot_exists || fail "restored snapshot is no longer recorded"
+    runtime=$(LC_ALL=C "$virsh" --connect qemu:///system domstate "$name" | tr '[:upper:]' '[:lower:]' | tr -d '\r')
+    [ "$runtime" = "shut off" ] || fail "restored VM did not remain shut off"
+    ;;
+  delete)
+    snapshot_exists || fail "snapshot does not exist"
+    "$virsh" --connect qemu:///system snapshot-delete "$name" "$snapshot" >/dev/null
+    refresh_snapshots
+    if snapshot_exists; then fail "libvirt still reports the deleted snapshot"; fi
+    ;;
+esac
+trap - EXIT INT TERM
+rm -f "$snapshot_list"
+rmdir "$lock"
+jq -S -n --arg name "$name" --arg snapshot "$snapshot" --arg action "$action" \
+  '{schema:1,status:"completed",name:$name,snapshot:$snapshot,action:$action,state:"shut off"}'

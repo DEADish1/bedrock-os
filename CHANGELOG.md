@@ -6,6 +6,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ### Virtual machines and images 0.5
 
+- Added guarded offline VM snapshot creation, restoration, and deletion for uniquely managed QCOW2 guests with strict names, exact action confirmations, fixed request paths, shared lifecycle serialization, metadata verification, and enforced shut-down state.
 - Added guarded recoverable VM deletion with exact storage-deletion confirmation, definition hash binding, shut-down and managed-state gates, shared lifecycle serialization, root-only asset quarantine, atomic allocation removal, and full rollback on failure.
 - Added guarded start, graceful-stop, and force-stop controls for uniquely managed VMs with exact action confirmations, fixed request paths, exclusive serialization, precondition checks, and verified final libvirt state.
 - Added guarded VM disk creation and persistent libvirt registration with exact typed confirmation, plan/definition hash binding, fixed managed paths, exclusive serialization, atomic allocation state, failure rollback, and no implicit guest start.
