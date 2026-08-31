@@ -15,6 +15,7 @@ for file in \
 done
 jq -e '.schema==1 and .domains==[]' "$OS_DIR/config/includes.chroot/usr/share/bedrock/empty-vm-domains.json" >/dev/null
 jq -e '.schema==1 and .images==[]' "$OS_DIR/config/includes.chroot/usr/share/bedrock/empty-vm-images.json" >/dev/null
+jq -e '.schema==1 and .conversions==[]' "$OS_DIR/config/includes.chroot/usr/share/bedrock/empty-vm-image-provenance.json" >/dev/null
 jq -e '.schema==1 and .attachments==[]' "$OS_DIR/config/includes.chroot/usr/share/bedrock/empty-vm-attachments.json" >/dev/null
 jq -e '.schema==1 and .networks==[]' "$OS_DIR/config/includes.chroot/usr/share/bedrock/empty-vm-networks.json" >/dev/null
 jq -e '.schema==1 and .attachments==[]' "$OS_DIR/config/includes.chroot/usr/share/bedrock/empty-vm-network-attachments.json" >/dev/null
@@ -127,6 +128,7 @@ sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/delete-vm"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/manage-vm-snapshot"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/import-vm-image"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/import-vm-image-archive"
+sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/convert-vm-image"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/manage-vm-image-attachment"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/manage-isolated-network"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/manage-vm-network-attachment"
@@ -186,6 +188,7 @@ sh "$OS_DIR/tests/test-vm-deletion.sh"
 sh "$OS_DIR/tests/test-vm-snapshots.sh"
 sh "$OS_DIR/tests/test-vm-image-import.sh"
 sh "$OS_DIR/tests/test-vm-image-archive-import.sh"
+sh "$OS_DIR/tests/test-vm-image-conversion.sh"
 sh "$OS_DIR/tests/test-vm-image-attachment.sh"
 sh "$OS_DIR/tests/test-vm-isolated-network.sh"
 sh "$OS_DIR/tests/test-vm-network-attachment.sh"

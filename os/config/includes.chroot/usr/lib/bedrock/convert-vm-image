@@ -1,0 +1,83 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
+request=$1
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+[ -f "$request" ] && [ ! -L "$request" ] || fail "image conversion request is missing or indirect"
+for tool in jq qemu-img sha256sum stat; do command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"; done
+jq -e '
+  (keys|sort)==(["confirmation","schema","source","source_sha256","target","target_type"]|sort) and .schema==1 and
+  (.source|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+  (.target|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and .target!=.source and
+  (.target_type=="qcow2" or .target_type=="img") and
+  (.source_sha256|type=="string" and test("^[0-9a-f]{64}$")) and
+  .confirmation==("CONVERT IMAGE "+.source+" "+.source_sha256+" TO "+(.target_type|ascii_upcase)+" "+.target)
+' "$request" >/dev/null || fail "image conversion request or confirmation is invalid"
+source_name=$(jq -r .source "$request" | tr -d '\r'); target=$(jq -r .target "$request" | tr -d '\r')
+source_hash=$(jq -r .source_sha256 "$request" | tr -d '\r'); target_type=$(jq -r .target_type "$request" | tr -d '\r')
+if [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ]; then
+  base=${BEDROCK_VM_STATE_ROOT:?test mode requires BEDROCK_VM_STATE_ROOT}
+  images=${BEDROCK_VM_IMAGES:?test mode requires BEDROCK_VM_IMAGES}
+  provenance=${BEDROCK_VM_PROVENANCE:?test mode requires BEDROCK_VM_PROVENANCE}
+else
+  [ "$(id -u)" -eq 0 ] || fail "VM image conversion requires root"
+  [ "$request" = "/var/lib/bedrock/virtualization/requests/convert-$source_name-to-$target.json" ] || fail "image conversion request path is not name-bound"
+  base=/var/lib/bedrock/virtualization
+  images=$base/images.json
+  provenance=$base/image-provenance.json
+fi
+for state in "$images" "$provenance"; do [ -f "$state" ] && [ ! -L "$state" ] || fail "image conversion state is missing or indirect: $state"; done
+jq -e --arg source "$source_name" --arg target "$target" '
+  (keys|sort)==(["images","schema"]|sort) and .schema==1 and
+  ([.images[]|select(.name==$source)]|length)==1 and all(.images[]; .name!=$target)
+' "$images" >/dev/null || fail "source is not unique or target already exists"
+jq -e '
+  (keys|sort)==(["conversions","schema"]|sort) and .schema==1 and (.conversions|type=="array") and
+  all(.conversions[]; (keys|sort)==(["source","source_sha256","source_type","target","target_sha256","target_type"]|sort))
+' "$provenance" >/dev/null || fail "image provenance state is invalid"
+source_type=$(jq -r --arg source "$source_name" '.images[]|select(.name==$source)|.type' "$images" | tr -d '\r')
+source_path=$(jq -r --arg source "$source_name" '.images[]|select(.name==$source)|.path' "$images" | tr -d '\r')
+recorded_hash=$(jq -r --arg source "$source_name" '.images[]|select(.name==$source)|.sha256' "$images" | tr -d '\r')
+case "$source_type" in img) input_format=raw ;; qcow2|vhdx|vmdk) input_format=$source_type ;; *) fail "ISO images cannot be converted as disks" ;; esac
+[ "$source_path" = "$base/images/$source_name.$source_type" ] || fail "source image path is not name-bound"
+[ -f "$source_path" ] && [ ! -L "$source_path" ] || fail "source image is missing or indirect"
+[ "$recorded_hash" = "$source_hash" ] && [ "$(sha256sum "$source_path" | awk '{print $1}')" = "$source_hash" ] || fail "source image checksum changed"
+source_info=$(qemu-img info --output=json --force-share "$source_path") || fail "source image cannot be inspected"
+printf '%s' "$source_info" | jq -e --arg format "$input_format" '.format==$format and (has("backing-filename")|not) and (.encrypted//false)==false and (."virtual-size"|type=="number" and .>=1 and .<=4398046511104)' >/dev/null || fail "source format, size, backing chain, or encryption is unsafe"
+library=$base/images
+[ -d "$library" ] && [ ! -L "$library" ] || fail "image library is missing or indirect"
+lock=$base/.operation.lock
+mkdir "$lock" 2>/dev/null || fail "another VM lifecycle operation is running"
+extension=$target_type; [ "$target_type" = img ] && output_format=raw || output_format=qcow2
+destination=$library/$target.$extension
+temporary=$(mktemp "$library/.conversion.XXXXXX")
+images_new=; provenance_new=; installed=0; images_replaced=0; rollback=$base/.images.rollback
+cleanup() { status=$?; rm -f "$temporary" ${images_new:+"$images_new"} ${provenance_new:+"$provenance_new"}; if [ "$status" -ne 0 ] && [ "$images_replaced" -eq 1 ] && [ -f "$rollback" ]; then cp "$rollback" "$images" || true; fi; if [ "$status" -ne 0 ] && [ "$installed" -eq 1 ]; then rm -f "$destination"; fi; rm -f "$rollback"; rmdir "$lock" 2>/dev/null || true; exit "$status"; }
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+[ ! -e "$destination" ] || fail "managed conversion target already exists"
+if [ "$output_format" = qcow2 ]; then
+  qemu-img convert -p -f "$input_format" -O qcow2 -o compat=1.1,lazy_refcounts=off "$source_path" "$temporary" >&2
+else
+  qemu-img convert -p -f "$input_format" -O raw "$source_path" "$temporary" >&2
+fi
+chmod 0600 "$temporary"
+target_info=$(qemu-img info --output=json --force-share "$temporary") || fail "converted image cannot be inspected"
+printf '%s' "$target_info" | jq -e --arg format "$output_format" '.format==$format and (has("backing-filename")|not) and (.encrypted//false)==false and (."virtual-size"|type=="number" and .>=1 and .<=4398046511104)' >/dev/null || fail "converted image failed format or safety validation"
+target_size=$(stat -c %s "$temporary"); [ "$target_size" -ge 1 ] && [ "$target_size" -le 4398046511104 ] || fail "converted image size is invalid"
+target_hash=$(sha256sum "$temporary" | awk '{print $1}')
+mv "$temporary" "$destination"; temporary=; installed=1
+images_new=$(mktemp "$base/.images.XXXXXX"); provenance_new=$(mktemp "$base/.image-provenance.XXXXXX")
+jq -S --arg name "$target" --arg type "$target_type" --arg hash "$target_hash" --arg path "$destination" --argjson size "$target_size" \
+  '.images += [{name:$name,type:$type,sha256:$hash,size_bytes:$size,path:$path}] | .images |= sort_by(.name)' "$images" > "$images_new"
+jq -S --arg source "$source_name" --arg source_hash "$source_hash" --arg target "$target" --arg target_hash "$target_hash" --arg input "$source_type" --arg output "$target_type" \
+  '.conversions += [{source:$source,source_sha256:$source_hash,source_type:$input,target:$target,target_sha256:$target_hash,target_type:$output}] | .conversions |= sort_by(.target)' "$provenance" > "$provenance_new"
+chmod 0600 "$images_new" "$provenance_new"
+cp "$images" "$rollback"; mv "$images_new" "$images"; images_new=; images_replaced=1
+mv "$provenance_new" "$provenance" || fail "provenance commit failed"
+provenance_new=; images_replaced=0; rm -f "$rollback"; installed=0
+trap - EXIT INT TERM
+rmdir "$lock"
+jq -S -n --arg source "$source_name" --arg target "$target" --arg type "$target_type" --arg hash "$target_hash" --arg path "$destination" --argjson size "$target_size" \
+  '{schema:1,status:"converted",source:$source,target:$target,type:$type,sha256:$hash,size_bytes:$size,path:$path,attached:false}'

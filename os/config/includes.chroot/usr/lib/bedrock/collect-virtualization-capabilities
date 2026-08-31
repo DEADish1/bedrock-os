@@ -51,7 +51,7 @@ directory=$(dirname "$output")
 mkdir -p "$directory"
 [ -d "$directory" ] && [ ! -L "$directory" ] || { printf 'error: virtualization state directory is indirect\n' >&2; exit 1; }
 if [ "${BEDROCK_VM_TEST_MODE:-0}" != 1 ]; then
-  for state in domains images attachments networks network-attachments passthrough; do
+  for state in domains images image-provenance attachments networks network-attachments passthrough; do
     target="$directory/$state.json"
     [ ! -e "$target" ] || { [ -f "$target" ] && [ ! -L "$target" ]; } || { printf 'error: virtualization state is indirect: %s\n' "$target" >&2; exit 1; }
     [ -e "$target" ] || install -m 0600 "/usr/share/bedrock/empty-vm-$state.json" "$target"
