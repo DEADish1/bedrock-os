@@ -4,6 +4,10 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+### Virtual machines and images 0.5
+
+- Added the packaged QEMU/KVM, libvirt system, and OVMF foundation plus a boot-time fail-closed capability report that distinguishes CPU virtualization, `/dev/kvm`, QEMU, firmware, and libvirt-system availability. VM mutation remains disabled until lifecycle policy and acceptance are implemented.
+
 ### Update delivery
 
 - Restored clean-build ISO reproducibility after a Debian DKMS change began generating a random, unenrolled MOK: development images now remove the unusable appended module signatures and volatile DKMS/host identity state, with production module-key injection remaining a release-signing gate.

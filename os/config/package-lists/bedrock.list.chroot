@@ -17,6 +17,8 @@ iputils-ping
 jq
 kmod
 less
+libvirt-clients
+libvirt-daemon-system
 linux-headers-amd64
 linux-image-amd64
 live-boot
@@ -29,7 +31,10 @@ nfs-kernel-server
 nvme-cli
 openssh-client
 openssl
+ovmf
 pciutils
+qemu-system-x86
+qemu-utils
 quota
 samba
 sg3-utils

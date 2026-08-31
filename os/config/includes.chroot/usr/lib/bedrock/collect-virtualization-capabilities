@@ -1,0 +1,63 @@
+#!/bin/sh
+set -eu
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+LC_ALL=C
+export PATH LC_ALL
+
+if [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ]; then
+  [ -z "${BEDROCK_VM_TEST_TOOL_DIR:-}" ] || PATH="$BEDROCK_VM_TEST_TOOL_DIR:$PATH"
+  export PATH
+  root=${BEDROCK_VM_TEST_ROOT:?test mode requires BEDROCK_VM_TEST_ROOT}
+  output=${BEDROCK_VM_OUTPUT:?test mode requires BEDROCK_VM_OUTPUT}
+  qemu=${BEDROCK_VM_QEMU:?test mode requires BEDROCK_VM_QEMU}
+  ovmf=${BEDROCK_VM_OVMF:?test mode requires BEDROCK_VM_OVMF}
+  virsh_ok=${BEDROCK_VM_VIRSH_OK:-0}
+else
+  [ "$(id -u)" -eq 0 ] || { printf 'error: virtualization capability collection requires root\n' >&2; exit 1; }
+  root=
+  output=/var/lib/bedrock/virtualization/capabilities.json
+  qemu=/usr/bin/qemu-system-x86_64
+  ovmf=/usr/share/OVMF/OVMF_CODE_4M.fd
+  if virsh --connect qemu:///system list --all >/dev/null 2>&1; then virsh_ok=1; else virsh_ok=0; fi
+fi
+command -v jq >/dev/null 2>&1 || { printf 'error: jq is required\n' >&2; exit 1; }
+
+cpu_ok=false
+kvm_ok=false
+qemu_ok=false
+ovmf_ok=false
+management_ok=false
+[ -r "$root/proc/cpuinfo" ] && grep -Eq '(^|[[:space:]])(vmx|svm)([[:space:]]|$)' "$root/proc/cpuinfo" && cpu_ok=true
+if [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ]; then
+  [ -e "$root/dev/kvm" ] && [ ! -L "$root/dev/kvm" ] && kvm_ok=true
+else
+  [ -c /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ] && kvm_ok=true
+fi
+[ -x "$qemu" ] && [ ! -L "$qemu" ] && qemu_ok=true
+[ -r "$ovmf" ] && [ ! -L "$ovmf" ] && ovmf_ok=true
+[ "$virsh_ok" = 1 ] && management_ok=true
+
+reasons='[]'
+[ "$cpu_ok" = true ] || reasons=$(printf '%s' "$reasons" | jq -c '. + ["cpu-virtualization-unavailable"]')
+[ "$kvm_ok" = true ] || reasons=$(printf '%s' "$reasons" | jq -c '. + ["kvm-device-unavailable"]')
+[ "$qemu_ok" = true ] || reasons=$(printf '%s' "$reasons" | jq -c '. + ["qemu-unavailable"]')
+[ "$ovmf_ok" = true ] || reasons=$(printf '%s' "$reasons" | jq -c '. + ["ovmf-unavailable"]')
+[ "$management_ok" = true ] || reasons=$(printf '%s' "$reasons" | jq -c '. + ["libvirt-system-unavailable"]')
+supported=false
+[ "$reasons" = '[]' ] && supported=true
+
+directory=$(dirname "$output")
+mkdir -p "$directory"
+[ -d "$directory" ] && [ ! -L "$directory" ] || { printf 'error: virtualization state directory is indirect\n' >&2; exit 1; }
+temporary=$(mktemp "$directory/.capabilities.XXXXXX")
+trap 'rm -f "$temporary"' EXIT INT TERM
+jq -n --argjson supported "$supported" --argjson cpu "$cpu_ok" --argjson kvm "$kvm_ok" \
+  --argjson qemu "$qemu_ok" --argjson ovmf "$ovmf_ok" --argjson management "$management_ok" \
+  --argjson reasons "$reasons" \
+  '{schema:1,supported:$supported,accelerator:{cpu_virtualization:$cpu,kvm_device:$kvm},qemu:$qemu,ovmf:$ovmf,libvirt_system:$management,reasons:$reasons}' \
+  > "$temporary"
+chmod 0644 "$temporary"
+mv "$temporary" "$output"
+trap - EXIT INT TERM
+cat "$output"

@@ -1,0 +1,11 @@
+[Unit]
+Description=Collect Bedrock virtualization capabilities
+After=systemd-udev-settle.service virtqemud.socket
+Wants=virtqemud.socket
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/bedrock/collect-virtualization-capabilities
+
+[Install]
+WantedBy=multi-user.target
