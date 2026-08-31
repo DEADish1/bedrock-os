@@ -66,7 +66,7 @@ defined=0
 cleanup() {
   status=$?
   if [ "$status" -ne 0 ]; then
-    [ "$defined" -eq 0 ] || "$virsh" --connect qemu:///system undefine "$name" --nvram >/dev/null 2>&1 || true
+    [ "$defined" -eq 0 ] || "$virsh" --connect qemu:///system undefine "$name" --nvram --tpm >/dev/null 2>&1 || true
     [ "$created_disk" -eq 0 ] || rm -f "$disk"
   fi
   rmdir "$lock" 2>/dev/null || true

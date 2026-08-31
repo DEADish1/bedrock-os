@@ -41,6 +41,8 @@ samba
 sg3-utils
 smartmontools
 sudo
+swtpm
+swtpm-tools
 systemd-boot-efi
 systemd-cryptsetup
 systemd-resolved

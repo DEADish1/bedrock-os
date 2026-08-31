@@ -17,7 +17,7 @@ During Windows Setup, choose **Load driver** if the installer cannot see the sys
 
 Do not disable Secure Boot or Windows driver-signing enforcement to load an unsigned or test-signed build. Driver updates should follow the same snapshot, backup, signature verification, install, reboot, and Device Manager verification process as other privileged Windows drivers. The upstream project documents its distributed ISO and guest-tools installer in the [VirtIO Windows driver repository](https://github.com/virtio-win/kvm-guest-drivers-windows) and [driver installation guide](https://github.com/virtio-win/kvm-guest-drivers-windows/wiki/Driver-installation).
 
-Windows 11 must not be labeled supported until Bedrock adds a persistent software TPM 2.0 to the managed domain and completes install, reboot, snapshot, restore, network, storage, and console acceptance. GPU passthrough and application-specific anti-cheat or DRM behavior are separate compatibility questions and are never implied by base guest support.
+Every new managed VM includes a persistent software TPM 2.0 using libvirt's emulator boundary. Its state belongs to the VM: recoverable deletion preserves it, while rollback of a failed registration or clone removes it. Windows 11 must not be labeled supported until Bedrock completes install, reboot, snapshot, restore, network, storage, TPM persistence, and console acceptance. GPU passthrough and application-specific anti-cheat or DRM behavior are separate compatibility questions and are never implied by base guest support.
 
 ## macOS guests
 
@@ -30,7 +30,7 @@ Apple silicon is not a Bedrock host target because the current OS image and KVM 
 ## UI rules
 
 - Show Windows driver media as user-supplied third-party software with its source and checksum; never call it a Bedrock driver.
-- Do not offer Windows 11 as “supported” until the TPM and acceptance gates above pass.
+- Do not offer Windows 11 as “supported” until the acceptance gates above pass.
 - Show macOS as unsupported, not merely “advanced,” on every host.
 - On non-Apple hardware, do not offer a macOS creation path.
 - Never imply that GPU passthrough makes an otherwise unsupported guest supported.

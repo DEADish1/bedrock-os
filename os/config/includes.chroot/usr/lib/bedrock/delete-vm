@@ -83,7 +83,7 @@ mv "$plan" "$quarantine/plan.json"
 mv "$authorization" "$quarantine/authorization.json"
 mv "$disk" "$quarantine/disk.qcow2"
 undefined=1
-"$virsh" --connect qemu:///system undefine "$name" --nvram >/dev/null
+"$virsh" --connect qemu:///system undefine "$name" --nvram --keep-tpm >/dev/null
 temporary=$(mktemp "$base/.domains.XXXXXX")
 jq -S --arg name "$name" '.domains |= map(select(.name!=$name))' "$state" > "$temporary"
 chmod 0600 "$temporary"

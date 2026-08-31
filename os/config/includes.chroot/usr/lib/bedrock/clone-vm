@@ -68,7 +68,7 @@ cleanup() {
   status=$?
   [ -z "$temporary" ] || rm -f "$temporary"
   if [ "$status" -ne 0 ] && [ "$state_changed" -eq 1 ]; then cp "$state_before" "$state" 2>/dev/null || true; fi
-  if [ "$status" -ne 0 ] && [ "$mutated" -eq 1 ]; then "$virsh" --connect qemu:///system undefine "$name" --nvram >/dev/null 2>&1 || true; rm -f "$disk" "$definition" "$plan" "$authorization"; fi
+  if [ "$status" -ne 0 ] && [ "$mutated" -eq 1 ]; then "$virsh" --connect qemu:///system undefine "$name" --nvram --tpm >/dev/null 2>&1 || true; rm -f "$disk" "$definition" "$plan" "$authorization"; fi
   [ -z "$state_before" ] || rm -f "$state_before"
   rmdir "$lock" 2>/dev/null || true
   exit "$status"

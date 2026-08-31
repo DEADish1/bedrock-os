@@ -39,7 +39,7 @@ jq -e '.domains==[]' "$work/state/domains.json" >/dev/null
 [ ! -e "$work/state/disks/test-vm.qcow2" ]
 [ -f "$work/state/quarantine/test-vm/disk.qcow2" ]
 [ -f "$work/state/quarantine/test-vm/domains.before.json" ]
-grep -q 'undefine test-vm --nvram' "$work/virsh.log"
+grep -q 'undefine test-vm --nvram --keep-tpm' "$work/virsh.log"
 must_fail() { if "$@" >/dev/null 2>&1; then printf 'error: command unexpectedly succeeded\n' >&2; exit 1; fi; }
 setup
 printf 'running\n' > "$work/runtime-state"

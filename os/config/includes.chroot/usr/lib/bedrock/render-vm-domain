@@ -65,6 +65,7 @@ trap 'rm -f "$temporary"' EXIT INT TERM
     "    </disk>" \
     "    <interface type='network'><source network='default'/><model type='virtio'/></interface>" \
     "    <controller type='usb' model='qemu-xhci'/>" \
+    "    <tpm model='tpm-crb'><backend type='emulator' version='2.0' persistent_state='yes'/></tpm>" \
     "    <serial type='pty'><target port='0'/></serial>" \
     "    <console type='pty'><target type='serial' port='0'/></console>" \
     "    <graphics type='vnc' autoport='no' socket='/run/libvirt/qemu/bedrock-${name}.vnc' sharePolicy='ignore'/>" \
