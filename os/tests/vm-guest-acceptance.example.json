@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "mode": "fixture",
+  "role": "linux",
+  "session_id": "11111111-1111-4111-8111-111111111111",
+  "captured_at": "2026-08-31T00:00:00Z",
+  "bedrock_image_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "guest_media_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "vm": {"name": "acceptance-linux", "vcpus": 4, "memory_mib": 8192},
+  "checks": {
+    "installation_completed": true,
+    "kvm_acceleration": true,
+    "uefi_secure_boot": true,
+    "tpm2_persistent": true,
+    "guest_agent_ready": true,
+    "network_ready": true,
+    "browser_console_ready": true,
+    "assigned_resources_verified": true,
+    "guest_reboot_persisted": true,
+    "host_reboot_persisted": true,
+    "snapshot_created": true,
+    "snapshot_restore_completed": true
+  },
+  "integrity": {
+    "baseline_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "mutated_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "restored_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "privacy": {
+    "guest_addresses_included": false,
+    "guest_credentials_included": false,
+    "guest_hostnames_included": false,
+    "serial_numbers_included": false,
+    "reviewed": true
+  }
+}

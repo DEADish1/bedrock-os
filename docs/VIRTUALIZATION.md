@@ -46,4 +46,6 @@ Hardware inventory now records GPU PCI identity, boot-display status, driver, IO
 
 Production acceptance must prove the capability report on supported Intel and AMD hosts, create a UEFI guest through the system libvirt connection, confirm KVM acceleration, reboot the host, and verify that the guest definition and storage remain intact.
 
+The complete Linux-and-Windows evidence contract is in [Virtual machine and image-library acceptance](ACCEPTANCE-0.5.md). Its validator requires two distinct physical-mode sessions bound to one Bedrock image and rejects incomplete lifecycle, snapshot-integrity, resource, agent, console, Secure Boot, TPM, or privacy evidence.
+
 Windows driver requirements and the macOS licensing/support boundary are defined in [Guest operating-system compatibility](GUEST-COMPATIBILITY.md). The packaged machine-readable policy prevents the future interface from presenting Windows 11 as supported before acceptance passes, or presenting macOS as supported on any current Bedrock host.
