@@ -14,4 +14,6 @@ This foundation does not authorize VM creation or mutation. The v0.5 lifecycle l
 
 `control-vm` provides serialized start, graceful-stop, and force-stop operations only for guests that are uniquely present in Bedrock's managed allocation state and still exist in system libvirt. Every request uses a fixed name/action-bound path and an exact action-specific confirmation phrase. The controller checks the current state before mutation and polls for the required final state; it never treats an accepted libvirt command as proof of completion.
 
+`delete-vm` requires a shut-down, uniquely managed guest, the exact `DELETE VM <name> AND STORAGE` phrase, and the reviewed definition's SHA-256. Under the shared lifecycle lock it moves the disk, definition, plan, authorization, deletion request, and prior allocation state into a root-only name-bound quarantine before undefining the guest and atomically removing its allocation. Any interruption or failure restores the assets and libvirt definition. Successful deletion remains recoverable from quarantine; irreversible purge is deliberately a separate future boundary.
+
 Production acceptance must prove the capability report on supported Intel and AMD hosts, create a UEFI guest through the system libvirt connection, confirm KVM acceleration, reboot the host, and verify that the guest definition and storage remain intact.

@@ -1,0 +1,95 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
+request=$1
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+[ -f "$request" ] && [ ! -L "$request" ] || fail "VM deletion request is missing or indirect"
+for tool in jq sha256sum; do command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"; done
+jq -e '
+  (keys|sort)==(["action","confirmation","definition_sha256","name","schema"]|sort) and
+  .schema==1 and .action=="delete" and
+  (.name|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+  .confirmation==("DELETE VM "+.name+" AND STORAGE") and
+  (.definition_sha256|type=="string" and test("^[0-9a-f]{64}$"))
+' "$request" >/dev/null || fail "VM deletion request or confirmation is invalid"
+name=$(jq -r .name "$request")
+if [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ]; then
+  base=${BEDROCK_VM_STATE_ROOT:?test mode requires BEDROCK_VM_STATE_ROOT}
+  state=${BEDROCK_VM_DOMAINS:?test mode requires BEDROCK_VM_DOMAINS}
+  virsh=${BEDROCK_VM_VIRSH:?test mode requires BEDROCK_VM_VIRSH}
+else
+  [ "$(id -u)" -eq 0 ] || fail "VM deletion requires root"
+  [ "$request" = "/var/lib/bedrock/virtualization/requests/$name-delete.json" ] || fail "VM deletion request path is not name-bound"
+  base=/var/lib/bedrock/virtualization
+  state=$base/domains.json
+  virsh=/usr/bin/virsh
+fi
+[ -x "$virsh" ] && [ ! -L "$virsh" ] || fail "virsh is unavailable or indirect"
+[ -d "$base" ] && [ ! -L "$base" ] || fail "VM state path is indirect"
+[ -f "$state" ] && [ ! -L "$state" ] || fail "managed VM state is missing or indirect"
+jq -e --arg name "$name" '
+  (keys|sort)==(["domains","schema"]|sort) and .schema==1 and (.domains|type=="array") and
+  ([.domains[]|select(.name==$name)]|length)==1 and
+  all(.domains[]; (keys|sort)==(["memory_mib","name","vcpus"]|sort) and
+    (.name|type=="string") and (.vcpus|type=="number" and floor==.) and (.memory_mib|type=="number" and floor==.))
+' "$state" >/dev/null || fail "VM is not uniquely present in managed state"
+definition=$base/definitions/$name.xml
+plan=$base/plans/$name.json
+authorization=$base/authorizations/$name.json
+disk=$base/disks/$name.qcow2
+for file in "$definition" "$plan" "$authorization" "$disk"; do
+  [ -f "$file" ] && [ ! -L "$file" ] || fail "managed VM asset is missing or indirect: $file"
+done
+[ "$(sha256sum "$definition" | awk '{print $1}')" = "$(jq -r .definition_sha256 "$request")" ] || fail "VM definition does not match deletion authorization"
+
+lock=$base/.operation.lock
+mkdir "$lock" 2>/dev/null || fail "another VM lifecycle operation is running"
+quarantine=$base/quarantine/$name
+undefined=0
+state_updated=0
+temporary=
+cleanup() {
+  status=$?
+  if [ "$status" -ne 0 ] && [ -d "$quarantine" ]; then
+    [ "$state_updated" -eq 0 ] || cp "$quarantine/domains.before.json" "$state" 2>/dev/null || true
+    [ "$undefined" -eq 0 ] || "$virsh" --connect qemu:///system define "$quarantine/definition.xml" >/dev/null 2>&1 || true
+    [ ! -f "$quarantine/disk.qcow2" ] || mv "$quarantine/disk.qcow2" "$disk" 2>/dev/null || true
+    [ ! -f "$quarantine/definition.xml" ] || mv "$quarantine/definition.xml" "$definition" 2>/dev/null || true
+    [ ! -f "$quarantine/plan.json" ] || mv "$quarantine/plan.json" "$plan" 2>/dev/null || true
+    [ ! -f "$quarantine/authorization.json" ] || mv "$quarantine/authorization.json" "$authorization" 2>/dev/null || true
+    rm -f "$quarantine/domains.before.json" "$quarantine/deletion.json"
+    rmdir "$quarantine" 2>/dev/null || true
+  fi
+  [ -z "$temporary" ] || rm -f "$temporary"
+  rmdir "$lock" 2>/dev/null || true
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+"$virsh" --connect qemu:///system dominfo "$name" >/dev/null 2>&1 || fail "managed VM is missing from libvirt"
+runtime=$(LC_ALL=C "$virsh" --connect qemu:///system domstate "$name" | tr '[:upper:]' '[:lower:]' | tr -d '\r')
+[ "$runtime" = "shut off" ] || fail "VM must be shut off before deletion"
+[ -e "$base/quarantine" ] || mkdir "$base/quarantine"
+[ -d "$base/quarantine" ] && [ ! -L "$base/quarantine" ] || fail "VM quarantine path is indirect"
+chmod 0700 "$base/quarantine"
+[ ! -e "$quarantine" ] || fail "a recoverable deletion already exists for this VM name"
+mkdir "$quarantine"
+chmod 0700 "$quarantine"
+cp "$state" "$quarantine/domains.before.json"
+cp "$request" "$quarantine/deletion.json"
+mv "$definition" "$quarantine/definition.xml"
+mv "$plan" "$quarantine/plan.json"
+mv "$authorization" "$quarantine/authorization.json"
+mv "$disk" "$quarantine/disk.qcow2"
+undefined=1
+"$virsh" --connect qemu:///system undefine "$name" --nvram >/dev/null
+temporary=$(mktemp "$base/.domains.XXXXXX")
+jq -S --arg name "$name" '.domains |= map(select(.name!=$name))' "$state" > "$temporary"
+chmod 0600 "$temporary"
+state_updated=1
+mv "$temporary" "$state"
+temporary=
+trap - EXIT INT TERM
+rmdir "$lock"
+jq -S -n --arg name "$name" --arg quarantine "$quarantine" '{schema:1,status:"deleted-recoverable",name:$name,running:false,quarantine:$quarantine}'
