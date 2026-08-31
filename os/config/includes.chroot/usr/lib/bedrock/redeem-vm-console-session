@@ -1,0 +1,64 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
+request=$1
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+[ -f "$request" ] && [ ! -L "$request" ] || fail "console redemption request is missing or indirect"
+for tool in jq sha256sum stat; do command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"; done
+jq -e '
+  (keys|sort)==(["schema","token","vm"]|sort) and .schema==1 and
+  (.vm|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+  (.token|type=="string" and test("^[0-9a-f]{64}$"))
+' "$request" >/dev/null || fail "console redemption request is invalid"
+vm=$(jq -r .vm "$request" | tr -d '\r'); token=$(jq -r .token "$request" | tr -d '\r')
+if [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ]; then
+  production=0
+  base=${BEDROCK_VM_STATE_ROOT:?test mode requires BEDROCK_VM_STATE_ROOT}
+  sessions=${BEDROCK_VM_CONSOLE_SESSIONS:?test mode requires BEDROCK_VM_CONSOLE_SESSIONS}
+  virsh=${BEDROCK_VM_VIRSH:?test mode requires BEDROCK_VM_VIRSH}
+  now=${BEDROCK_VM_NOW:-$(date +%s)}
+else
+  production=1
+  [ "$(id -u)" -eq 0 ] || fail "VM console redemption requires root"
+  [ "$request" = "/var/lib/bedrock/virtualization/requests/$vm-console-redeem.json" ] || fail "console redemption path is not name-bound"
+  base=/var/lib/bedrock/virtualization
+  sessions=$base/console-sessions.json
+  virsh=/usr/bin/virsh
+  now=$(date +%s)
+  [ "$(stat -c %a "$request")" = 600 ] || fail "console redemption request must be root-only"
+fi
+[ -x "$virsh" ] && [ ! -L "$virsh" ] || fail "virsh is unavailable or indirect"
+[ -f "$sessions" ] && [ ! -L "$sessions" ] || fail "console session state is missing or indirect"
+printf '%s' "$now" | grep -Eq '^[0-9]{10,}$' || fail "system time is invalid"
+token_hash=$(printf '%s' "$token" | sha256sum | awk '{print $1}')
+socket=/run/libvirt/qemu/bedrock-$vm.vnc
+lock=$base/.operation.lock
+mkdir "$lock" 2>/dev/null || fail "another VM lifecycle operation is running"
+temporary=
+cleanup() { status=$?; [ -z "$temporary" ] || rm -f "$temporary"; rmdir "$lock" 2>/dev/null || true; exit "$status"; }
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+jq -e --arg vm "$vm" --arg hash "$token_hash" --arg socket "$socket" --argjson now "$now" '
+  (keys|sort)==(["schema","sessions"]|sort) and .schema==1 and
+  ([.sessions[]|select(.vm==$vm and .token_sha256==$hash and .socket==$socket and .used==false and .expires_at>$now)]|length)==1
+' "$sessions" >/dev/null || fail "console token is expired, used, or invalid"
+runtime=$("$virsh" --connect qemu:///system domstate "$vm" | tr -d '\r' | sed 's/[[:space:]]*$//')
+[ "$runtime" = running ] || fail "VM stopped before console redemption"
+xml=$("$virsh" --connect qemu:///system dumpxml "$vm") || fail "active VM definition cannot be read"
+printf '%s' "$xml" | grep -F "<graphics type='vnc'" >/dev/null || fail "VM display policy changed"
+printf '%s' "$xml" | grep -F "socket='$socket'" >/dev/null || fail "VM console socket changed"
+if [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ]; then
+  test_socket=${BEDROCK_VM_TEST_CONSOLE_SOCKET:?test mode requires BEDROCK_VM_TEST_CONSOLE_SOCKET}
+  [ -f "$test_socket" ] && [ ! -L "$test_socket" ] || fail "test console socket fixture is invalid"
+else
+  [ -S "$socket" ] && [ ! -L "$socket" ] || fail "VM console socket is unavailable or indirect"
+fi
+temporary=$(mktemp "$base/.console-sessions.XXXXXX")
+jq -S --arg vm "$vm" --arg hash "$token_hash" --argjson now "$now" '
+  .sessions |= map(if .vm==$vm and .token_sha256==$hash and .used==false and .expires_at>$now then .used=true else . end)
+' "$sessions" > "$temporary"
+chmod 0600 "$temporary"; mv "$temporary" "$sessions"; temporary=
+[ "$production" -eq 0 ] || rm -f "$request"
+trap - EXIT INT TERM; rmdir "$lock"
+jq -S -n --arg vm "$vm" --arg socket "$socket" '{schema:1,status:"redeemed",vm:$vm,socket:$socket,one_time:true,network_listener:false}'
