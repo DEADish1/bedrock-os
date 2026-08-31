@@ -1,0 +1,63 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
+request=$1
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+[ -f "$request" ] && [ ! -L "$request" ] || fail "console session request is missing or indirect"
+for tool in jq openssl sha256sum; do command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"; done
+jq -e '
+  (keys|sort)==(["confirmation","schema","vm"]|sort) and .schema==1 and
+  (.vm|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+  .confirmation==("OPEN CONSOLE VM "+.vm)
+' "$request" >/dev/null || fail "console session request or confirmation is invalid"
+vm=$(jq -r .vm "$request" | tr -d '\r')
+if [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ]; then
+  base=${BEDROCK_VM_STATE_ROOT:?test mode requires BEDROCK_VM_STATE_ROOT}
+  domains=${BEDROCK_VM_DOMAINS:?test mode requires BEDROCK_VM_DOMAINS}
+  sessions=${BEDROCK_VM_CONSOLE_SESSIONS:?test mode requires BEDROCK_VM_CONSOLE_SESSIONS}
+  virsh=${BEDROCK_VM_VIRSH:?test mode requires BEDROCK_VM_VIRSH}
+  now=${BEDROCK_VM_NOW:-$(date +%s)}
+  token=${BEDROCK_VM_CONSOLE_TOKEN:-$(openssl rand -hex 32)}
+else
+  [ "$(id -u)" -eq 0 ] || fail "VM console session creation requires root"
+  [ "$request" = "/var/lib/bedrock/virtualization/requests/$vm-console-open.json" ] || fail "console request path is not name-bound"
+  base=/var/lib/bedrock/virtualization
+  domains=$base/domains.json
+  sessions=$base/console-sessions.json
+  virsh=/usr/bin/virsh
+  now=$(date +%s)
+  token=$(openssl rand -hex 32)
+fi
+[ -x "$virsh" ] && [ ! -L "$virsh" ] || fail "virsh is unavailable or indirect"
+for state in "$domains" "$sessions"; do [ -f "$state" ] && [ ! -L "$state" ] || fail "console state is missing or indirect: $state"; done
+jq -e --arg vm "$vm" '.schema==1 and ([.domains[]|select(.name==$vm)]|length)==1' "$domains" >/dev/null || fail "VM is not uniquely managed"
+jq -e '
+  (keys|sort)==(["schema","sessions"]|sort) and .schema==1 and (.sessions|type=="array") and
+  all(.sessions[]; (keys|sort)==(["expires_at","socket","token_sha256","used","vm"]|sort) and (.used|type=="boolean"))
+' "$sessions" >/dev/null || fail "console session state is invalid"
+printf '%s' "$now" | grep -Eq '^[0-9]{10,}$' || fail "system time is invalid"
+printf '%s' "$token" | grep -Eq '^[0-9a-f]{64}$' || fail "console token generation failed"
+runtime=$("$virsh" --connect qemu:///system domstate "$vm" | tr -d '\r' | sed 's/[[:space:]]*$//')
+[ "$runtime" = running ] || fail "VM must be running to open its console"
+socket=/run/libvirt/qemu/bedrock-$vm.vnc
+xml=$("$virsh" --connect qemu:///system dumpxml "$vm") || fail "active VM definition cannot be read"
+printf '%s' "$xml" | grep -F "<graphics type='vnc'" >/dev/null || fail "VM does not use the browser console display policy"
+printf '%s' "$xml" | grep -F "socket='$socket'" >/dev/null || fail "VM console socket changed"
+printf '%s' "$xml" | grep -Eq "<graphics[^>]+[[:space:]](port|listen)=" && fail "VM console unexpectedly exposes a network listener"
+expires=$((now + 60)); token_hash=$(printf '%s' "$token" | sha256sum | awk '{print $1}')
+lock=$base/.operation.lock
+mkdir "$lock" 2>/dev/null || fail "another VM lifecycle operation is running"
+temporary=$(mktemp "$base/.console-sessions.XXXXXX")
+cleanup() { status=$?; rm -f "$temporary"; rmdir "$lock" 2>/dev/null || true; exit "$status"; }
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+jq -S --arg vm "$vm" --arg socket "$socket" --arg hash "$token_hash" --argjson now "$now" --argjson expires "$expires" '
+  .sessions |= map(select(.expires_at>$now and .used==false and .vm!=$vm)) |
+  .sessions += [{vm:$vm,socket:$socket,token_sha256:$hash,expires_at:$expires,used:false}] |
+  .sessions |= sort_by(.vm)
+' "$sessions" > "$temporary"
+chmod 0600 "$temporary"; mv "$temporary" "$sessions"; temporary=
+trap - EXIT INT TERM; rmdir "$lock"
+jq -S -n --arg vm "$vm" --arg token "$token" --argjson expires "$expires" \
+  '{schema:1,status:"authorized",vm:$vm,token:$token,expires_at:$expires,one_time:true,transport:"vnc-websocket",websocket_path:("/api/v1/vms/"+$vm+"/console")}'

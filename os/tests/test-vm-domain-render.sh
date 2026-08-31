@@ -17,6 +17,8 @@ grep -q "template='/usr/share/OVMF/OVMF_VARS_4M.ms.fd'" "$work/domain-a.xml"
 grep -q "source file='/var/lib/bedrock/virtualization/disks/test-vm.qcow2'" "$work/domain-a.xml"
 grep -q "<source network='default'/>" "$work/domain-a.xml"
 grep -q "<cpu mode='host-passthrough' check='none' migratable='off'/>" "$work/domain-a.xml"
+grep -q "<graphics type='vnc' autoport='no' socket='/run/libvirt/qemu/bedrock-test-vm.vnc' sharePolicy='ignore'/>" "$work/domain-a.xml"
+! grep -Eq "graphics[^>]+[[:space:]](port|listen)=|type='spice'" "$work/domain-a.xml"
 ! grep -Eq 'qemu:commandline|hostdev|filesystem|script|interface type=.bridge' "$work/domain-a.xml"
 
 must_fail() { if "$@" >/dev/null 2>&1; then printf 'error: command unexpectedly succeeded: %s\n' "$*" >&2; exit 1; fi; }

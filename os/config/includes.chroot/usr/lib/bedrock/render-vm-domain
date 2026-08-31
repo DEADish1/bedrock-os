@@ -67,7 +67,7 @@ trap 'rm -f "$temporary"' EXIT INT TERM
     "    <controller type='usb' model='qemu-xhci'/>" \
     "    <serial type='pty'><target port='0'/></serial>" \
     "    <console type='pty'><target type='serial' port='0'/></console>" \
-    "    <graphics type='spice' autoport='yes'><listen type='none'/></graphics>" \
+    "    <graphics type='vnc' autoport='no' socket='/run/libvirt/qemu/bedrock-${name}.vnc' sharePolicy='ignore'/>" \
     "    <video><model type='virtio' primary='yes'/></video>" \
     "    <memballoon model='virtio'/>" \
     "  </devices>" \

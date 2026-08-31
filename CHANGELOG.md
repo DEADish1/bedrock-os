@@ -8,6 +8,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 - Added guarded ZIP image imports with archive and extracted-image checksum/size binding, one regular name-bound member, extraction limits, and reuse of the existing format validation and atomic library installation boundary.
 - Added guarded raw/QCOW2 image conversion with source checksum revalidation, format/backing/encryption and virtual-size checks, no-overwrite output, post-conversion inspection/checksum, atomic library metadata, and a source-to-output provenance ledger.
+- Replaced VM graphics with browser-compatible VNC on name-bound libvirt Unix sockets with no TCP listener, and added 60-second one-time, hash-only console session authorization for running managed guests.
 
 - Added guarded GPU/USB passthrough assignment and removal with SHA-256-bound plans, second exact authorization, immediate IOMMU/topology revalidation, shut-down-only persistent libvirt host devices, assignment inventory, count verification, shared locking, and inverse rollback.
 - Extended privacy-safe hardware discovery with GPU PCI/boot-display/IOMMU-group membership and USB topology/class/driver/criticality, then added non-mutating passthrough plans that reject partial or missing GPU groups and boot-critical, hub, input, storage, or unauthorized devices with explicit safety warnings.
