@@ -10,4 +10,6 @@ This foundation does not authorize VM creation or mutation. The v0.5 lifecycle l
 
 `render-vm-domain` deterministically compiles a valid review plan into a root-readable, name-bound domain definition. The fixed policy uses KVM, x86-64 Q35, Secure Boot-capable OVMF pflash, host-passthrough CPU, virtio disk/network/video/balloon devices, the libvirt default network, and a local-only SPICE listener. Disk and NVRAM paths are derived only from the already validated name. The renderer cannot call libvirt, create a disk, enable autostart, or start a guest.
 
+`register-vm` is the first mutation boundary. It requires a separate strict authorization record containing the exact confirmation phrase and SHA-256 hashes of both the reviewed plan and deterministic definition. As root, it accepts only fixed name-bound paths, serializes registrations, creates one bounded QCOW2 disk, defines the persistent system-libvirt guest, records the allocation atomically, and rolls back the definition and disk on failure. Registration never starts the guest.
+
 Production acceptance must prove the capability report on supported Intel and AMD hosts, create a UEFI guest through the system libvirt connection, confirm KVM acceleration, reboot the host, and verify that the guest definition and storage remain intact.

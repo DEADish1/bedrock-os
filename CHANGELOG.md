@@ -6,6 +6,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ### Virtual machines and images 0.5
 
+- Added guarded VM disk creation and persistent libvirt registration with exact typed confirmation, plan/definition hash binding, fixed managed paths, exclusive serialization, atomic allocation state, failure rollback, and no implicit guest start.
 - Added deterministic, non-mutating libvirt domain-definition rendering from strict review plans with fixed KVM/Q35/OVMF and virtio policy, name-bound disk/NVRAM paths, local-only SPICE, host-reservation revalidation, and rejection of extra or mutation-authorized input.
 - Added strict review-only VM creation plans with duplicate-name prevention, bounded vCPU/memory/disk requests, UEFI/default-network policy, complete capability gating, accounting for existing managed allocations, and hard reservations of two logical CPUs and 2 GiB for Bedrock. Plans cannot mutate libvirt or storage.
 - Added the packaged QEMU/KVM, libvirt system, and OVMF foundation plus a boot-time fail-closed capability report that distinguishes CPU virtualization, `/dev/kvm`, QEMU, firmware, and libvirt-system availability. VM mutation remains disabled until lifecycle policy and acceptance are implemented.

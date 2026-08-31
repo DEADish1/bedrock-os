@@ -1,0 +1,93 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 3 ] || { printf 'usage: %s PLAN.json DOMAIN.xml AUTHORIZATION.json\n' "$0" >&2; exit 2; }
+plan=$1
+definition=$2
+authorization=$3
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+for file in "$plan" "$definition" "$authorization"; do
+  [ -f "$file" ] && [ ! -L "$file" ] || fail "VM registration input is missing or indirect: $file"
+done
+for tool in jq sha256sum; do command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"; done
+
+jq -e '
+  (keys|sort)==(["action","confirmation","definition_sha256","name","plan_sha256","schema"]|sort) and
+  .schema==1 and .action=="create" and
+  (.name|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+  .confirmation==("CREATE VM "+.name) and
+  (.plan_sha256|type=="string" and test("^[0-9a-f]{64}$")) and
+  (.definition_sha256|type=="string" and test("^[0-9a-f]{64}$"))
+' "$authorization" >/dev/null || fail "VM authorization is invalid"
+name=$(jq -r .name "$authorization")
+[ "$(sha256sum "$plan" | awk '{print $1}')" = "$(jq -r .plan_sha256 "$authorization")" ] || fail "VM plan does not match authorization"
+[ "$(sha256sum "$definition" | awk '{print $1}')" = "$(jq -r .definition_sha256 "$authorization")" ] || fail "VM definition does not match authorization"
+[ "$(jq -r .name "$plan")" = "$name" ] || fail "VM names do not match"
+
+if [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ]; then
+  state=${BEDROCK_VM_DOMAINS:?test mode requires BEDROCK_VM_DOMAINS}
+  base=${BEDROCK_VM_STATE_ROOT:?test mode requires BEDROCK_VM_STATE_ROOT}
+  qemu_img=${BEDROCK_VM_QEMU_IMG:?test mode requires BEDROCK_VM_QEMU_IMG}
+  virsh=${BEDROCK_VM_VIRSH:?test mode requires BEDROCK_VM_VIRSH}
+else
+  [ "$(id -u)" -eq 0 ] || fail "VM registration requires root"
+  [ "$plan" = "/var/lib/bedrock/virtualization/plans/$name.json" ] || fail "VM plan path is not name-bound"
+  [ "$definition" = "/var/lib/bedrock/virtualization/definitions/$name.xml" ] || fail "VM definition path is not name-bound"
+  [ "$authorization" = "/var/lib/bedrock/virtualization/authorizations/$name.json" ] || fail "VM authorization path is not name-bound"
+  state=/var/lib/bedrock/virtualization/domains.json
+  base=/var/lib/bedrock/virtualization
+  qemu_img=/usr/bin/qemu-img
+  virsh=/usr/bin/virsh
+fi
+[ -x "$qemu_img" ] && [ ! -L "$qemu_img" ] || fail "qemu-img is unavailable or indirect"
+[ -x "$virsh" ] && [ ! -L "$virsh" ] || fail "virsh is unavailable or indirect"
+[ -f "$state" ] && [ ! -L "$state" ] || fail "managed VM state is missing or indirect"
+jq -e --arg name "$name" '
+  (keys|sort)==(["domains","schema"]|sort) and .schema==1 and (.domains|type=="array") and
+  all(.domains[]; (keys|sort)==(["memory_mib","name","vcpus"]|sort) and
+    (.name|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+    (.vcpus|type=="number" and floor==. and .>=1) and
+    (.memory_mib|type=="number" and floor==. and .>=512) and .name!=$name)
+' "$state" >/dev/null || fail "managed VM state is invalid or the name already exists"
+
+expected=$(mktemp)
+trap 'rm -f "$expected"' EXIT INT TERM
+BEDROCK_VM_TEST_MODE=1 /usr/lib/bedrock/render-vm-domain "$plan" "$expected" >/dev/null
+cmp -s "$expected" "$definition" || fail "VM definition is not the deterministic rendering of the plan"
+rm -f "$expected"
+
+disk="$base/disks/$name.qcow2"
+lock="$base/.registration.lock"
+mkdir -p "$base/disks"
+[ -d "$base" ] && [ ! -L "$base" ] && [ -d "$base/disks" ] && [ ! -L "$base/disks" ] || fail "VM storage path is indirect"
+mkdir "$lock" 2>/dev/null || fail "another VM registration is running"
+created_disk=0
+defined=0
+cleanup() {
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    [ "$defined" -eq 0 ] || "$virsh" --connect qemu:///system undefine "$name" --nvram >/dev/null 2>&1 || true
+    [ "$created_disk" -eq 0 ] || rm -f "$disk"
+  fi
+  rmdir "$lock" 2>/dev/null || true
+  exit "$status"
+}
+trap cleanup EXIT INT TERM
+[ ! -e "$disk" ] || fail "managed VM disk already exists"
+if "$virsh" --connect qemu:///system dominfo "$name" >/dev/null 2>&1; then fail "libvirt domain already exists"; fi
+disk_gib=$(jq -r .disk_size_gib "$plan")
+created_disk=1
+"$qemu_img" create -f qcow2 -o preallocation=metadata,lazy_refcounts=on "$disk" "${disk_gib}G" >/dev/null
+chmod 0600 "$disk"
+defined=1
+"$virsh" --connect qemu:///system define "$definition" >/dev/null
+if [ "$(jq -r .autostart "$plan")" = true ]; then "$virsh" --connect qemu:///system autostart "$name" >/dev/null; fi
+
+temporary=$(mktemp "$base/.domains.XXXXXX")
+jq -S --arg name "$name" --argjson vcpus "$(jq -r .vcpus "$plan")" --argjson memory "$(jq -r .memory_mib "$plan")" \
+  '.domains += [{name:$name,vcpus:$vcpus,memory_mib:$memory}] | .domains |= sort_by(.name)' "$state" > "$temporary"
+chmod 0600 "$temporary"
+mv "$temporary" "$state"
+trap - EXIT INT TERM
+rmdir "$lock"
+jq -S -n --arg name "$name" --arg disk "$disk" '{schema:1,status:"registered",name:$name,disk:$disk,running:false}'
