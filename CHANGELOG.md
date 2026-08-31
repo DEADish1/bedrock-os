@@ -6,6 +6,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ### Virtual machines and images 0.5
 
+- Added guarded GPU/USB passthrough assignment and removal with SHA-256-bound plans, second exact authorization, immediate IOMMU/topology revalidation, shut-down-only persistent libvirt host devices, assignment inventory, count verification, shared locking, and inverse rollback.
 - Extended privacy-safe hardware discovery with GPU PCI/boot-display/IOMMU-group membership and USB topology/class/driver/criticality, then added non-mutating passthrough plans that reject partial or missing GPU groups and boot-critical, hub, input, storage, or unauthorized devices with explicit safety warnings.
 - Added guarded offline vCPU, memory, and boot-order updates with exact review phrases, host-reservation revalidation, bounded disk or CD/DVD-then-disk policy, persistent libvirt readback verification, atomic allocation/definition updates, shared locking, and rollback.
 - Added confirmed running-guest restart and guarded offline VM cloning through packaged `virt-clone`, with fixed managed outputs, new libvirt identity/NVRAM, resource-reservation checks, attachment gates, atomic allocation state, shared locking, and partial-clone rollback.

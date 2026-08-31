@@ -71,6 +71,10 @@ for device in "$sys_root"/bus/usb/devices/*; do
   vendor_id=$(cat "$device/idVendor")
   product_id=$(cat "$device/idProduct")
   device_class=$(cat "$device/bDeviceClass")
+  busnum=unknown
+  devnum=unknown
+  [ ! -r "$device/busnum" ] || busnum=$(cat "$device/busnum")
+  [ ! -r "$device/devnum" ] || devnum=$(cat "$device/devnum")
   authorized=false
   [ ! -r "$device/authorized" ] || [ "$(cat "$device/authorized")" != 1 ] || authorized=true
   driver=none
@@ -85,7 +89,7 @@ for device in "$sys_root"/bus/usb/devices/*; do
     [ ! -L "$interface/driver" ] || interface_driver=$(basename "$(readlink "$interface/driver")")
     case "$interface_class:$interface_driver" in 03:*|08:*|09:*|*:usbhid|*:usb-storage|*:hub) host_critical=true ;; esac
   done
-  usb_devices=$(printf '%s' "$usb_devices" | jq -c --arg id "$id" --arg vendor "$vendor_id" --arg product "$product_id" --arg class "$device_class" --arg driver "$driver" --argjson authorized "$authorized" --argjson critical "$host_critical" '. + [{id:$id,vendor_id:$vendor,product_id:$product,device_class:$class,driver:$driver,authorized:$authorized,host_critical:$critical}]')
+  usb_devices=$(printf '%s' "$usb_devices" | jq -c --arg id "$id" --arg vendor "$vendor_id" --arg product "$product_id" --arg class "$device_class" --arg driver "$driver" --arg bus "$busnum" --arg device "$devnum" --argjson authorized "$authorized" --argjson critical "$host_critical" '. + [{id:$id,vendor_id:$vendor,product_id:$product,device_class:$class,driver:$driver,busnum:(if ($bus|test("^[0-9]+$")) then ($bus|tonumber) else null end),devnum:(if ($device|test("^[0-9]+$")) then ($device|tonumber) else null end),authorized:$authorized,host_critical:$critical}]')
 done
 
 mkdir -p "$(dirname -- "$output")"

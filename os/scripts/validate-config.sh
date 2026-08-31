@@ -18,6 +18,7 @@ jq -e '.schema==1 and .images==[]' "$OS_DIR/config/includes.chroot/usr/share/bed
 jq -e '.schema==1 and .attachments==[]' "$OS_DIR/config/includes.chroot/usr/share/bedrock/empty-vm-attachments.json" >/dev/null
 jq -e '.schema==1 and .networks==[]' "$OS_DIR/config/includes.chroot/usr/share/bedrock/empty-vm-networks.json" >/dev/null
 jq -e '.schema==1 and .attachments==[]' "$OS_DIR/config/includes.chroot/usr/share/bedrock/empty-vm-network-attachments.json" >/dev/null
+jq -e '.schema==1 and .assignments==[]' "$OS_DIR/config/includes.chroot/usr/share/bedrock/empty-vm-passthrough.json" >/dev/null
 
 (
   set -eu
@@ -68,6 +69,7 @@ sh -n "$OS_DIR/tests/test-vm-status.sh"
 sh -n "$OS_DIR/tests/test-vm-clone.sh"
 sh -n "$OS_DIR/tests/test-vm-resource-update.sh"
 sh -n "$OS_DIR/tests/test-vm-passthrough-plan.sh"
+sh -n "$OS_DIR/tests/test-vm-passthrough-management.sh"
 sh -n "$OS_DIR/tests/test-hardware-inventory.sh"
 sh -n "$OS_DIR/tests/test-storage-health.sh"
 sh -n "$OS_DIR/tests/test-storage-alerts.sh"
@@ -131,6 +133,7 @@ sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/collect-vm-status"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/clone-vm"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/update-vm-resources"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/create-passthrough-plan"
+sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/manage-vm-passthrough"
 sh -n "$OS_DIR/config/includes.chroot/usr/sbin/bedrock-update-settings"
 sh -n "$OS_DIR/config/includes.chroot/usr/sbin/bedrock-setup-updates"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/collect-hardware-inventory"
@@ -188,6 +191,7 @@ sh "$OS_DIR/tests/test-vm-status.sh"
 sh "$OS_DIR/tests/test-vm-clone.sh"
 sh "$OS_DIR/tests/test-vm-resource-update.sh"
 sh "$OS_DIR/tests/test-vm-passthrough-plan.sh"
+sh "$OS_DIR/tests/test-vm-passthrough-management.sh"
 sh "$OS_DIR/tests/test-storage-health.sh"
 sh "$OS_DIR/tests/test-storage-alerts.sh"
 sh "$OS_DIR/tests/test-storage-plan.sh"

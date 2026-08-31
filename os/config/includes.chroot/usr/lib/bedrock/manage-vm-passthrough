@@ -1,0 +1,124 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 2 ] || { printf 'usage: %s PLAN.json AUTHORIZATION.json\n' "$0" >&2; exit 2; }
+plan=$1
+authorization=$2
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+for file in "$plan" "$authorization"; do [ -f "$file" ] && [ ! -L "$file" ] || fail "passthrough input is missing or indirect: $file"; done
+for tool in jq sha256sum; do command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"; done
+jq -e '
+  (keys|sort)==(["devices","iommu_group","kind","mutation_authorized","schema","status","vm","warnings"]|sort) and
+  .schema==1 and .status=="review-only" and .mutation_authorized==false and
+  (.kind=="gpu" or .kind=="usb") and (.vm|type=="string") and
+  (.devices|type)=="array" and (.devices|length)>=1 and (.devices|length)<=16 and ((.devices|unique|length)==(.devices|length)) and
+  (.warnings|type=="array" and length>=2)
+' "$plan" >/dev/null || fail "passthrough plan is invalid"
+vm=$(jq -r .vm "$plan" | tr -d '\r')
+kind=$(jq -r .kind "$plan" | tr -d '\r')
+devices=$(jq -c '.devices|sort' "$plan")
+plan_hash=$(sha256sum "$plan" | awk '{print $1}')
+jq -e --arg vm "$vm" --arg kind "$kind" --arg hash "$plan_hash" --argjson devices "$devices" '
+  (keys|sort)==(["action","confirmation","kind","plan_sha256","schema","vm"]|sort) and .schema==1 and
+  (.action=="assign" or .action=="remove") and .vm==$vm and .kind==$kind and .plan_sha256==$hash and
+  .confirmation==((.action|ascii_upcase)+" "+($kind|ascii_upcase)+" PASSTHROUGH VM "+$vm+" DEVICES "+($devices|join(",")))
+' "$authorization" >/dev/null || fail "passthrough authorization is invalid or not bound to this plan"
+action=$(jq -r .action "$authorization" | tr -d '\r')
+if [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ]; then
+  base=${BEDROCK_VM_STATE_ROOT:?test mode requires BEDROCK_VM_STATE_ROOT}
+  state=${BEDROCK_VM_PASSTHROUGH:?test mode requires BEDROCK_VM_PASSTHROUGH}
+  domains=${BEDROCK_VM_DOMAINS:?test mode requires BEDROCK_VM_DOMAINS}
+  hardware=${BEDROCK_VM_HARDWARE:?test mode requires BEDROCK_VM_HARDWARE}
+  virsh=${BEDROCK_VM_VIRSH:?test mode requires BEDROCK_VM_VIRSH}
+else
+  [ "$(id -u)" -eq 0 ] || fail "passthrough changes require root"
+  [ "$plan" = "/var/lib/bedrock/virtualization/plans/$vm-$kind-passthrough.json" ] || fail "passthrough plan path is not name-bound"
+  [ "$authorization" = "/var/lib/bedrock/virtualization/authorizations/$vm-$kind-$action.json" ] || fail "passthrough authorization path is not name-bound"
+  base=/var/lib/bedrock/virtualization
+  state=$base/passthrough.json
+  domains=$base/domains.json
+  hardware=/var/lib/bedrock/hardware/inventory.json
+  virsh=/usr/bin/virsh
+fi
+[ -x "$virsh" ] && [ ! -L "$virsh" ] || fail "virsh is unavailable or indirect"
+for file in "$state" "$domains" "$hardware"; do [ -f "$file" ] && [ ! -L "$file" ] || fail "passthrough state is missing or indirect: $file"; done
+jq -e --arg vm "$vm" '.schema==1 and ([.domains[]|select(.name==$vm)]|length)==1' "$domains" >/dev/null || fail "VM is not uniquely managed"
+jq -e '
+  (keys|sort)==(["assignments","schema"]|sort) and .schema==1 and (.assignments|type=="array") and
+  all(.assignments[]; (keys|sort)==(["devices","kind","plan_sha256","vm"]|sort))
+' "$state" >/dev/null || fail "passthrough assignment state is invalid"
+if [ "$kind" = gpu ]; then
+  selected=$(printf '%s' "$devices" | jq -r '.[0]' | tr -d '\r')
+  required=$(jq -c --arg pci "$selected" '.gpus[]|select(.pci_address==$pci and .boot_vga==false and .iommu_group!=null)|.iommu_group_devices|sort' "$hardware")
+  [ -n "$required" ] && [ "$devices" = "$required" ] || fail "GPU IOMMU group changed or is no longer safe"
+else
+  jq -e --argjson devices "$devices" '
+    . as $root | all($devices[]; . as $id | ([$root.usb_devices[]|select(.id==$id)]|length)==1 and ($root.usb_devices[]|select(.id==$id)|.authorized==true and .host_critical==false and (.busnum|type=="number") and (.devnum|type=="number")))
+  ' "$hardware" >/dev/null || fail "USB topology or safety state changed"
+fi
+record=$(jq -c --arg vm "$vm" --arg kind "$kind" '.assignments[]?|select(.vm==$vm and .kind==$kind)' "$state")
+case "$action" in assign) [ -z "$record" ] || fail "passthrough kind is already assigned to this VM" ;; remove) [ -n "$record" ] && [ "$(printf '%s' "$record" | jq -c '.devices|sort')" = "$devices" ] || fail "recorded passthrough assignment does not match plan" ;; esac
+[ -d "$base" ] && [ ! -L "$base" ] || fail "virtualization state path is indirect"
+lock=$base/.operation.lock
+mkdir "$lock" 2>/dev/null || fail "another VM lifecycle operation is running"
+work=
+processed=
+temporary=
+state_changed=0
+cleanup() {
+  status=$?
+  if [ "$status" -ne 0 ] && [ -n "$work" ]; then
+    [ "$state_changed" -eq 0 ] || cp "$work/state.before.json" "$state" 2>/dev/null || true
+    if [ -f "$work/processed" ]; then
+      while IFS= read -r xml; do
+        if [ "$action" = assign ]; then "$virsh" --connect qemu:///system detach-device "$vm" "$xml" --config >/dev/null 2>&1 || true; else "$virsh" --connect qemu:///system attach-device "$vm" "$xml" --config >/dev/null 2>&1 || true; fi
+      done < "$work/processed"
+    fi
+  fi
+  [ -z "$work" ] || rm -rf "$work"
+  rmdir "$lock" 2>/dev/null || true
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+work=$(mktemp -d "$base/.passthrough.XXXXXX")
+: > "$work/processed"
+cp "$state" "$work/state.before.json"
+"$virsh" --connect qemu:///system dominfo "$vm" >/dev/null 2>&1 || fail "managed VM is missing from libvirt"
+runtime=$(LC_ALL=C "$virsh" --connect qemu:///system domstate "$vm" | tr '[:upper:]' '[:lower:]' | tr -d '\r')
+[ "$runtime" = "shut off" ] || fail "VM must be shut off before passthrough changes"
+before=$("$virsh" --connect qemu:///system dumpxml --inactive "$vm" | grep -o '<hostdev ' | wc -l | tr -d ' ')
+index=0
+printf '%s' "$devices" | jq -r '.[]' | tr -d '\r' > "$work/devices"
+while IFS= read -r device; do
+  index=$((index + 1))
+  xml=$work/device-$index.xml
+  if [ "$kind" = gpu ]; then
+    domain=$(printf '%s' "$device" | cut -d: -f1); bus=$(printf '%s' "$device" | cut -d: -f2); slot=$(printf '%s' "$device" | cut -d: -f3 | cut -d. -f1); function=$(printf '%s' "$device" | cut -d. -f2)
+    printf "<hostdev mode='subsystem' type='pci' managed='yes'><source><address domain='0x%s' bus='0x%s' slot='0x%s' function='0x%s'/></source></hostdev>\n" "$domain" "$bus" "$slot" "$function" > "$xml"
+  else
+    bus=$(jq -r --arg id "$device" '.usb_devices[]|select(.id==$id)|.busnum' "$hardware" | tr -d '\r')
+    dev=$(jq -r --arg id "$device" '.usb_devices[]|select(.id==$id)|.devnum' "$hardware" | tr -d '\r')
+    printf "<hostdev mode='subsystem' type='usb' managed='yes'><source><address bus='%s' device='%s'/></source></hostdev>\n" "$bus" "$dev" > "$xml"
+  fi
+  if [ "$action" = assign ]; then "$virsh" --connect qemu:///system attach-device "$vm" "$xml" --config >/dev/null; else "$virsh" --connect qemu:///system detach-device "$vm" "$xml" --config >/dev/null; fi
+  printf '%s\n' "$xml" >> "$work/processed"
+done < "$work/devices"
+after=$("$virsh" --connect qemu:///system dumpxml --inactive "$vm" | grep -o '<hostdev ' | wc -l | tr -d ' ')
+count=$(printf '%s' "$devices" | jq length)
+if [ "$action" = assign ]; then [ "$after" -eq $((before + count)) ] || fail "libvirt did not persist every passthrough device"; else [ "$after" -eq $((before - count)) ] || fail "libvirt still reports removed passthrough devices"; fi
+temporary=$work/state.updated.json
+if [ "$action" = assign ]; then
+  jq -S --arg vm "$vm" --arg kind "$kind" --arg hash "$plan_hash" --argjson devices "$devices" '.assignments += [{vm:$vm,kind:$kind,devices:$devices,plan_sha256:$hash}] | .assignments |= sort_by(.vm,.kind)' "$state" > "$temporary"
+else
+  jq -S --arg vm "$vm" --arg kind "$kind" '.assignments |= map(select(.vm!=$vm or .kind!=$kind))' "$state" > "$temporary"
+fi
+chmod 0600 "$temporary"
+state_changed=1
+mv "$temporary" "$state"
+state_changed=0
+trap - EXIT INT TERM
+rm -rf "$work"
+work=
+rmdir "$lock"
+jq -S -n --arg vm "$vm" --arg kind "$kind" --arg action "$action" --argjson devices "$devices" '{schema:1,status:"completed",vm:$vm,kind:$kind,action:$action,devices:$devices,running:false}'
