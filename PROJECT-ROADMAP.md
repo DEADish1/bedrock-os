@@ -86,7 +86,7 @@ Exit: passed in [Storage and NAS acceptance run #1](https://github.com/DEADish1/
 - [ ] Upload/import ISO, IMG, QCOW2, VHDX, VMDK, and supported archives.
 - [ ] Validate images, track provenance/checksums, and convert formats safely.
 - [ ] Provide browser console and remote-display access.
-- [ ] Document Windows drivers and macOS-on-Apple-hardware license/compatibility limits.
+- [x] Document Windows drivers and macOS-on-Apple-hardware license/compatibility limits.
 
 Exit: supported Linux and Windows guests install, run, persist, snapshot, restore, and use assigned resources.
 

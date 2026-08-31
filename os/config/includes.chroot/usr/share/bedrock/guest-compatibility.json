@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "windows": {
+    "architecture": "x86_64",
+    "release_targets": ["windows-11", "windows-server-2022", "windows-server-2025"],
+    "status": "blocked-pending-tpm-and-acceptance",
+    "driver_media": "user-supplied-signed-virtio-win",
+    "secure_boot_required": true,
+    "tpm2_required": true
+  },
+  "macos": {
+    "status": "unsupported",
+    "non_apple_hardware": "blocked",
+    "apple_silicon_host": "unsupported-architecture",
+    "intel_apple_host": "no-support-claim",
+    "images_distributed": false
+  }
+}
