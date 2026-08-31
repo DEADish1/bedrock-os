@@ -50,8 +50,42 @@ for card in "$sys_root"/class/drm/card[0-9]*; do
   [ ! -L "$card/device/driver" ] || driver=$(basename "$(readlink "$card/device/driver")")
   iommu_group=null
   [ ! -L "$card/device/iommu_group" ] || iommu_group=$(basename "$(readlink "$card/device/iommu_group")")
+  pci_address=$(basename "$(readlink -f "$card/device")")
+  boot_vga=false
+  [ ! -r "$card/device/boot_vga" ] || [ "$(cat "$card/device/boot_vga")" != 1 ] || boot_vga=true
+  group_devices='[]'
+  if [ "$iommu_group" != null ]; then
+    for member in "$sys_root/kernel/iommu_groups/$iommu_group/devices"/*; do
+      [ -e "$member" ] || continue
+      group_devices=$(printf '%s' "$group_devices" | jq -c --arg address "$(basename "$member")" '. + [$address] | sort')
+    done
+  fi
   case "$vendor_id" in 0x8086) vendor=Intel; recognized=true ;; 0x1002) vendor=AMD; recognized=true ;; 0x10de) vendor=NVIDIA; recognized=true ;; *) vendor=Unknown; recognized=false ;; esac
-  gpus=$(printf '%s' "$gpus" | jq -c --arg name "$(basename "$card")" --arg vendor "$vendor" --arg vendor_id "$vendor_id" --arg device_id "$device_id" --arg driver "$driver" --arg iommu_group "$iommu_group" --argjson recognized "$recognized" '. + [{name:$name,vendor:$vendor,vendor_id:$vendor_id,device_id:$device_id,driver:$driver,iommu_group:(if $iommu_group == "null" then null else $iommu_group end),recognized_vendor:$recognized}]')
+  gpus=$(printf '%s' "$gpus" | jq -c --arg name "$(basename "$card")" --arg pci "$pci_address" --arg vendor "$vendor" --arg vendor_id "$vendor_id" --arg device_id "$device_id" --arg driver "$driver" --arg iommu_group "$iommu_group" --argjson group_devices "$group_devices" --argjson boot_vga "$boot_vga" --argjson recognized "$recognized" '. + [{name:$name,pci_address:$pci,vendor:$vendor,vendor_id:$vendor_id,device_id:$device_id,driver:$driver,iommu_group:(if $iommu_group == "null" then null else $iommu_group end),iommu_group_devices:$group_devices,boot_vga:$boot_vga,recognized_vendor:$recognized}]')
+done
+
+usb_devices='[]'
+for device in "$sys_root"/bus/usb/devices/*; do
+  [ -r "$device/idVendor" ] && [ -r "$device/idProduct" ] && [ -r "$device/bDeviceClass" ] || continue
+  id=$(basename "$device")
+  vendor_id=$(cat "$device/idVendor")
+  product_id=$(cat "$device/idProduct")
+  device_class=$(cat "$device/bDeviceClass")
+  authorized=false
+  [ ! -r "$device/authorized" ] || [ "$(cat "$device/authorized")" != 1 ] || authorized=true
+  driver=none
+  [ ! -L "$device/driver" ] || driver=$(basename "$(readlink "$device/driver")")
+  host_critical=false
+  case "$device_class:$driver" in 09:*|*:hub|*:usbhid|*:usb-storage) host_critical=true ;; esac
+  for interface in "$device":*; do
+    [ -d "$interface" ] || continue
+    interface_class=unknown
+    [ ! -r "$interface/bInterfaceClass" ] || interface_class=$(cat "$interface/bInterfaceClass")
+    interface_driver=none
+    [ ! -L "$interface/driver" ] || interface_driver=$(basename "$(readlink "$interface/driver")")
+    case "$interface_class:$interface_driver" in 03:*|08:*|09:*|*:usbhid|*:usb-storage|*:hub) host_critical=true ;; esac
+  done
+  usb_devices=$(printf '%s' "$usb_devices" | jq -c --arg id "$id" --arg vendor "$vendor_id" --arg product "$product_id" --arg class "$device_class" --arg driver "$driver" --argjson authorized "$authorized" --argjson critical "$host_critical" '. + [{id:$id,vendor_id:$vendor,product_id:$product,device_class:$class,driver:$driver,authorized:$authorized,host_critical:$critical}]')
 done
 
 mkdir -p "$(dirname -- "$output")"
@@ -61,7 +95,7 @@ jq -S -n \
   --argjson cores_per_socket "$cores_per_socket" --argjson threads_per_core "$threads_per_core" \
   --arg virtualization "$virtualization" --argjson virtualization_supported "$virtualization_supported" \
   --argjson memory_bytes "$memory_bytes" --argjson disks "$disks" --argjson storage_controllers "$storage_controllers" \
-  --argjson networks "$networks" --argjson gpus "$gpus" \
-  '{schema:2,cpu:{architecture:$architecture,model:$model,logical_processors:$logical,sockets:$sockets,cores_per_socket:$cores_per_socket,threads_per_core:$threads_per_core,virtualization:$virtualization,virtualization_supported:$virtualization_supported},memory:{total_bytes:$memory_bytes},disks:$disks,storage_controllers:$storage_controllers,networks:$networks,gpus:$gpus}' > "$temporary"
+  --argjson networks "$networks" --argjson gpus "$gpus" --argjson usb_devices "$usb_devices" \
+  '{schema:2,cpu:{architecture:$architecture,model:$model,logical_processors:$logical,sockets:$sockets,cores_per_socket:$cores_per_socket,threads_per_core:$threads_per_core,virtualization:$virtualization,virtualization_supported:$virtualization_supported},memory:{total_bytes:$memory_bytes},disks:$disks,storage_controllers:$storage_controllers,networks:$networks,gpus:$gpus,usb_devices:$usb_devices}' > "$temporary"
 mv "$temporary" "$output"
 printf 'BEDROCK_HARDWARE_INVENTORY_READY path=%s\n' "$output" > /dev/console 2>/dev/null || true

@@ -1,0 +1,63 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 2 ] || { printf 'usage: %s REQUEST.json PLAN.json\n' "$0" >&2; exit 2; }
+request=$1
+output=$2
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+if [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ]; then
+  hardware=${BEDROCK_VM_HARDWARE:?test mode requires BEDROCK_VM_HARDWARE}
+  domains=${BEDROCK_VM_DOMAINS:?test mode requires BEDROCK_VM_DOMAINS}
+else
+  [ "$(id -u)" -eq 0 ] || fail "passthrough planning requires root"
+  hardware=/var/lib/bedrock/hardware/inventory.json
+  domains=/var/lib/bedrock/virtualization/domains.json
+fi
+for file in "$request" "$hardware" "$domains"; do [ -f "$file" ] && [ ! -L "$file" ] || fail "passthrough input is missing or indirect: $file"; done
+command -v jq >/dev/null 2>&1 || fail "jq is required"
+jq -e '
+  (keys|sort)==(["confirmation","devices","kind","schema","vm"]|sort) and .schema==1 and
+  (.kind=="gpu" or .kind=="usb") and
+  (.vm|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+  (.devices|type=="array" and length>=1 and length<=16 and all(.[]; type=="string" and length>=1 and length<=64)) and
+  (.devices|unique|length)==(.devices|length) and
+  .confirmation==("REVIEW "+(.kind|ascii_upcase)+" PASSTHROUGH VM "+.vm+" DEVICES "+(.devices|sort|join(",")))
+' "$request" >/dev/null || fail "passthrough request or confirmation is invalid"
+vm=$(jq -r .vm "$request" | tr -d '\r')
+kind=$(jq -r .kind "$request" | tr -d '\r')
+devices=$(jq -c '.devices|sort' "$request")
+jq -e --arg vm "$vm" '.schema==1 and ([.domains[]|select(.name==$vm)]|length)==1' "$domains" >/dev/null || fail "VM is not uniquely managed"
+jq -e '.schema==2 and (.gpus|type=="array") and (.usb_devices|type=="array")' "$hardware" >/dev/null || fail "hardware passthrough inventory is incomplete"
+warnings='[]'
+if [ "$kind" = gpu ]; then
+  [ "$(printf '%s' "$devices" | jq length)" -ge 1 ] || fail "GPU IOMMU group is empty"
+  selected=$(printf '%s' "$devices" | jq -r '.[0]')
+  jq -e --arg pci "$selected" '
+    ([.gpus[]|select(.pci_address==$pci)]|length)==1 and
+    (.gpus[]|select(.pci_address==$pci)|.recognized_vendor==true and .boot_vga==false and .iommu_group!=null and (.iommu_group_devices|length)>=1)
+  ' "$hardware" >/dev/null || fail "GPU is unknown, boot-critical, or lacks a complete IOMMU group"
+  required=$(jq -c --arg pci "$selected" '.gpus[]|select(.pci_address==$pci)|.iommu_group_devices|sort' "$hardware")
+  [ "$devices" = "$required" ] || fail "every device in the GPU IOMMU group must be selected exactly"
+  group=$(jq -r --arg pci "$selected" '.gpus[]|select(.pci_address==$pci)|.iommu_group' "$hardware")
+  warnings='["The host must retain another display adapter and console path.","All functions in the IOMMU group will leave the host while assigned.","Vendor reset limitations can require a host reboot after guest shutdown."]'
+else
+  jq -e --argjson devices "$devices" '
+    . as $root | all($devices[]; . as $id | ([$root.usb_devices[]|select(.id==$id)]|length)==1 and ($root.usb_devices[]|select(.id==$id)|.authorized==true and .host_critical==false and .device_class!="09"))
+  ' "$hardware" >/dev/null || fail "USB selection is missing, unauthorized, hub-class, storage, input, or host-critical"
+  group=null
+  warnings='["The selected USB device will be unavailable to Bedrock while assigned.","Reconnects can change a USB topology identifier; assignment must fail closed rather than follow a different device."]'
+fi
+if [ "${BEDROCK_VM_TEST_MODE:-0}" != 1 ]; then
+  [ "$output" = "/var/lib/bedrock/virtualization/plans/$vm-$kind-passthrough.json" ] || fail "passthrough plan path is not name-bound"
+fi
+directory=$(dirname "$output")
+mkdir -p "$directory"
+[ -d "$directory" ] && [ ! -L "$directory" ] || fail "passthrough plan directory is indirect"
+temporary=$(mktemp "$directory/.passthrough.XXXXXX")
+trap 'rm -f "$temporary"' EXIT INT TERM
+jq -S -n --arg vm "$vm" --arg kind "$kind" --argjson devices "$devices" --arg group "$group" --argjson warnings "$warnings" \
+  '{schema:1,status:"review-only",mutation_authorized:false,vm:$vm,kind:$kind,devices:$devices,iommu_group:(if $group=="null" then null else $group end),warnings:$warnings}' > "$temporary"
+chmod 0600 "$temporary"
+mv "$temporary" "$output"
+trap - EXIT INT TERM
+cat "$output"

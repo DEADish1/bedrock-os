@@ -15,6 +15,6 @@ jq -e '
   (.disks | length == 1) and .disks[0].model == "Bedrock SSD" and
   (.storage_controllers | length == 2) and
   .storage_controllers[0].class == "hardware-raid" and .storage_controllers[1].class == "sata" and
-  (.networks | length == 1) and .networks[0].name == "enp1s0" and (.gpus | type == "array")
+  (.networks | length == 1) and .networks[0].name == "enp1s0" and (.gpus | type == "array") and (.usb_devices | type == "array")
 ' "$work/inventory.json" >/dev/null
 printf 'Bedrock hardware inventory schema and discovery output are valid.\n'
