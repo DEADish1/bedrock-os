@@ -8,9 +8,9 @@ fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
 command -v jq >/dev/null 2>&1 || fail "jq is required"
 jq -e '
   (keys|sort)==(["action","confirmation","name","schema"]|sort) and .schema==1 and
-  (.action=="start" or .action=="stop" or .action=="force-stop") and
+  (.action=="start" or .action=="stop" or .action=="force-stop" or .action=="restart") and
   (.name|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
-  .confirmation==(if .action=="start" then "START VM "+.name elif .action=="stop" then "STOP VM "+.name else "FORCE STOP VM "+.name end)
+  .confirmation==(if .action=="start" then "START VM "+.name elif .action=="stop" then "STOP VM "+.name elif .action=="restart" then "RESTART VM "+.name else "FORCE STOP VM "+.name end)
 ' "$request" >/dev/null || fail "VM control request or confirmation is invalid"
 name=$(jq -r .name "$request")
 action=$(jq -r .action "$request")
@@ -52,6 +52,8 @@ case "$action:$before" in
   stop:*) fail "VM must be running before graceful stop" ;;
   force-stop:running|force-stop:paused) "$virsh" --connect qemu:///system destroy "$name" >/dev/null; expected="shut off" ;;
   force-stop:*) fail "VM must be running or paused before force-stop" ;;
+  restart:running) "$virsh" --connect qemu:///system reboot "$name" >/dev/null; expected=running ;;
+  restart:*) fail "VM must be running before restart" ;;
 esac
 i=0
 after=$(read_state)

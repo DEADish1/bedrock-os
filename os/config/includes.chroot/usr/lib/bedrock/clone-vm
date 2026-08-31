@@ -1,0 +1,106 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
+request=$1
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+[ -f "$request" ] && [ ! -L "$request" ] || fail "VM clone request is missing or indirect"
+command -v jq >/dev/null 2>&1 || fail "jq is required"
+jq -e '
+  (keys|sort)==(["confirmation","name","schema","source"]|sort) and .schema==1 and
+  (.source|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+  (.name|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and .name!=.source and
+  .confirmation==("CLONE VM "+.source+" AS "+.name)
+' "$request" >/dev/null || fail "VM clone request or confirmation is invalid"
+source=$(jq -r .source "$request")
+name=$(jq -r .name "$request")
+if [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ]; then
+  base=${BEDROCK_VM_STATE_ROOT:?test mode requires BEDROCK_VM_STATE_ROOT}
+  state=${BEDROCK_VM_DOMAINS:?test mode requires BEDROCK_VM_DOMAINS}
+  hardware=${BEDROCK_VM_HARDWARE:?test mode requires BEDROCK_VM_HARDWARE}
+  image_attachments=${BEDROCK_VM_ATTACHMENTS:?test mode requires BEDROCK_VM_ATTACHMENTS}
+  network_attachments=${BEDROCK_VM_NETWORK_ATTACHMENTS:?test mode requires BEDROCK_VM_NETWORK_ATTACHMENTS}
+  virsh=${BEDROCK_VM_VIRSH:?test mode requires BEDROCK_VM_VIRSH}
+  virt_clone=${BEDROCK_VM_VIRT_CLONE:?test mode requires BEDROCK_VM_VIRT_CLONE}
+else
+  [ "$(id -u)" -eq 0 ] || fail "VM cloning requires root"
+  [ "$request" = "/var/lib/bedrock/virtualization/requests/clone-$source-as-$name.json" ] || fail "VM clone request path is not name-bound"
+  base=/var/lib/bedrock/virtualization
+  state=$base/domains.json
+  hardware=/var/lib/bedrock/hardware/inventory.json
+  image_attachments=$base/attachments.json
+  network_attachments=$base/network-attachments.json
+  virsh=/usr/bin/virsh
+  virt_clone=/usr/bin/virt-clone
+fi
+for tool in "$virsh" "$virt_clone"; do [ -x "$tool" ] && [ ! -L "$tool" ] || fail "required virtualization tool is unavailable or indirect: $tool"; done
+for file in "$state" "$hardware" "$image_attachments" "$network_attachments"; do [ -f "$file" ] && [ ! -L "$file" ] || fail "VM clone state is missing or indirect: $file"; done
+jq -e --arg source "$source" --arg name "$name" '
+  (keys|sort)==(["domains","schema"]|sort) and .schema==1 and (.domains|type=="array") and
+  ([.domains[]|select(.name==$source)]|length)==1 and all(.domains[]; .name!=$name)
+' "$state" >/dev/null || fail "source VM is not unique or clone name already exists"
+jq -e --arg source "$source" 'all(.attachments[]; .vm!=$source)' "$image_attachments" >/dev/null || fail "detach managed images before cloning"
+jq -e --arg source "$source" 'all(.attachments[]; .vm!=$source)' "$network_attachments" >/dev/null || fail "detach managed isolated networks before cloning"
+jq -e '.schema==2 and (.cpu.logical_processors|type=="number") and (.memory.total_bytes|type=="number")' "$hardware" >/dev/null || fail "hardware inventory is invalid"
+vcpus=$(jq -r --arg source "$source" '.domains[]|select(.name==$source)|.vcpus' "$state")
+memory=$(jq -r --arg source "$source" '.domains[]|select(.name==$source)|.memory_mib' "$state")
+host_cpus=$(jq -r .cpu.logical_processors "$hardware")
+host_memory=$(($(jq -r .memory.total_bytes "$hardware") / 1048576))
+used_cpus=$(jq '[.domains[].vcpus]|add//0' "$state")
+used_memory=$(jq '[.domains[].memory_mib]|add//0' "$state")
+[ $((used_cpus + vcpus + 2)) -le "$host_cpus" ] || fail "clone would consume Bedrock reserved CPU capacity"
+[ $((used_memory + memory + 2048)) -le "$host_memory" ] || fail "clone would consume Bedrock reserved memory"
+[ -d "$base" ] && [ ! -L "$base" ] || fail "virtualization state path is indirect"
+for directory in disks definitions plans authorizations; do [ -e "$base/$directory" ] || mkdir "$base/$directory"; [ -d "$base/$directory" ] && [ ! -L "$base/$directory" ] || fail "clone output path is indirect"; done
+disk=$base/disks/$name.qcow2
+definition=$base/definitions/$name.xml
+plan=$base/plans/$name.json
+authorization=$base/authorizations/$name.json
+nvram=/var/lib/libvirt/qemu/nvram/${name}_VARS.fd
+for output in "$disk" "$definition" "$plan" "$authorization"; do [ ! -e "$output" ] || fail "clone output already exists: $output"; done
+lock=$base/.operation.lock
+mkdir "$lock" 2>/dev/null || fail "another VM lifecycle operation is running"
+temporary=
+state_before=
+mutated=0
+state_changed=0
+cleanup() {
+  status=$?
+  [ -z "$temporary" ] || rm -f "$temporary"
+  if [ "$status" -ne 0 ] && [ "$state_changed" -eq 1 ]; then cp "$state_before" "$state" 2>/dev/null || true; fi
+  if [ "$status" -ne 0 ] && [ "$mutated" -eq 1 ]; then "$virsh" --connect qemu:///system undefine "$name" --nvram >/dev/null 2>&1 || true; rm -f "$disk" "$definition" "$plan" "$authorization"; fi
+  [ -z "$state_before" ] || rm -f "$state_before"
+  rmdir "$lock" 2>/dev/null || true
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+state_before=$(mktemp "$base/.domains-before.XXXXXX")
+cp "$state" "$state_before"
+"$virsh" --connect qemu:///system dominfo "$source" >/dev/null 2>&1 || fail "source VM is missing from libvirt"
+runtime=$(LC_ALL=C "$virsh" --connect qemu:///system domstate "$source" | tr '[:upper:]' '[:lower:]' | tr -d '\r')
+[ "$runtime" = "shut off" ] || fail "source VM must be shut off before cloning"
+if "$virsh" --connect qemu:///system dominfo "$name" >/dev/null 2>&1; then fail "clone name already exists in libvirt"; fi
+mutated=1
+"$virt_clone" --connect qemu:///system --original "$source" --name "$name" --file "$disk" --nvram "$nvram" >/dev/null
+[ -f "$disk" ] && [ ! -L "$disk" ] || fail "clone disk was not created safely"
+"$virsh" --connect qemu:///system dumpxml --inactive "$name" > "$definition"
+chmod 0600 "$disk" "$definition"
+jq -S -n --arg source "$source" --arg name "$name" --argjson vcpus "$vcpus" --argjson memory "$memory" \
+  '{schema:1,status:"cloned",source:$source,name:$name,vcpus:$vcpus,memory_mib:$memory}' > "$plan"
+jq -S -n --arg source "$source" --arg name "$name" --arg confirmation "CLONE VM $source AS $name" \
+  '{schema:1,action:"clone",source:$source,name:$name,confirmation:$confirmation}' > "$authorization"
+chmod 0600 "$plan" "$authorization"
+temporary=$(mktemp "$base/.domains.XXXXXX")
+jq -S --arg name "$name" --argjson vcpus "$vcpus" --argjson memory "$memory" \
+  '.domains += [{name:$name,vcpus:$vcpus,memory_mib:$memory}] | .domains |= sort_by(.name)' "$state" > "$temporary"
+chmod 0600 "$temporary"
+state_changed=1
+mv "$temporary" "$state"
+temporary=
+mutated=0
+state_changed=0
+trap - EXIT INT TERM
+rm -f "$state_before"
+rmdir "$lock"
+jq -S -n --arg source "$source" --arg name "$name" --arg disk "$disk" '{schema:1,status:"cloned",source:$source,name:$name,disk:$disk,running:false}'

@@ -49,6 +49,7 @@ systemd-timesyncd
 systemd-ukify
 udev
 usbutils
+virt-install
 xz-utils
 zfs-dkms
 zfsutils-linux
