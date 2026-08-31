@@ -1,0 +1,76 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 2 ] || { printf 'usage: %s REQUEST.json PLAN.json\n' "$0" >&2; exit 2; }
+request=$1
+output=$2
+if [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ]; then
+  hardware=${BEDROCK_VM_HARDWARE:?test mode requires BEDROCK_VM_HARDWARE}
+  capabilities=${BEDROCK_VM_CAPABILITIES:?test mode requires BEDROCK_VM_CAPABILITIES}
+  domains=${BEDROCK_VM_DOMAINS:?test mode requires BEDROCK_VM_DOMAINS}
+else
+  [ "$(id -u)" -eq 0 ] || { printf 'error: VM planning requires root\n' >&2; exit 1; }
+  hardware=/var/lib/bedrock/hardware/inventory.json
+  capabilities=/var/lib/bedrock/virtualization/capabilities.json
+  domains=/var/lib/bedrock/virtualization/domains.json
+  [ -e "$domains" ] || domains=/usr/share/bedrock/empty-vm-domains.json
+fi
+for file in "$request" "$hardware" "$capabilities" "$domains"; do
+  [ -f "$file" ] && [ ! -L "$file" ] || { printf 'error: VM planning input is missing or indirect: %s\n' "$file" >&2; exit 1; }
+done
+command -v jq >/dev/null 2>&1 || { printf 'error: jq is required\n' >&2; exit 1; }
+
+jq -e '
+  (keys|sort)==(["autostart","disk_size_gib","firmware","memory_mib","name","network","schema","vcpus"]|sort) and
+  .schema==1 and (.name|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+  (.vcpus|type=="number" and floor==. and .>=1 and .<=64) and
+  (.memory_mib|type=="number" and floor==. and .>=512 and .<=262144 and .%256==0) and
+  (.disk_size_gib|type=="number" and floor==. and .>=8 and .<=4096) and
+  .firmware=="uefi" and .network=="default" and (.autostart|type=="boolean")
+' "$request" >/dev/null || { printf 'error: VM request is invalid\n' >&2; exit 1; }
+jq -e '.schema==2 and (.cpu.logical_processors|type=="number" and floor==. and .>=4) and (.memory.total_bytes|type=="number" and floor==. and .>=4294967296)' "$hardware" >/dev/null || {
+  printf 'error: hardware inventory cannot support VM planning\n' >&2; exit 1;
+}
+jq -e '.schema==1 and .supported==true and .accelerator.cpu_virtualization==true and .accelerator.kvm_device==true and .qemu==true and .ovmf==true and .libvirt_system==true and .reasons==[]' "$capabilities" >/dev/null || {
+  printf 'error: virtualization capabilities are not ready\n' >&2; exit 1;
+}
+jq -e '.schema==1 and (.domains|type=="array") and all(.domains[]; (keys|sort)==(["memory_mib","name","vcpus"]|sort) and (.name|type=="string") and (.vcpus|type=="number" and floor==.) and (.memory_mib|type=="number" and floor==.))' "$domains" >/dev/null || {
+  printf 'error: managed VM allocation state is invalid\n' >&2; exit 1;
+}
+
+name=$(jq -r .name "$request")
+if [ "${BEDROCK_VM_TEST_MODE:-0}" != 1 ]; then
+  [ "$output" = "/var/lib/bedrock/virtualization/plans/$name.json" ] || {
+    printf 'error: VM plan path must match the requested managed name\n' >&2; exit 1;
+  }
+fi
+jq -e --arg name "$name" 'all(.domains[]; .name!=$name)' "$domains" >/dev/null || { printf 'error: VM name is already managed\n' >&2; exit 1; }
+host_cpus=$(jq -r .cpu.logical_processors "$hardware")
+host_memory_mib=$(($(jq -r .memory.total_bytes "$hardware") / 1048576))
+used_cpus=$(jq '[.domains[].vcpus]|add//0' "$domains")
+used_memory_mib=$(jq '[.domains[].memory_mib]|add//0' "$domains")
+vcpus=$(jq -r .vcpus "$request")
+memory_mib=$(jq -r .memory_mib "$request")
+cpu_reserve=2
+memory_reserve_mib=2048
+[ $((used_cpus + vcpus + cpu_reserve)) -le "$host_cpus" ] || { printf 'error: VM request would consume Bedrock reserved CPU capacity\n' >&2; exit 1; }
+[ $((used_memory_mib + memory_mib + memory_reserve_mib)) -le "$host_memory_mib" ] || { printf 'error: VM request would consume Bedrock reserved memory\n' >&2; exit 1; }
+
+directory=$(dirname "$output")
+mkdir -p "$directory"
+[ -d "$directory" ] && [ ! -L "$directory" ] || { printf 'error: VM plan directory is indirect\n' >&2; exit 1; }
+[ ! -e "$output" ] || { [ -f "$output" ] && [ ! -L "$output" ]; } || { printf 'error: VM plan output is indirect\n' >&2; exit 1; }
+temporary=$(mktemp "$directory/.vm-plan.XXXXXX")
+trap 'rm -f "$temporary"' EXIT INT TERM
+jq -S -n --arg name "$name" --arg confirmation "CREATE VM $name" \
+  --argjson vcpus "$vcpus" --argjson memory_mib "$memory_mib" \
+  --argjson disk_size_gib "$(jq -r .disk_size_gib "$request")" \
+  --argjson autostart "$(jq -r .autostart "$request")" \
+  --argjson host_cpus "$host_cpus" --argjson host_memory_mib "$host_memory_mib" \
+  --argjson used_cpus "$used_cpus" --argjson used_memory_mib "$used_memory_mib" \
+  '{schema:1,status:"review-only",mutation_authorized:false,name:$name,vcpus:$vcpus,memory_mib:$memory_mib,disk_size_gib:$disk_size_gib,firmware:"uefi",network:"default",autostart:$autostart,confirmation_phrase:$confirmation,reservation:{host_cpus:$host_cpus,used_vcpus:$used_cpus,bedrock_reserved_cpus:2,host_memory_mib:$host_memory_mib,used_memory_mib:$used_memory_mib,bedrock_reserved_memory_mib:2048}}' \
+  > "$temporary"
+chmod 0600 "$temporary"
+mv "$temporary" "$output"
+trap - EXIT INT TERM
+cat "$output"

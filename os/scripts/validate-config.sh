@@ -13,6 +13,7 @@ for file in \
   "$OS_DIR/config/includes.chroot/etc/bedrock-release"; do
   [ -s "$file" ] || fail "required file is missing or empty: $file"
 done
+jq -e '.schema==1 and .domains==[]' "$OS_DIR/config/includes.chroot/usr/share/bedrock/empty-vm-domains.json" >/dev/null
 
 (
   set -eu
@@ -49,6 +50,7 @@ sh -n "$OS_DIR/tests/test-update-download.sh"
 sh -n "$OS_DIR/tests/test-update-trust-rotation.sh"
 sh -n "$OS_DIR/tests/test-kernel-module-normalization.sh"
 sh -n "$OS_DIR/tests/test-virtualization-capabilities.sh"
+sh -n "$OS_DIR/tests/test-vm-plan.sh"
 sh -n "$OS_DIR/tests/test-hardware-inventory.sh"
 sh -n "$OS_DIR/tests/test-storage-health.sh"
 sh -n "$OS_DIR/tests/test-storage-alerts.sh"
@@ -98,6 +100,7 @@ sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/download-update"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/validate-update-trust"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/normalize-kernel-module-signature"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/collect-virtualization-capabilities"
+sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/create-vm-plan"
 sh -n "$OS_DIR/config/includes.chroot/usr/sbin/bedrock-update-settings"
 sh -n "$OS_DIR/config/includes.chroot/usr/sbin/bedrock-setup-updates"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/collect-hardware-inventory"
@@ -140,6 +143,7 @@ sh "$OS_DIR/tests/test-update-download.sh"
 sh "$OS_DIR/tests/test-update-trust-rotation.sh"
 sh "$OS_DIR/tests/test-kernel-module-normalization.sh"
 sh "$OS_DIR/tests/test-virtualization-capabilities.sh"
+sh "$OS_DIR/tests/test-vm-plan.sh"
 sh "$OS_DIR/tests/test-storage-health.sh"
 sh "$OS_DIR/tests/test-storage-alerts.sh"
 sh "$OS_DIR/tests/test-storage-plan.sh"

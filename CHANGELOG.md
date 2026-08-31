@@ -6,6 +6,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ### Virtual machines and images 0.5
 
+- Added strict review-only VM creation plans with duplicate-name prevention, bounded vCPU/memory/disk requests, UEFI/default-network policy, complete capability gating, accounting for existing managed allocations, and hard reservations of two logical CPUs and 2 GiB for Bedrock. Plans cannot mutate libvirt or storage.
 - Added the packaged QEMU/KVM, libvirt system, and OVMF foundation plus a boot-time fail-closed capability report that distinguishes CPU virtualization, `/dev/kvm`, QEMU, firmware, and libvirt-system availability. VM mutation remains disabled until lifecycle policy and acceptance are implemented.
 
 ### Update delivery
