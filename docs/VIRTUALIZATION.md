@@ -18,4 +18,6 @@ This foundation does not authorize VM creation or mutation. The v0.5 lifecycle l
 
 `manage-vm-snapshot` provides offline create, restore, and delete operations for libvirt-managed QCOW2 snapshots. Requests are fixed-path and name-bound in production, use strict snapshot names and exact action phrases, require the guest to be shut off, and share the lifecycle lock. Each operation checks snapshot metadata afterward; restore additionally verifies that the guest remains shut off. Online or memory-bearing snapshots are intentionally not authorized.
 
+`import-vm-image` adds ISO, raw IMG, QCOW2, VHDX, and VMDK files to a root-only managed library without attaching or executing them. Imports require a strict type/name/size/SHA-256 request and an exact hash-bearing confirmation. ISO 9660 content and qemu disk formats are independently detected; encrypted images and backing chains are rejected. The source and copied bytes are both size/hash checked, existing names or content hashes cannot be replaced, and metadata is updated atomically under the shared lifecycle lock.
+
 Production acceptance must prove the capability report on supported Intel and AMD hosts, create a UEFI guest through the system libvirt connection, confirm KVM acceleration, reboot the host, and verify that the guest definition and storage remain intact.

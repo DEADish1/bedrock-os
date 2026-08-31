@@ -11,6 +11,7 @@ e2fsprogs
 efibootmgr
 erofs-utils
 ethtool
+file
 gdisk
 iproute2
 iputils-ping

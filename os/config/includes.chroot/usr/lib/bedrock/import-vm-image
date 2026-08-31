@@ -1,0 +1,80 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 2 ] || { printf 'usage: %s REQUEST.json SOURCE\n' "$0" >&2; exit 2; }
+request=$1
+source=$2
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+for input in "$request" "$source"; do [ -f "$input" ] && [ ! -L "$input" ] || fail "image import input is missing or indirect: $input"; done
+for tool in file jq qemu-img sha256sum stat; do command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"; done
+jq -e '
+  (keys|sort)==(["confirmation","name","schema","sha256","size_bytes","type"]|sort) and .schema==1 and
+  (.name|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+  (.type=="iso" or .type=="img" or .type=="qcow2" or .type=="vhdx" or .type=="vmdk") and
+  (.sha256|type=="string" and test("^[0-9a-f]{64}$")) and
+  (.size_bytes|type=="number" and floor==. and .>=1 and .<=4398046511104) and
+  .confirmation==("IMPORT "+(.type|ascii_upcase)+" "+.name+" "+.sha256)
+' "$request" >/dev/null || fail "image import request or confirmation is invalid"
+name=$(jq -r .name "$request")
+type=$(jq -r .type "$request")
+expected_hash=$(jq -r .sha256 "$request")
+expected_size=$(jq -r .size_bytes "$request")
+if [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ]; then
+  base=${BEDROCK_VM_STATE_ROOT:?test mode requires BEDROCK_VM_STATE_ROOT}
+  state=${BEDROCK_VM_IMAGES:?test mode requires BEDROCK_VM_IMAGES}
+else
+  [ "$(id -u)" -eq 0 ] || fail "VM image import requires root"
+  [ "$request" = "/var/lib/bedrock/virtualization/requests/import-$name.json" ] || fail "image import request path is not name-bound"
+  [ "$source" = "/var/lib/bedrock/virtualization/uploads/$name.$type" ] || fail "image upload path is not name-bound"
+  base=/var/lib/bedrock/virtualization
+  state=$base/images.json
+fi
+[ -d "$base" ] && [ ! -L "$base" ] || fail "virtualization state path is indirect"
+[ -f "$state" ] && [ ! -L "$state" ] || fail "image library state is missing or indirect"
+jq -e --arg name "$name" --arg hash "$expected_hash" '
+  (keys|sort)==(["images","schema"]|sort) and .schema==1 and (.images|type=="array") and
+  all(.images[]; (keys|sort)==(["name","path","sha256","size_bytes","type"]|sort) and .name!=$name and .sha256!=$hash)
+' "$state" >/dev/null || fail "image library state is invalid or the image already exists"
+[ "$(stat -c %s "$source")" = "$expected_size" ] || fail "uploaded image size does not match request"
+[ "$(sha256sum "$source" | awk '{print $1}')" = "$expected_hash" ] || fail "uploaded image checksum does not match request"
+if [ "$type" = iso ]; then
+  [ "$(file --brief --mime-type "$source")" = application/x-iso9660-image ] || fail "uploaded image is not ISO 9660"
+else
+  case "$type" in img) format=raw ;; qcow2) format=qcow2 ;; vhdx) format=vhdx ;; vmdk) format=vmdk ;; esac
+  info=$(qemu-img info --output=json --force-share "$source") || fail "disk image cannot be inspected"
+  printf '%s' "$info" | jq -e --arg format "$format" '.format==$format and (has("backing-filename")|not) and (.encrypted//false)==false' >/dev/null || fail "disk image format, backing chain, or encryption is not allowed"
+fi
+library=$base/images
+[ -e "$library" ] || mkdir "$library"
+[ -d "$library" ] && [ ! -L "$library" ] || fail "image library path is indirect"
+chmod 0700 "$library"
+lock=$base/.operation.lock
+mkdir "$lock" 2>/dev/null || fail "another VM lifecycle operation is running"
+destination=$library/$name.$type
+temporary=
+metadata=
+installed=0
+cleanup() { status=$?; [ -z "$temporary" ] || rm -f "$temporary"; [ -z "$metadata" ] || rm -f "$metadata"; if [ "$status" -ne 0 ] && [ "$installed" -eq 1 ]; then rm -f "$destination"; fi; rmdir "$lock" 2>/dev/null || true; exit "$status"; }
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+jq -e --arg name "$name" --arg hash "$expected_hash" 'all(.images[]; .name!=$name and .sha256!=$hash)' "$state" >/dev/null || fail "image name or content was imported concurrently"
+[ ! -e "$destination" ] || fail "managed image destination already exists"
+temporary=$(mktemp "$library/.image.XXXXXX")
+cp --reflink=never --sparse=auto "$source" "$temporary"
+chmod 0600 "$temporary"
+[ "$(stat -c %s "$temporary")" = "$expected_size" ] || fail "copied image size changed"
+[ "$(sha256sum "$temporary" | awk '{print $1}')" = "$expected_hash" ] || fail "copied image checksum changed"
+mv "$temporary" "$destination"
+temporary=
+installed=1
+metadata=$(mktemp "$base/.images.XXXXXX")
+jq -S --arg name "$name" --arg type "$type" --arg hash "$expected_hash" --arg path "$destination" --argjson size "$expected_size" \
+  '.images += [{name:$name,type:$type,sha256:$hash,size_bytes:$size,path:$path}] | .images |= sort_by(.name)' "$state" > "$metadata"
+chmod 0600 "$metadata"
+mv "$metadata" "$state"
+metadata=
+installed=0
+trap - EXIT INT TERM
+rmdir "$lock"
+jq -S -n --arg name "$name" --arg type "$type" --arg hash "$expected_hash" --arg path "$destination" --argjson size "$expected_size" \
+  '{schema:1,status:"imported",name:$name,type:$type,sha256:$hash,size_bytes:$size,path:$path,attached:false}'

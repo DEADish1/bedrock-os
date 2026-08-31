@@ -6,6 +6,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ### Virtual machines and images 0.5
 
+- Added a guarded root-only ISO/IMG/QCOW2/VHDX/VMDK library importer with strict requests, exact hash-bearing confirmation, format detection, 4 TiB bounds, backing-chain/encryption rejection, source and destination integrity checks, duplicate prevention, atomic metadata, and no automatic VM attachment.
 - Added guarded offline VM snapshot creation, restoration, and deletion for uniquely managed QCOW2 guests with strict names, exact action confirmations, fixed request paths, shared lifecycle serialization, metadata verification, and enforced shut-down state.
 - Added guarded recoverable VM deletion with exact storage-deletion confirmation, definition hash binding, shut-down and managed-state gates, shared lifecycle serialization, root-only asset quarantine, atomic allocation removal, and full rollback on failure.
 - Added guarded start, graceful-stop, and force-stop controls for uniquely managed VMs with exact action confirmations, fixed request paths, exclusive serialization, precondition checks, and verified final libvirt state.
