@@ -1,0 +1,136 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
+request=$1
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+[ -f "$request" ] && [ ! -L "$request" ] || fail "isolated-network request is missing or indirect"
+command -v jq >/dev/null 2>&1 || fail "jq is required"
+jq -e '
+  (keys|sort)==(["action","confirmation","name","schema","subnet_octet"]|sort) and .schema==1 and
+  (.action=="create" or .action=="delete") and
+  (.name|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+  (.subnet_octet|type=="number" and floor==. and .>=1 and .<=254) and
+  .confirmation==((.action|ascii_upcase)+" ISOLATED NETWORK "+.name+" 10.240."+(.subnet_octet|tostring)+".0/24")
+' "$request" >/dev/null || fail "isolated-network request or confirmation is invalid"
+action=$(jq -r .action "$request")
+name=$(jq -r .name "$request")
+octet=$(jq -r .subnet_octet "$request")
+network=bedrock-$name
+bridge=br-bedrock-$octet
+subnet=10.240.$octet
+if [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ]; then
+  base=${BEDROCK_VM_STATE_ROOT:?test mode requires BEDROCK_VM_STATE_ROOT}
+  state=${BEDROCK_VM_NETWORKS:?test mode requires BEDROCK_VM_NETWORKS}
+  virsh=${BEDROCK_VM_VIRSH:?test mode requires BEDROCK_VM_VIRSH}
+else
+  [ "$(id -u)" -eq 0 ] || fail "isolated-network management requires root"
+  [ "$request" = "/var/lib/bedrock/virtualization/requests/network-$action-$name.json" ] || fail "isolated-network request path is not name-bound"
+  base=/var/lib/bedrock/virtualization
+  state=$base/networks.json
+  virsh=/usr/bin/virsh
+fi
+[ -x "$virsh" ] && [ ! -L "$virsh" ] || fail "virsh is unavailable or indirect"
+[ -d "$base" ] && [ ! -L "$base" ] || fail "virtualization state path is indirect"
+[ -f "$state" ] && [ ! -L "$state" ] || fail "network state is missing or indirect"
+jq -e '
+  (keys|sort)==(["networks","schema"]|sort) and .schema==1 and (.networks|type=="array") and
+  all(.networks[]; (keys|sort)==(["bridge","cidr","libvirt_name","name","subnet_octet"]|sort))
+' "$state" >/dev/null || fail "network state is invalid"
+directory=$base/networks
+[ -e "$directory" ] || mkdir "$directory"
+[ -d "$directory" ] && [ ! -L "$directory" ] || fail "network definition path is indirect"
+definition=$directory/$name.xml
+lock=$base/.operation.lock
+mkdir "$lock" 2>/dev/null || fail "another VM lifecycle operation is running"
+temporary=
+state_temporary=
+state_before=
+defined=0
+active=0
+state_changed=0
+cleanup() {
+  status=$?
+  [ -z "$temporary" ] || rm -f "$temporary"
+  [ -z "$state_temporary" ] || rm -f "$state_temporary"
+  if [ "$status" -ne 0 ] && [ "$state_changed" -eq 1 ]; then cp "$state_before" "$state" 2>/dev/null || true; fi
+  if [ "$status" -ne 0 ]; then
+    if [ "$action" = create ]; then
+      [ "$active" -eq 0 ] || "$virsh" --connect qemu:///system net-destroy "$network" >/dev/null 2>&1 || true
+      [ "$defined" -eq 0 ] || "$virsh" --connect qemu:///system net-undefine "$network" >/dev/null 2>&1 || true
+      rm -f "$definition"
+    elif [ "$defined" -eq 1 ]; then
+      "$virsh" --connect qemu:///system net-define "$definition" --validate >/dev/null 2>&1 || true
+      "$virsh" --connect qemu:///system net-start "$network" >/dev/null 2>&1 || true
+      "$virsh" --connect qemu:///system net-autostart "$network" >/dev/null 2>&1 || true
+    fi
+  fi
+  [ -z "$state_before" ] || rm -f "$state_before"
+  rmdir "$lock" 2>/dev/null || true
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+state_before=$(mktemp "$base/.networks-before.XXXXXX")
+cp "$state" "$state_before"
+render() {
+  output=$1
+  {
+    printf "<network>\n  <name>%s</name>\n" "$network"
+    printf "  <bridge name='%s' stp='on' delay='0'/>\n" "$bridge"
+    printf "  <dns enable='no'/>\n  <ip address='%s.1' netmask='255.255.255.0'>\n" "$subnet"
+    printf "    <dhcp><range start='%s.100' end='%s.199'/></dhcp>\n" "$subnet" "$subnet"
+    printf "  </ip>\n</network>\n"
+  } > "$output"
+}
+net_info() { LC_ALL=C "$virsh" --connect qemu:///system net-info "$network"; }
+case "$action" in
+  create)
+    jq -e --arg name "$name" --argjson octet "$octet" 'all(.networks[]; .name!=$name and .subnet_octet!=$octet)' "$state" >/dev/null || fail "network name or subnet is already managed"
+    if net_info >/dev/null 2>&1; then fail "libvirt network already exists"; fi
+    [ ! -e "$definition" ] || fail "network definition already exists"
+    temporary=$(mktemp "$directory/.network.XXXXXX")
+    render "$temporary"
+    chmod 0600 "$temporary"
+    mv "$temporary" "$definition"
+    temporary=
+    defined=1
+    "$virsh" --connect qemu:///system net-define "$definition" --validate >/dev/null
+    active=1
+    "$virsh" --connect qemu:///system net-start "$network" >/dev/null
+    "$virsh" --connect qemu:///system net-autostart "$network" >/dev/null
+    info=$(net_info) || fail "created network cannot be inspected"
+    printf '%s\n' "$info" | grep -Eq '^Active:[[:space:]]+yes$' || fail "created network is not active"
+    printf '%s\n' "$info" | grep -Eq '^Autostart:[[:space:]]+yes$' || fail "created network is not persistent at boot"
+    state_temporary=$(mktemp "$base/.networks.XXXXXX")
+    jq -S --arg name "$name" --arg libvirt "$network" --arg bridge "$bridge" --arg cidr "$subnet.0/24" --argjson octet "$octet" \
+      '.networks += [{name:$name,libvirt_name:$libvirt,bridge:$bridge,cidr:$cidr,subnet_octet:$octet}] | .networks |= sort_by(.subnet_octet)' "$state" > "$state_temporary"
+    ;;
+  delete)
+    jq -e --arg name "$name" --arg libvirt "$network" --arg bridge "$bridge" --arg cidr "$subnet.0/24" --argjson octet "$octet" \
+      'any(.networks[]; .name==$name and .libvirt_name==$libvirt and .bridge==$bridge and .cidr==$cidr and .subnet_octet==$octet)' "$state" >/dev/null || fail "managed network record does not match request"
+    [ -f "$definition" ] && [ ! -L "$definition" ] || fail "managed network definition is missing or indirect"
+    temporary=$(mktemp "$directory/.expected.XXXXXX"); render "$temporary"; cmp -s "$temporary" "$definition" || fail "managed network definition changed"; rm -f "$temporary"; temporary=
+    info=$(net_info) || fail "managed network is missing from libvirt"
+    printf '%s\n' "$info" | grep -Eq '^Active:[[:space:]]+yes$' || fail "managed network is not active"
+    "$virsh" --connect qemu:///system net-destroy "$network" >/dev/null
+    active=0
+    defined=1
+    "$virsh" --connect qemu:///system net-undefine "$network" >/dev/null
+    state_temporary=$(mktemp "$base/.networks.XXXXXX")
+    jq -S --arg name "$name" '.networks |= map(select(.name!=$name))' "$state" > "$state_temporary"
+    ;;
+esac
+chmod 0600 "$state_temporary"
+state_changed=1
+mv "$state_temporary" "$state"
+state_temporary=
+[ "$action" != delete ] || rm -f "$definition"
+defined=0
+active=0
+state_changed=0
+trap - EXIT INT TERM
+rm -f "$state_before"
+rmdir "$lock"
+jq -S -n --arg action "$action" --arg name "$name" --arg network "$network" --arg bridge "$bridge" --arg cidr "$subnet.0/24" \
+  '{schema:1,status:"completed",action:$action,name:$name,libvirt_name:$network,bridge:$bridge,cidr:$cidr,forwarding:false}'
