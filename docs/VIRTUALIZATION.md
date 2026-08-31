@@ -12,4 +12,6 @@ This foundation does not authorize VM creation or mutation. The v0.5 lifecycle l
 
 `register-vm` is the first mutation boundary. It requires a separate strict authorization record containing the exact confirmation phrase and SHA-256 hashes of both the reviewed plan and deterministic definition. As root, it accepts only fixed name-bound paths, serializes registrations, creates one bounded QCOW2 disk, defines the persistent system-libvirt guest, records the allocation atomically, and rolls back the definition and disk on failure. Registration never starts the guest.
 
+`control-vm` provides serialized start, graceful-stop, and force-stop operations only for guests that are uniquely present in Bedrock's managed allocation state and still exist in system libvirt. Every request uses a fixed name/action-bound path and an exact action-specific confirmation phrase. The controller checks the current state before mutation and polls for the required final state; it never treats an accepted libvirt command as proof of completion.
+
 Production acceptance must prove the capability report on supported Intel and AMD hosts, create a UEFI guest through the system libvirt connection, confirm KVM acceleration, reboot the host, and verify that the guest definition and storage remain intact.

@@ -57,7 +57,7 @@ cmp -s "$expected" "$definition" || fail "VM definition is not the deterministic
 rm -f "$expected"
 
 disk="$base/disks/$name.qcow2"
-lock="$base/.registration.lock"
+lock="$base/.operation.lock"
 mkdir -p "$base/disks"
 [ -d "$base" ] && [ ! -L "$base" ] && [ -d "$base/disks" ] && [ ! -L "$base/disks" ] || fail "VM storage path is indirect"
 mkdir "$lock" 2>/dev/null || fail "another VM registration is running"

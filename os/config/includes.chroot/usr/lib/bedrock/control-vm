@@ -1,0 +1,67 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
+request=$1
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+[ -f "$request" ] && [ ! -L "$request" ] || fail "VM control request is missing or indirect"
+command -v jq >/dev/null 2>&1 || fail "jq is required"
+jq -e '
+  (keys|sort)==(["action","confirmation","name","schema"]|sort) and .schema==1 and
+  (.action=="start" or .action=="stop" or .action=="force-stop") and
+  (.name|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+  .confirmation==(if .action=="start" then "START VM "+.name elif .action=="stop" then "STOP VM "+.name else "FORCE STOP VM "+.name end)
+' "$request" >/dev/null || fail "VM control request or confirmation is invalid"
+name=$(jq -r .name "$request")
+action=$(jq -r .action "$request")
+
+if [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ]; then
+  state=${BEDROCK_VM_DOMAINS:?test mode requires BEDROCK_VM_DOMAINS}
+  base=${BEDROCK_VM_STATE_ROOT:?test mode requires BEDROCK_VM_STATE_ROOT}
+  virsh=${BEDROCK_VM_VIRSH:?test mode requires BEDROCK_VM_VIRSH}
+  attempts=2
+else
+  [ "$(id -u)" -eq 0 ] || fail "VM control requires root"
+  [ "$request" = "/var/lib/bedrock/virtualization/requests/$name-$action.json" ] || fail "VM control request path is not name-bound"
+  state=/var/lib/bedrock/virtualization/domains.json
+  base=/var/lib/bedrock/virtualization
+  virsh=/usr/bin/virsh
+  attempts=30
+fi
+[ -x "$virsh" ] && [ ! -L "$virsh" ] || fail "virsh is unavailable or indirect"
+[ -f "$state" ] && [ ! -L "$state" ] || fail "managed VM state is missing or indirect"
+jq -e --arg name "$name" '
+  (keys|sort)==(["domains","schema"]|sort) and .schema==1 and (.domains|type=="array") and
+  ([.domains[]|select(.name==$name)]|length)==1 and
+  all(.domains[]; (keys|sort)==(["memory_mib","name","vcpus"]|sort) and
+    (.name|type=="string") and (.vcpus|type=="number" and floor==.) and (.memory_mib|type=="number" and floor==.))
+' "$state" >/dev/null || fail "VM is not uniquely present in managed state"
+[ -d "$base" ] && [ ! -L "$base" ] || fail "VM state path is indirect"
+lock="$base/.operation.lock"
+mkdir "$lock" 2>/dev/null || fail "another VM control operation is running"
+cleanup() { rmdir "$lock" 2>/dev/null || true; }
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+"$virsh" --connect qemu:///system dominfo "$name" >/dev/null 2>&1 || fail "managed VM is missing from libvirt"
+read_state() { LC_ALL=C "$virsh" --connect qemu:///system domstate "$name" | tr '[:upper:]' '[:lower:]' | tr -d '\r'; }
+before=$(read_state)
+case "$action:$before" in
+  start:"shut off") "$virsh" --connect qemu:///system start "$name" >/dev/null; expected=running ;;
+  start:*) fail "VM must be shut off before start" ;;
+  stop:running) "$virsh" --connect qemu:///system shutdown "$name" >/dev/null; expected="shut off" ;;
+  stop:*) fail "VM must be running before graceful stop" ;;
+  force-stop:running|force-stop:paused) "$virsh" --connect qemu:///system destroy "$name" >/dev/null; expected="shut off" ;;
+  force-stop:*) fail "VM must be running or paused before force-stop" ;;
+esac
+i=0
+after=$(read_state)
+while [ "$after" != "$expected" ] && [ "$i" -lt "$attempts" ]; do
+  sleep 1
+  i=$((i + 1))
+  after=$(read_state)
+done
+[ "$after" = "$expected" ] || fail "VM did not reach the expected state: $expected"
+trap - EXIT INT TERM
+rmdir "$lock"
+jq -S -n --arg name "$name" --arg action "$action" --arg before "$before" --arg state "$after" \
+  '{schema:1,status:"completed",name:$name,action:$action,previous_state:$before,state:$state}'
