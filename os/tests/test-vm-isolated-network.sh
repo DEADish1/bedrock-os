@@ -7,6 +7,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
 mkdir -p "$work/bin" "$work/state"
 jq -n '{schema:1,networks:[]}' > "$work/networks.json"
+jq -n '{schema:1,attachments:[]}' > "$work/network-attachments.json"
 : > "$work/network-state"; : > "$work/virsh.log"
 cat > "$work/bin/virsh" <<'EOF'
 #!/bin/sh
@@ -24,14 +25,18 @@ esac
 EOF
 chmod +x "$work/bin/virsh"
 request() { jq -n --arg action "$1" --arg confirmation "$2" '{schema:1,name:"lab",subnet_octet:42,action:$action,confirmation:$confirmation}' > "$work/request.json"; }
-run() { BEDROCK_VM_TEST_MODE=1 BEDROCK_VM_STATE_ROOT="$work/state" BEDROCK_VM_NETWORKS="$work/networks.json" BEDROCK_VM_VIRSH="$work/bin/virsh" BEDROCK_VM_TEST_LOG="$work/virsh.log" BEDROCK_VM_NETWORK_STATE="$work/network-state" "$manager" "$work/request.json"; }
+run() { BEDROCK_VM_TEST_MODE=1 BEDROCK_VM_STATE_ROOT="$work/state" BEDROCK_VM_NETWORKS="$work/networks.json" BEDROCK_VM_NETWORK_ATTACHMENTS="$work/network-attachments.json" BEDROCK_VM_VIRSH="$work/bin/virsh" BEDROCK_VM_TEST_LOG="$work/virsh.log" BEDROCK_VM_NETWORK_STATE="$work/network-state" "$manager" "$work/request.json"; }
+must_fail() { if "$@" >/dev/null 2>&1; then printf 'error: command unexpectedly succeeded\n' >&2; exit 1; fi; }
 request create 'CREATE ISOLATED NETWORK lab 10.240.42.0/24'; run | jq -e '.forwarding==false and .bridge=="br-bedrock-42"' >/dev/null
 jq -e '.networks|length==1 and .[0].cidr=="10.240.42.0/24"' "$work/networks.json" >/dev/null
 ! grep -q '<forward' "$work/state/networks/lab.xml"
-request delete 'DELETE ISOLATED NETWORK lab 10.240.42.0/24'; run | jq -e '.action=="delete"' >/dev/null
+request delete 'DELETE ISOLATED NETWORK lab 10.240.42.0/24'
+jq -n '{schema:1,attachments:[{vm:"test-vm",network:"lab",libvirt_name:"bedrock-lab",mac:"52:54:00:00:00:01"}]}' > "$work/network-attachments.json"
+must_fail run
+jq -n '{schema:1,attachments:[]}' > "$work/network-attachments.json"
+run | jq -e '.action=="delete"' >/dev/null
 jq -e '.networks==[]' "$work/networks.json" >/dev/null
 [ ! -e "$work/state/networks/lab.xml" ]
-must_fail() { if "$@" >/dev/null 2>&1; then printf 'error: command unexpectedly succeeded\n' >&2; exit 1; fi; }
 must_fail run
 request create 'CREATE ISOLATED NETWORK lab 10.240.43.0/24'; must_fail run
 printf 'VM isolated-network tests passed.\n'

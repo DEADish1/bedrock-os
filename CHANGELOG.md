@@ -6,6 +6,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ### Virtual machines and images 0.5
 
+- Added guarded persistent attachment of shut-down managed VMs to active isolated networks using virtio and deterministic local MAC addresses, with exact confirmations, inactive-definition verification, atomic inventory, shared locking, rollback, and in-use network deletion protection.
 - Added deterministic isolated libvirt network creation and deletion within reserved `10.240.x.0/24` space, with no forwarding, DNS disabled, bounded DHCP, collision checks, exact CIDR confirmations, persistent activation verification, atomic inventory, shared locking, and rollback.
 - Added guarded persistent library-image attachment and detachment for shut-down managed VMs, with checksum revalidation, read-only ISO CD/DVD and secondary-disk policies, exact confirmations, fixed targets, inactive libvirt verification, atomic attachment inventory, shared locking, and rollback.
 - Added a guarded root-only ISO/IMG/QCOW2/VHDX/VMDK library importer with strict requests, exact hash-bearing confirmation, format detection, 4 TiB bounds, backing-chain/encryption rejection, source and destination integrity checks, duplicate prevention, atomic metadata, and no automatic VM attachment.

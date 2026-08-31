@@ -23,16 +23,19 @@ if [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ]; then
   base=${BEDROCK_VM_STATE_ROOT:?test mode requires BEDROCK_VM_STATE_ROOT}
   state=${BEDROCK_VM_NETWORKS:?test mode requires BEDROCK_VM_NETWORKS}
   virsh=${BEDROCK_VM_VIRSH:?test mode requires BEDROCK_VM_VIRSH}
+  network_attachments=${BEDROCK_VM_NETWORK_ATTACHMENTS:?test mode requires BEDROCK_VM_NETWORK_ATTACHMENTS}
 else
   [ "$(id -u)" -eq 0 ] || fail "isolated-network management requires root"
   [ "$request" = "/var/lib/bedrock/virtualization/requests/network-$action-$name.json" ] || fail "isolated-network request path is not name-bound"
   base=/var/lib/bedrock/virtualization
   state=$base/networks.json
   virsh=/usr/bin/virsh
+  network_attachments=$base/network-attachments.json
 fi
 [ -x "$virsh" ] && [ ! -L "$virsh" ] || fail "virsh is unavailable or indirect"
 [ -d "$base" ] && [ ! -L "$base" ] || fail "virtualization state path is indirect"
 [ -f "$state" ] && [ ! -L "$state" ] || fail "network state is missing or indirect"
+[ -f "$network_attachments" ] && [ ! -L "$network_attachments" ] || fail "network attachment state is missing or indirect"
 jq -e '
   (keys|sort)==(["networks","schema"]|sort) and .schema==1 and (.networks|type=="array") and
   all(.networks[]; (keys|sort)==(["bridge","cidr","libvirt_name","name","subnet_octet"]|sort))
@@ -107,6 +110,7 @@ case "$action" in
       '.networks += [{name:$name,libvirt_name:$libvirt,bridge:$bridge,cidr:$cidr,subnet_octet:$octet}] | .networks |= sort_by(.subnet_octet)' "$state" > "$state_temporary"
     ;;
   delete)
+    jq -e --arg name "$name" '.schema==1 and (.attachments|type=="array") and all(.attachments[]; .network!=$name)' "$network_attachments" >/dev/null || fail "network is still attached to a managed VM"
     jq -e --arg name "$name" --arg libvirt "$network" --arg bridge "$bridge" --arg cidr "$subnet.0/24" --argjson octet "$octet" \
       'any(.networks[]; .name==$name and .libvirt_name==$libvirt and .bridge==$bridge and .cidr==$cidr and .subnet_octet==$octet)' "$state" >/dev/null || fail "managed network record does not match request"
     [ -f "$definition" ] && [ ! -L "$definition" ] || fail "managed network definition is missing or indirect"

@@ -1,0 +1,106 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
+request=$1
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+[ -f "$request" ] && [ ! -L "$request" ] || fail "network attachment request is missing or indirect"
+for tool in jq sha256sum; do command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"; done
+jq -e '
+  (keys|sort)==(["action","confirmation","network","schema","vm"]|sort) and .schema==1 and
+  (.action=="attach" or .action=="detach") and
+  (.vm|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+  (.network|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+  .confirmation==(if .action=="attach" then "ATTACH NETWORK "+.network+" TO VM "+.vm else "DETACH NETWORK "+.network+" FROM VM "+.vm end)
+' "$request" >/dev/null || fail "network attachment request or confirmation is invalid"
+action=$(jq -r .action "$request")
+vm=$(jq -r .vm "$request")
+network=$(jq -r .network "$request")
+libvirt_name=bedrock-$network
+if [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ]; then
+  base=${BEDROCK_VM_STATE_ROOT:?test mode requires BEDROCK_VM_STATE_ROOT}
+  domains=${BEDROCK_VM_DOMAINS:?test mode requires BEDROCK_VM_DOMAINS}
+  networks=${BEDROCK_VM_NETWORKS:?test mode requires BEDROCK_VM_NETWORKS}
+  attachments=${BEDROCK_VM_NETWORK_ATTACHMENTS:?test mode requires BEDROCK_VM_NETWORK_ATTACHMENTS}
+  virsh=${BEDROCK_VM_VIRSH:?test mode requires BEDROCK_VM_VIRSH}
+else
+  [ "$(id -u)" -eq 0 ] || fail "VM network attachment requires root"
+  [ "$request" = "/var/lib/bedrock/virtualization/requests/$vm-network-$action-$network.json" ] || fail "network attachment request path is not name-bound"
+  base=/var/lib/bedrock/virtualization
+  domains=$base/domains.json
+  networks=$base/networks.json
+  attachments=$base/network-attachments.json
+  virsh=/usr/bin/virsh
+fi
+[ -x "$virsh" ] && [ ! -L "$virsh" ] || fail "virsh is unavailable or indirect"
+[ -d "$base" ] && [ ! -L "$base" ] || fail "virtualization state path is indirect"
+for state in "$domains" "$networks" "$attachments"; do [ -f "$state" ] && [ ! -L "$state" ] || fail "virtualization state is missing or indirect: $state"; done
+jq -e --arg vm "$vm" '.schema==1 and (.domains|type=="array") and ([.domains[]|select(.name==$vm)]|length)==1' "$domains" >/dev/null || fail "VM is not uniquely managed"
+jq -e --arg name "$network" --arg libvirt "$libvirt_name" '
+  (keys|sort)==(["networks","schema"]|sort) and .schema==1 and (.networks|type=="array") and
+  ([.networks[]|select(.name==$name and .libvirt_name==$libvirt)]|length)==1
+' "$networks" >/dev/null || fail "isolated network is not uniquely managed"
+jq -e '
+  (keys|sort)==(["attachments","schema"]|sort) and .schema==1 and (.attachments|type=="array") and
+  all(.attachments[]; (keys|sort)==(["libvirt_name","mac","network","vm"]|sort))
+' "$attachments" >/dev/null || fail "network attachment state is invalid"
+digest=$(printf '%s' "$vm:$network" | sha256sum | awk '{print $1}')
+mac=52:54:00:$(printf '%s' "$digest" | cut -c1-2):$(printf '%s' "$digest" | cut -c3-4):$(printf '%s' "$digest" | cut -c5-6)
+lock=$base/.operation.lock
+mkdir "$lock" 2>/dev/null || fail "another VM lifecycle operation is running"
+xml=
+temporary=
+mutated=0
+cleanup() {
+  status=$?
+  if [ "$status" -ne 0 ] && [ "$mutated" -eq 1 ]; then
+    if [ "$action" = attach ]; then "$virsh" --connect qemu:///system detach-device "$vm" "$xml" --config >/dev/null 2>&1 || true; else "$virsh" --connect qemu:///system attach-device "$vm" "$xml" --config >/dev/null 2>&1 || true; fi
+  fi
+  [ -z "$xml" ] || rm -f "$xml"
+  [ -z "$temporary" ] || rm -f "$temporary"
+  rmdir "$lock" 2>/dev/null || true
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+"$virsh" --connect qemu:///system dominfo "$vm" >/dev/null 2>&1 || fail "managed VM is missing from libvirt"
+runtime=$(LC_ALL=C "$virsh" --connect qemu:///system domstate "$vm" | tr '[:upper:]' '[:lower:]' | tr -d '\r')
+[ "$runtime" = "shut off" ] || fail "VM must be shut off before persistent network changes"
+info=$(LC_ALL=C "$virsh" --connect qemu:///system net-info "$libvirt_name") || fail "isolated network is missing from libvirt"
+printf '%s\n' "$info" | grep -Eq '^Active:[[:space:]]+yes$' || fail "isolated network is not active"
+interfaces=$("$virsh" --connect qemu:///system domiflist "$vm" --inactive) || fail "persistent VM interface inventory is unavailable"
+interface_present() { printf '%s\n' "$interfaces" | awk -v source="$libvirt_name" -v mac="$mac" 'NR>2 && $2=="network" && $3==source && tolower($5)==mac {found=1} END {exit !found}'; }
+mac_present() { printf '%s\n' "$interfaces" | awk -v mac="$mac" 'NR>2 && tolower($5)==mac {found=1} END {exit !found}'; }
+record_present() { jq -e --arg vm "$vm" --arg network "$network" --arg mac "$mac" 'any(.attachments[]; .vm==$vm and .network==$network and .mac==$mac)' "$attachments" >/dev/null; }
+case "$action" in
+  attach) ! mac_present && ! record_present && jq -e --arg mac "$mac" 'all(.attachments[]; .mac!=$mac)' "$attachments" >/dev/null || fail "network interface, MAC, or attachment record already exists" ;;
+  detach) interface_present && record_present || fail "managed network attachment is not present" ;;
+esac
+xml=$(mktemp "$base/.interface.XXXXXX")
+{
+  printf "<interface type='network'>\n"
+  printf "  <mac address='%s'/>\n" "$mac"
+  printf "  <source network='%s'/>\n" "$libvirt_name"
+  printf "  <model type='virtio'/>\n"
+  printf "</interface>\n"
+} > "$xml"
+mutated=1
+if [ "$action" = attach ]; then "$virsh" --connect qemu:///system attach-device "$vm" "$xml" --config >/dev/null; else "$virsh" --connect qemu:///system detach-device "$vm" "$xml" --config >/dev/null; fi
+interfaces=$("$virsh" --connect qemu:///system domiflist "$vm" --inactive) || fail "persistent VM interface inventory cannot be verified"
+if [ "$action" = attach ]; then interface_present || fail "libvirt did not persist the network interface"; else if interface_present; then fail "libvirt still reports the detached interface"; fi; fi
+temporary=$(mktemp "$base/.network-attachments.XXXXXX")
+if [ "$action" = attach ]; then
+  jq -S --arg vm "$vm" --arg network "$network" --arg libvirt "$libvirt_name" --arg mac "$mac" \
+    '.attachments += [{vm:$vm,network:$network,libvirt_name:$libvirt,mac:$mac}] | .attachments |= sort_by(.vm,.network)' "$attachments" > "$temporary"
+else
+  jq -S --arg vm "$vm" --arg network "$network" '.attachments |= map(select(.vm!=$vm or .network!=$network))' "$attachments" > "$temporary"
+fi
+chmod 0600 "$temporary"
+mv "$temporary" "$attachments"
+temporary=
+mutated=0
+trap - EXIT INT TERM
+rm -f "$xml"
+rmdir "$lock"
+jq -S -n --arg vm "$vm" --arg network "$network" --arg action "$action" --arg mac "$mac" \
+  '{schema:1,status:"completed",vm:$vm,network:$network,action:$action,mac:$mac,model:"virtio",state:"shut off"}'
