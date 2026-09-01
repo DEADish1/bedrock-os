@@ -73,6 +73,11 @@ def main() -> None:
             assert request(socket_path, "POST", "/api/v1/health")[0] == 405
             tokens.write_text('{"schema":1,"tokens":[]}', encoding="utf-8")
             assert request(socket_path, "GET", "/api/v1/health")[0] == 401
+            tokens.write_text(json.dumps({"schema": 1, "tokens": [{
+                "name": "test-client", "sha256": hashlib.sha256(TOKEN.encode()).hexdigest(),
+                "created_at": "2026-08-31T00:00:00Z", "revoked": True,
+            }]}), encoding="utf-8")
+            assert request(socket_path, "GET", "/api/v1/health")[0] == 401
         finally:
             process.terminate()
             process.wait(timeout=5)

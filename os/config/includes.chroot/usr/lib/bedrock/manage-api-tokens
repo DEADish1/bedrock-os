@@ -1,0 +1,45 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -ge 1 ] || { printf 'usage: %s list | revoke TOKEN_NAME\n' "$0" >&2; exit 2; }
+action=$1
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+command -v jq >/dev/null 2>&1 || fail "jq is required"
+if [ "${BEDROCK_API_TEST_MODE:-0}" = 1 ]; then
+  directory=${BEDROCK_API_STATE_ROOT:?test mode requires BEDROCK_API_STATE_ROOT}
+  state=${BEDROCK_API_TOKENS:?test mode requires BEDROCK_API_TOKENS}
+else
+  [ "$(id -u)" -eq 0 ] || fail "API token management requires root"
+  directory=/var/lib/bedrock/api
+  state=$directory/tokens.json
+fi
+[ -d "$directory" ] && [ ! -L "$directory" ] || fail "API state directory is missing or indirect"
+[ -f "$state" ] && [ ! -L "$state" ] || fail "API token state is missing or indirect"
+valid='(keys|sort)==(["schema","tokens"]|sort) and .schema==1 and (.tokens|type=="array" and length<=16) and all(.tokens[]; (keys|sort)==(["created_at","name","revoked","sha256"]|sort) and (.name|type)=="string" and (.sha256|type)=="string" and (.sha256|test("^[0-9a-f]{64}$")) and (.created_at|type)=="string" and (.revoked|type)=="boolean")'
+jq -e "$valid" "$state" >/dev/null || fail "API token state is invalid"
+
+case "$action" in
+  list)
+    [ "$#" -eq 1 ] || fail "list does not accept a token name"
+    jq -S '{schema:1,tokens:[.tokens[]|{name,created_at,revoked}]}' "$state"
+    ;;
+  revoke)
+    [ "$#" -eq 2 ] || fail "revoke requires one token name"
+    name=$2
+    printf '%s' "$name" | grep -Eq '^[a-z][a-z0-9-]{0,30}[a-z0-9]$' || fail "API token name is invalid"
+    lock=$directory/.token.lock
+    mkdir "$lock" 2>/dev/null || fail "another API token operation is running"
+    temporary=$(mktemp "$directory/.tokens.XXXXXX")
+    cleanup() { status=$?; rm -f "$temporary"; rmdir "$lock" 2>/dev/null || true; exit "$status"; }
+    trap cleanup EXIT
+    trap 'exit 130' INT TERM
+    jq -e --arg name "$name" "$valid and any(.tokens[]; .name==\$name and .revoked==false)" "$state" >/dev/null || fail "API token is missing, revoked, or state changed"
+    jq -S --arg name "$name" '(.tokens[]|select(.name==$name)|.revoked)=true' "$state" > "$temporary"
+    chmod 0640 "$temporary"
+    if [ "${BEDROCK_API_TEST_MODE:-0}" != 1 ]; then chown root:bedrock-api "$temporary"; fi
+    mv "$temporary" "$state"; temporary=
+    trap - EXIT INT TERM; rmdir "$lock"
+    jq -S -n --arg name "$name" '{schema:1,status:"revoked",name:$name}'
+    ;;
+  *) fail "unsupported API token action" ;;
+esac

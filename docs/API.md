@@ -6,6 +6,8 @@ Bedrock exposes a versioned, authenticated management API only through the local
 
 Create a client token as root with `create-api-token NAME`. The command displays the 64-character bearer token once. Bedrock stores only its SHA-256 digest in `/var/lib/bedrock/api/tokens.json`; the state is bounded to 16 uniquely named tokens and is readable only by root and the API service account.
 
+Use `manage-api-tokens list` to inspect token names, creation times, and revocation status without exposing hashes. Use `manage-api-tokens revoke NAME` to atomically invalidate a token. Revocation takes effect on the next request and cannot be silently repeated.
+
 Send the token as `Authorization: Bearer TOKEN`. Missing, malformed, unknown, or revoked credentials receive `401`. API responses must not be cached.
 
 ## Version 1 foundation

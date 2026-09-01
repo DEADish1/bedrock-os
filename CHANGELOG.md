@@ -7,6 +7,7 @@ This file records completed work, decisions, validation, and the next starting p
 ### Management interface and API 0.6
 
 - Added a versioned, bearer-authenticated local management API on a permission-restricted Unix socket, with hash-only bounded token state, a hardened unprivileged service, and read-only health and virtualization-capability endpoints as the foundation for replacing prototype data.
+- Added safe API credential inventory and atomic revocation without exposing stored token hashes; revoked credentials are rejected immediately and duplicate revocation fails closed.
 
 ### Virtual machines and images 0.5
 
