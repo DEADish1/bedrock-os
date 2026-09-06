@@ -5,6 +5,7 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 checker="$ROOT/os/config/includes.chroot/usr/lib/bedrock/check-for-updates"
 downloader="$ROOT/os/config/includes.chroot/usr/lib/bedrock/download-update"
 verifier="$ROOT/os/config/includes.chroot/usr/lib/bedrock/verify-update-bundle"
+task_writer="$ROOT/os/config/includes.chroot/usr/lib/bedrock/record-api-task"
 default_policy="$ROOT/os/config/includes.chroot/usr/share/bedrock/default-update-policy.json"
 channels="$ROOT/os/config/includes.chroot/usr/share/bedrock/release-channels.json"
 work=$(mktemp -d)
@@ -39,7 +40,8 @@ run_downloader() {
   BEDROCK_UPDATE_TEST_MODE=1 BEDROCK_UPDATE_POLICY_FILE="$work/settings/policy.json" \
   BEDROCK_UPDATE_DEFAULT_POLICY="$default_policy" BEDROCK_UPDATE_STATE_DIR="$work/state" \
   BEDROCK_UPDATE_CERT="$work/cert.pem" BEDROCK_UPDATE_CHANNELS_FILE="$channels" BEDROCK_UPDATE_SOURCE_DIR="$work/remote" \
-  BEDROCK_VERIFY_UPDATE="$verifier" "$downloader"
+  BEDROCK_VERIFY_UPDATE="$verifier" BEDROCK_RECORD_API_TASK="$task_writer" \
+  BEDROCK_API_TASK_TEST_MODE=1 BEDROCK_API_TASK_STATE_DIR="$work/api" "$downloader"
 }
 run_checker >/dev/null
 mkdir -p "$work/state/bundles/4"
@@ -49,6 +51,8 @@ run_downloader |
 cmp -s "$work/remote/root.erofs" "$work/state/bundles/4/root.erofs"
 "$verifier" "$work/state/bundles/4" "$work/cert.pem" >/dev/null
 [ ! -e "$work/state/bundles/4/.root.erofs.part" ]
+jq -e '[.tasks[] | select(.kind=="update-download" and .state=="succeeded" and .progress.current==.progress.total)] | length==1' "$work/api/tasks.json" >/dev/null
+jq -e 'select(.category=="task" and .action=="update-download" and .outcome=="succeeded")' "$work/api/audit.jsonl" >/dev/null
 
 printf 'corrupt\n' > "$work/state/bundles/4/uki.efi"
 run_downloader >/dev/null
@@ -61,5 +65,7 @@ if run_downloader >/dev/null 2>&1; then
   exit 1
 fi
 [ -s "$work/state/bundles/4/.root.verity.part" ] || { printf 'error: interrupted partial download was not retained\n' >&2; exit 1; }
+jq -e '[.tasks[] | select(.kind=="update-download" and .state=="failed")] | length==1' "$work/api/tasks.json" >/dev/null
+jq -e 'select(.category=="task" and .action=="update-download" and .outcome=="failed")' "$work/api/audit.jsonl" >/dev/null
 
 printf 'Bedrock verified update download, resume, repair, and interruption tests passed.\n'

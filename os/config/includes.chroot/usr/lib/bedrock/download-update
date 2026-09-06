@@ -25,6 +25,22 @@ else
   [ "$(id -u)" -eq 0 ] || { printf 'error: downloading Bedrock updates requires root\n' >&2; exit 1; }
 fi
 trust_validator=${BEDROCK_VALIDATE_UPDATE_TRUST:-$(dirname "$0")/validate-update-trust}
+task_writer=${BEDROCK_RECORD_API_TASK:-$(dirname "$0")/record-api-task}
+task_active=0
+task_done=0
+task_current=0
+items_file=
+finish() {
+  result=$?
+  [ -z "$items_file" ] || rm -f "$items_file"
+  if [ "$task_active" -eq 1 ] && [ "$task_done" -eq 0 ]; then
+    "$task_writer" "$task_id" update-download failed "$task_created" "$task_current" "$task_total" bytes >/dev/null 2>&1 || true
+  fi
+  exit "$result"
+}
+trap finish EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 for tool in jq openssl sha256sum stat; do
   command -v "$tool" >/dev/null 2>&1 || { printf 'error: update downloads require %s\n' "$tool" >&2; exit 2; }
@@ -46,6 +62,12 @@ openssl cms -verify -binary -inform DER -in "$metadata/manifest.p7s" -content "$
   printf 'error: cached update metadata signature is invalid\n' >&2
   exit 1
 }
+task_total=$(jq '[.artifacts[].size] | add' "$metadata/manifest.json")
+printf '%s' "$task_total" | grep -Eq '^[1-9][0-9]*$' || { printf 'error: update task total is invalid\n' >&2; exit 1; }
+task_created=$(date +%s)
+task_id="update-$generation-$$"
+"$task_writer" "$task_id" update-download queued "$task_created" 0 "$task_total" bytes
+task_active=1
 
 selected_policy=$policy
 [ -s "$selected_policy" ] || selected_policy=$default_policy
@@ -68,7 +90,10 @@ cp "$metadata/manifest.json" "$bundle/manifest.json"
 cp "$metadata/manifest.p7s" "$bundle/manifest.p7s"
 chmod 0600 "$bundle/manifest.json" "$bundle/manifest.p7s"
 
-jq -c '.artifacts[]' "$metadata/manifest.json" | while IFS= read -r item; do
+items_file="$bundle/.artifacts.$$"
+jq -c '.artifacts[]' "$metadata/manifest.json" > "$items_file"
+chmod 0600 "$items_file"
+while IFS= read -r item; do
   name=$(printf '%s' "$item" | jq -r .name)
   expected_size=$(printf '%s' "$item" | jq -r .size)
   expected_hash=$(printf '%s' "$item" | jq -r .sha256)
@@ -86,6 +111,8 @@ jq -c '.artifacts[]' "$metadata/manifest.json" | while IFS= read -r item; do
     actual_size=$(stat -c %s "$final" 2>/dev/null || stat -f %z "$final")
     actual_hash=$(sha256sum "$final" | awk '{print $1}')
     if [ "$actual_size" = "$expected_size" ] && [ "$actual_hash" = "$expected_hash" ]; then
+      task_current=$((task_current + expected_size))
+      "$task_writer" "$task_id" update-download running "$task_created" "$task_current" "$task_total" bytes
       continue
     fi
     rm -f "$final"
@@ -116,8 +143,12 @@ jq -c '.artifacts[]' "$metadata/manifest.json" | while IFS= read -r item; do
   actual_hash=$(sha256sum "$partial" | awk '{print $1}')
   [ "$actual_hash" = "$expected_hash" ] || { printf 'error: update artifact %s failed checksum verification\n' "$name" >&2; exit 1; }
   mv "$partial" "$final"
-done
+  task_current=$((task_current + expected_size))
+  "$task_writer" "$task_id" update-download running "$task_created" "$task_current" "$task_total" bytes
+done < "$items_file"
 
 "$verifier" "$bundle" "$cert" >/dev/null
+"$task_writer" "$task_id" update-download succeeded "$task_created" "$task_total" "$task_total" bytes
+task_done=1
 jq -n -c --argjson generation "$generation" --arg bundle "$bundle" \
   '{schema:1,status:"downloaded",generation:$generation,bundle:$bundle,installed:false}'
