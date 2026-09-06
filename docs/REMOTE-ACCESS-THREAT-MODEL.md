@@ -54,3 +54,7 @@ This design does not protect plaintext visible on a compromised client or server
 Implementation cannot ship until automated tests cover official Noise vectors, mutual authentication, transcript binding, key separation, replay/reorder/truncation, version downgrade, record limits, rekey boundaries, expiry, revocation during active traffic, relay opacity, TLS configuration, concurrent sessions, crash recovery, and secret-free logs. A third-party review must cover protocol composition, pairing, key storage, authorization, relay behavior, updates, and client signing. Findings rated critical or high block release.
 
 The machine-readable invariant set is packaged at `/usr/share/bedrock/remote/transport-policy.json` and is validated during every image build.
+
+## Pairing implementation status
+
+The root-only `manage-remote-pairing` boundary implements pending-request issuance, exact server approval, and single-use redemption. It stores SHA-256 values for the manual code and client public key, never the plaintext code or raw client key. Requests expire after ten monotonic minutes, are invalidated by reboot, reject replay, and cap failed redemption attempts. The interface, relay ingress, per-device record issuance, and transport handshake remain open, so the roadmap pairing item is not yet complete.

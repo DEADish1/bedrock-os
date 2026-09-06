@@ -116,6 +116,7 @@ Exit: every supported server task works through the UI and documented API.
 - [x] Design end-to-end encrypted remote transport and threat model.
   - Noise XX mutual device authentication, relay TLS, transcript binding, record/rekey limits, revocation, privacy, adversaries, limitations, and implementation/review gates are fixed in a machine-validated policy and [threat model](docs/REMOTE-ACCESS-THREAT-MODEL.md). Implementation remains in the following items.
 - [ ] Implement one-time QR/manual-code pairing with server approval and expiry.
+  - A root-only backend issues QR/manual payloads, stores only code and client-key hashes, requires exact local approval, expires after ten monotonic minutes or reboot, caps attempts, and atomically rejects replay. Interface and relay ingress integration remain.
 - [ ] Issue per-device keys; support listing, renaming, expiry, and revocation.
 - [ ] Add optional Google OpenID Connect without exposing server data to Google.
 - [ ] Build signed Windows and universal macOS desktop clients.
