@@ -16,6 +16,11 @@ STORAGE = pathlib.Path(os.environ.get("BEDROCK_API_STORAGE", "/var/lib/bedrock/s
 ALERTS = pathlib.Path(os.environ.get("BEDROCK_API_ALERTS", "/var/lib/bedrock/storage/alerts.json"))
 VMS = pathlib.Path(os.environ.get("BEDROCK_API_VMS", "/var/lib/bedrock/virtualization/status.json"))
 UPDATES = pathlib.Path(os.environ.get("BEDROCK_API_UPDATES", "/var/lib/bedrock/update/last-check.json"))
+TASKS = pathlib.Path(os.environ.get("BEDROCK_API_TASKS", "/var/lib/bedrock/api/tasks.json"))
+AUDIT = pathlib.Path(os.environ.get("BEDROCK_API_AUDIT", "/var/lib/bedrock/api/audit.jsonl"))
+
+TASK_STATES = {"queued", "running", "succeeded", "failed", "cancelled"}
+TASK_UNITS = {"bytes", "items", "percent", "steps"}
 
 def regular_json(path: pathlib.Path, limit: int) -> object:
     info = path.lstat()
@@ -37,6 +42,86 @@ def authorized(value: str | None) -> bool:
         return any(isinstance(item, dict) and set(item) == {"name", "sha256", "created_at", "revoked"} and item["revoked"] is False and hmac.compare_digest(item["sha256"], digest) for item in state["tokens"])
     except (OSError, ValueError, json.JSONDecodeError, TypeError):
         return False
+
+def bounded_string(value: object, maximum: int) -> str:
+    if not isinstance(value, str) or not value or len(value) > maximum or any(ord(char) < 32 for char in value):
+        raise ValueError("invalid string")
+    return value
+
+def task_feed() -> dict:
+    value = regular_json(TASKS, 1048576)
+    if not isinstance(value, dict) or set(value) != {"schema", "generated_unix", "tasks"} or value["schema"] != 1:
+        raise ValueError("invalid task state")
+    if type(value["generated_unix"]) is not int or value["generated_unix"] < 0 or not isinstance(value["tasks"], list) or len(value["tasks"]) > 256:
+        raise ValueError("invalid task state")
+    tasks = []
+    for item in value["tasks"]:
+        if not isinstance(item, dict) or set(item) != {"id", "kind", "state", "created_unix", "updated_unix", "progress"}:
+            raise ValueError("invalid task")
+        task_id = bounded_string(item["id"], 64)
+        kind = bounded_string(item["kind"], 64)
+        state = item["state"]
+        created = item["created_unix"]
+        updated = item["updated_unix"]
+        if state not in TASK_STATES or type(created) is not int or type(updated) is not int or created < 0 or updated < created:
+            raise ValueError("invalid task")
+        progress = item["progress"]
+        if not isinstance(progress, dict) or set(progress) != {"current", "total", "unit"}:
+            raise ValueError("invalid task progress")
+        current, total, unit = progress["current"], progress["total"], progress["unit"]
+        if type(current) is not int or type(total) is not int or current < 0 or total <= 0 or current > total or unit not in TASK_UNITS:
+            raise ValueError("invalid task progress")
+        tasks.append({"id": task_id, "kind": kind, "state": state, "created_unix": created,
+                      "updated_unix": updated, "progress": {"current": current, "total": total, "unit": unit}})
+    return {"schema": 1, "generated_unix": value["generated_unix"], "tasks": tasks}
+
+def alert_feed() -> dict:
+    value = regular_json(ALERTS, 1048576)
+    if not isinstance(value, dict) or value.get("schema") != 1 or type(value.get("generated_unix")) is not int or value["generated_unix"] < 0:
+        raise ValueError("invalid alerts")
+    active = value.get("active")
+    if not isinstance(active, list) or len(active) > 256 or value.get("active_count") != len(active):
+        raise ValueError("invalid alerts")
+    safe = []
+    for item in active:
+        if not isinstance(item, dict):
+            raise ValueError("invalid alert")
+        safe.append({
+            "id": bounded_string(item.get("alert_id"), 128),
+            "kind": bounded_string(item.get("kind"), 64),
+            "severity": bounded_string(item.get("severity"), 16),
+            "first_seen_unix": item.get("first_seen_unix"),
+            "last_seen_unix": item.get("last_seen_unix"),
+        })
+        if safe[-1]["severity"] not in {"warning", "critical"} or any(type(safe[-1][key]) is not int or safe[-1][key] < 0 for key in ("first_seen_unix", "last_seen_unix")):
+            raise ValueError("invalid alert")
+    return {"schema": 1, "generated_unix": value["generated_unix"], "attention_required": bool(safe), "alerts": safe}
+
+def audit_feed() -> dict:
+    info = AUDIT.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_size > 1048576:
+        raise ValueError("unsafe audit file")
+    events = []
+    with AUDIT.open(encoding="utf-8") as source:
+        for line in source:
+            if not line.strip():
+                continue
+            item = json.loads(line)
+            if not isinstance(item, dict) or set(item) != {"id", "category", "action", "outcome", "occurred_unix"}:
+                raise ValueError("invalid audit event")
+            event = {
+                "id": bounded_string(item["id"], 128),
+                "category": bounded_string(item["category"], 64),
+                "action": bounded_string(item["action"], 64),
+                "outcome": bounded_string(item["outcome"], 16),
+                "occurred_unix": item["occurred_unix"],
+            }
+            if event["outcome"] not in {"succeeded", "failed", "denied"} or type(event["occurred_unix"]) is not int or event["occurred_unix"] < 0:
+                raise ValueError("invalid audit event")
+            events.append(event)
+            if len(events) > 1000:
+                raise ValueError("too many audit events")
+    return {"schema": 1, "events": events[-100:]}
 
 def dashboard() -> dict:
     result = {"schema": 1, "components": {}}
@@ -105,6 +190,21 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(503, {"schema": 1, "error": "capabilities-unavailable"})
         elif self.path == "/api/v1/dashboard":
             self.send_json(200, dashboard())
+        elif self.path == "/api/v1/tasks":
+            try:
+                self.send_json(200, task_feed())
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                self.send_json(503, {"schema": 1, "error": "tasks-unavailable"})
+        elif self.path == "/api/v1/alerts":
+            try:
+                self.send_json(200, alert_feed())
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                self.send_json(503, {"schema": 1, "error": "alerts-unavailable"})
+        elif self.path == "/api/v1/audit":
+            try:
+                self.send_json(200, audit_feed())
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                self.send_json(503, {"schema": 1, "error": "audit-unavailable"})
         else:
             self.send_json(404, {"schema": 1, "error": "not-found"})
 

@@ -15,5 +15,10 @@ Send the token as `Authorization: Bearer TOKEN`. Missing, malformed, unknown, or
 - `GET /api/v1/health` reports API availability.
 - `GET /api/v1/dashboard` returns privacy-safe hardware, storage, alert, VM, and update summaries. Each component has an independent availability state, so stale or malformed subsystem data cannot suppress healthy telemetry from the others.
 - `GET /api/v1/virtualization/capabilities` returns the existing fail-closed virtualization capability report, or `503` while that report is unavailable.
+- `GET /api/v1/tasks` returns at most 256 bounded task records with monotonic timestamps and validated progress. It excludes command arguments, paths, user labels, and error text.
+- `GET /api/v1/alerts` returns active alert identity, kind, severity, and timestamps without exposing device paths or other resource identifiers.
+- `GET /api/v1/audit` returns the newest 100 events from a bounded append-only feed. Events expose only a stable identity, category, action, outcome, and timestamp.
+
+Malformed, oversized, indirect, or unavailable task, alert, and audit sources fail independently with `503`; the API never returns partially validated records.
 
 All other paths return `404`. Mutating requests are deliberately disabled in this foundation and return `405` after authentication. Later mutation endpoints must delegate to the existing guarded Bedrock helpers so their independent precondition checks, exact confirmations, serialization, rollback, and audit boundaries remain authoritative.
