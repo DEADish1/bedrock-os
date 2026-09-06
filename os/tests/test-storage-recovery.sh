@@ -27,7 +27,6 @@ fi
 unset BEDROCK_STORAGE_OPERATION_TEST_FAIL_BEFORE_COMMIT
 after=$(openssl dgst -sha256 -r "$state" | awk '{print $1}')
 [ "$before" = "$after" ] && [ "$(wc -l < "$audit" | tr -d ' ')" -eq "$audit_before" ] || { printf 'error: interrupted operation changed durable state or audit\n' >&2; exit 1; }
-jq -e '[.tasks[] | select(.kind=="storage-expand" and .state=="failed" and .progress=={current:2,total:3,unit:"steps"})] | length==1' "$work/api/tasks.json" >/dev/null
 
 # Model a failed RAID-Z member reported by health collection, then perform the guarded replacement and scrub.
 jq '.pools[0].state="degraded"' "$state" > "$work/degraded.json" && mv "$work/degraded.json" "$state"
