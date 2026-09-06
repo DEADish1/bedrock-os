@@ -21,4 +21,6 @@ Send the token as `Authorization: Bearer TOKEN`. Missing, malformed, unknown, or
 
 Malformed, oversized, indirect, or unavailable task, alert, and audit sources fail independently with `503`; the API never returns partially validated records.
 
+Privileged operations publish state through `record-api-task`. The writer serializes updates, rejects identity, timestamp, or progress regression, caps retained tasks at 256, and emits one privacy-bounded audit event when a task reaches a terminal state. Operations may expose stable task identity and kind, counters, and timestamps only; paths, command arguments, user labels, and raw error messages are prohibited.
+
 All other paths return `404`. Mutating requests are deliberately disabled in this foundation and return `405` after authentication. Later mutation endpoints must delegate to the existing guarded Bedrock helpers so their independent precondition checks, exact confirmations, serialization, rollback, and audit boundaries remain authoritative.

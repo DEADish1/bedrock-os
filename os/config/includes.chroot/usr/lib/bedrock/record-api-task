@@ -1,0 +1,120 @@
+#!/usr/bin/python3
+import fcntl
+import grp
+import json
+import os
+import pathlib
+import re
+import stat
+import sys
+import tempfile
+import time
+
+STATES = {"queued", "running", "succeeded", "failed", "cancelled"}
+UNITS = {"bytes", "items", "percent", "steps"}
+NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+
+def fail(message: str) -> None:
+    raise SystemExit(f"error: {message}")
+
+def valid_task(item: object) -> bool:
+    if not isinstance(item, dict) or set(item) != {"id", "kind", "state", "created_unix", "updated_unix", "progress"}:
+        return False
+    progress = item["progress"]
+    return bool(
+        isinstance(item["id"], str) and NAME.fullmatch(item["id"]) and
+        isinstance(item["kind"], str) and NAME.fullmatch(item["kind"]) and item["state"] in STATES and
+        type(item["created_unix"]) is int and type(item["updated_unix"]) is int and
+        0 <= item["created_unix"] <= item["updated_unix"] and isinstance(progress, dict) and
+        set(progress) == {"current", "total", "unit"} and type(progress["current"]) is int and
+        type(progress["total"]) is int and 0 <= progress["current"] <= progress["total"] and
+        progress["total"] > 0 and progress["unit"] in UNITS
+    )
+
+def load(path: pathlib.Path) -> dict:
+    if not path.exists():
+        return {"schema": 1, "generated_unix": 0, "tasks": []}
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_size > 1048576:
+        fail("task state is unsafe")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        fail("task state is invalid")
+    if not isinstance(value, dict) or set(value) != {"schema", "generated_unix", "tasks"} or value["schema"] != 1 or type(value["generated_unix"]) is not int or value["generated_unix"] < 0 or not isinstance(value["tasks"], list) or len(value["tasks"]) > 256 or not all(valid_task(item) for item in value["tasks"]):
+        fail("task state is invalid")
+    return value
+
+def atomic(path: pathlib.Path, value: object, mode: int, group: int | None) -> None:
+    handle, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as output:
+            json.dump(value, output, sort_keys=True, separators=(",", ":"))
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.chmod(temporary, mode)
+        if group is not None:
+            os.chown(temporary, 0, group)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+def main() -> None:
+    if len(sys.argv) != 8:
+        fail("usage: record-api-task ID KIND STATE CREATED CURRENT TOTAL UNIT")
+    task_id, kind, state, created_text, current_text, total_text, unit = sys.argv[1:]
+    if not NAME.fullmatch(task_id) or not NAME.fullmatch(kind) or state not in STATES or unit not in UNITS:
+        fail("task fields are invalid")
+    try:
+        created, current, total = int(created_text), int(current_text), int(total_text)
+    except ValueError:
+        fail("task counters are invalid")
+    now = int(os.environ.get("BEDROCK_API_TASK_NOW", str(int(time.time()))))
+    if min(created, now, current) < 0 or total <= 0 or current > total or now < created:
+        fail("task counters are invalid")
+    test_mode = os.environ.get("BEDROCK_API_TASK_TEST_MODE") == "1"
+    if not test_mode and os.geteuid() != 0:
+        fail("recording API tasks requires root")
+    directory = pathlib.Path(os.environ.get("BEDROCK_API_TASK_STATE_DIR", "/var/lib/bedrock/api"))
+    directory.mkdir(mode=0o750, parents=True, exist_ok=True)
+    if not directory.is_dir() or directory.is_symlink():
+        fail("API state directory is unsafe")
+    tasks_path, audit_path, lock_path = directory / "tasks.json", directory / "audit.jsonl", directory / "tasks.lock"
+    group = None if test_mode else grp.getgrnam("bedrock-api").gr_gid
+    with lock_path.open("a+") as lock:
+        os.chmod(lock_path, 0o600)
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        value = load(tasks_path)
+        previous = next((item for item in value["tasks"] if isinstance(item, dict) and item.get("id") == task_id), None)
+        if previous:
+            if previous.get("kind") != kind or previous.get("created_unix") != created or now < previous.get("updated_unix", -1) or current < previous.get("progress", {}).get("current", -1):
+                fail("task update regresses or changes identity")
+            if previous.get("state") in {"succeeded", "failed", "cancelled"} and state != previous["state"]:
+                fail("terminal task cannot change state")
+        task = {"id": task_id, "kind": kind, "state": state, "created_unix": created, "updated_unix": now,
+                "progress": {"current": current, "total": total, "unit": unit}}
+        remaining = [item for item in value["tasks"] if not (isinstance(item, dict) and item.get("id") == task_id)]
+        remaining.append(task)
+        remaining = sorted(remaining, key=lambda item: item.get("updated_unix", 0))[-256:]
+        terminal_transition = state in {"succeeded", "failed", "cancelled"} and (not previous or previous.get("state") != state)
+        if terminal_transition and audit_path.exists():
+            audit_info = audit_path.lstat()
+            if not stat.S_ISREG(audit_info.st_mode) or audit_info.st_size > 1048576:
+                fail("audit state is unsafe")
+        atomic(tasks_path, {"schema": 1, "generated_unix": now, "tasks": remaining}, 0o640, group)
+        if terminal_transition:
+            event = {"id": f"{task_id}-{now}", "category": "task", "action": kind,
+                     "outcome": "succeeded" if state == "succeeded" else "failed", "occurred_unix": now}
+            with audit_path.open("a", encoding="utf-8") as audit:
+                json.dump(event, audit, sort_keys=True, separators=(",", ":"))
+                audit.write("\n")
+                audit.flush()
+                os.fsync(audit.fileno())
+            os.chmod(audit_path, 0o640)
+            if group is not None:
+                os.chown(audit_path, 0, group)
+
+if __name__ == "__main__":
+    main()
