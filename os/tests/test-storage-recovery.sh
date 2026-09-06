@@ -2,13 +2,14 @@
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 storage="$ROOT/os/config/includes.chroot/usr/sbin/bedrock-storage"
+task_writer="$ROOT/os/config/includes.chroot/usr/lib/bedrock/record-api-task"
 integrity="$ROOT/os/config/includes.chroot/usr/lib/bedrock/storage-integrity"
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT INT TERM
 mkdir -p "$work/bin" "$work/data"
 for command in jq mktemp grep wc tr date dirname mkdir chmod mv rm rmdir; do path=$(command -v "$command"); [ -z "$path" ] || ln -s "$path" "$work/bin/$command"; done
 state=$work/state.json audit=$work/audit.jsonl
 req() { jq -n --arg action "$1" --arg backend zfs --arg name vault --arg pool vault --arg layout "$2" --argjson devices "$3" --arg confirmation "$4" '{schema:1,action:$action,backend:$backend,name:$name,pool:$pool,layout:$layout,devices:$devices,confirmation:$confirmation}'; }
-run() { BEDROCK_STORAGE_OPERATION_TEST_MODE=1 BEDROCK_STORAGE_OPERATION_TEST_PATH="$work/bin" BEDROCK_STORAGE_OPERATION_TEST_NOW="$1" BEDROCK_STORAGE_OPERATION_TEST_AUDIT="$audit" "$storage" apply "$2" "$state"; }
+run() { BEDROCK_STORAGE_OPERATION_TEST_MODE=1 BEDROCK_STORAGE_OPERATION_TEST_PATH="$work/bin" BEDROCK_STORAGE_OPERATION_TEST_NOW="$1" BEDROCK_STORAGE_OPERATION_TEST_AUDIT="$audit" BEDROCK_RECORD_API_TASK="$task_writer" BEDROCK_API_TASK_TEST_MODE=1 BEDROCK_API_TASK_STATE_DIR="$work/api" BEDROCK_API_TASK_NOW="$1" "$storage" apply "$2" "$state"; }
 
 req create raidz1 '["/dev/sdb","/dev/sdc","/dev/sdd"]' 'ERASE AND CREATE — vault — zfs raidz1 — /dev/sdb, /dev/sdc, /dev/sdd' > "$work/create.json"
 run 100 "$work/create.json" >/dev/null
@@ -26,6 +27,7 @@ fi
 unset BEDROCK_STORAGE_OPERATION_TEST_FAIL_BEFORE_COMMIT
 after=$(openssl dgst -sha256 -r "$state" | awk '{print $1}')
 [ "$before" = "$after" ] && [ "$(wc -l < "$audit" | tr -d ' ')" -eq "$audit_before" ] || { printf 'error: interrupted operation changed durable state or audit\n' >&2; exit 1; }
+jq -e '[.tasks[] | select(.kind=="storage-expand" and .state=="failed" and .progress=={current:2,total:3,unit:"steps"})] | length==1' "$work/api/tasks.json" >/dev/null
 
 # Model a failed RAID-Z member reported by health collection, then perform the guarded replacement and scrub.
 jq '.pools[0].state="degraded"' "$state" > "$work/degraded.json" && mv "$work/degraded.json" "$state"

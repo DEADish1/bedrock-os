@@ -5,6 +5,8 @@ LC_ALL=C
 export LC_ALL
 
 fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+task_writer=${BEDROCK_RECORD_API_TASK:-/usr/lib/bedrock/record-api-task}
+task_active=0 task_done=0 task_current=0
 
 if [ "${BEDROCK_STORAGE_OPERATION_TEST_MODE:-0}" = 1 ]; then
   [ "$#" -eq 3 ] || fail "usage: bedrock-storage plan|apply REQUEST.json STATE.json"
@@ -121,10 +123,20 @@ lock=$directory/.operation.lock
 mkdir "$lock" 2>/dev/null || fail "another storage operation is already running"
 temporary=
 cleanup() {
+  if [ "$task_active" -eq 1 ] && [ "$task_done" -eq 0 ]; then
+    "$task_writer" "$task_id" "$task_kind" failed "$task_created" "$task_current" 3 steps >/dev/null 2>&1 || true
+  fi
   [ -z "$temporary" ] || rm -f "$temporary"
   rmdir "$lock" 2>/dev/null || true
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+task_created=$now
+task_id="storage-$action-$$"
+task_kind="storage-$action"
+"$task_writer" "$task_id" "$task_kind" queued "$task_created" 0 3 steps
+task_active=1
 if [ -e "$state" ]; then
   [ -s "$state" ] && [ ! -L "$state" ] || fail "storage state is empty or indirect"
 else
@@ -174,6 +186,8 @@ if [ "${BEDROCK_STORAGE_OPERATION_TEST_MODE:-0}" != 1 ]; then
       rm -f "$smart_file"
     done
   fi
+  task_current=1
+  "$task_writer" "$task_id" "$task_kind" running "$task_created" "$task_current" 3 steps
   case "$action:$backend" in
     create:zfs)
       command -v zpool >/dev/null 2>&1 || fail "OpenZFS tools are unavailable"
@@ -216,7 +230,12 @@ if [ "${BEDROCK_STORAGE_OPERATION_TEST_MODE:-0}" != 1 ]; then
       mdadm --manage "/dev/md/$pool" --replace "$old" --with "$new"
       ;;
   esac
+else
+  task_current=1
+  "$task_writer" "$task_id" "$task_kind" running "$task_created" "$task_current" 3 steps
 fi
+task_current=2
+"$task_writer" "$task_id" "$task_kind" running "$task_created" "$task_current" 3 steps
 if [ "${BEDROCK_STORAGE_OPERATION_TEST_FAIL_BEFORE_COMMIT:-0}" = 1 ]; then
   fail "injected interruption before durable state commit"
 fi
@@ -244,5 +263,8 @@ temporary=
 jq -c -n --argjson occurred_unix "$now" --arg action "$action" --arg backend "$backend" --arg pool "$pool" \
   '{schema:1,occurred_unix:$occurred_unix,action:$action,backend:$backend,pool:$pool,result:"completed"}' >> "$audit"
 chmod 0600 "$audit"
+task_current=3
+"$task_writer" "$task_id" "$task_kind" succeeded "$task_created" "$task_current" 3 steps
+task_done=1
 jq -S -n --argjson completed_unix "$now" --arg action "$action" --arg pool "$pool" \
   '{schema:1,completed_unix:$completed_unix,action:$action,pool:$pool,result:"completed"}'

@@ -3,6 +3,7 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 tool="$ROOT/os/config/includes.chroot/usr/sbin/bedrock-storage"
+task_writer="$ROOT/os/config/includes.chroot/usr/lib/bedrock/record-api-task"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
 mkdir -p "$work/bin"
@@ -20,6 +21,8 @@ request() {
 run() {
   BEDROCK_STORAGE_OPERATION_TEST_MODE=1 BEDROCK_STORAGE_OPERATION_TEST_PATH="$work/bin" \
   BEDROCK_STORAGE_OPERATION_TEST_NOW="$1" BEDROCK_STORAGE_OPERATION_TEST_AUDIT="$audit" \
+  BEDROCK_RECORD_API_TASK="$task_writer" BEDROCK_API_TASK_TEST_MODE=1 \
+  BEDROCK_API_TASK_STATE_DIR="$work/api" BEDROCK_API_TASK_NOW="$1" \
     "$tool" "$2" "$3" "$state"
 }
 
@@ -50,6 +53,7 @@ request import zfs vault none '[]' 'IMPORT — vault' > "$work/import.json"
 run 150 apply "$work/import.json" >/dev/null
 jq -e '.pools[0].state == "online"' "$state" >/dev/null
 [ "$(wc -l < "$audit" | tr -d ' ')" -eq 7 ]
+jq -e '[.tasks[] | select(.kind|startswith("storage-")) | select(.state=="succeeded" and .progress=={current:3,total:3,unit:"steps"})] | length==7' "$work/api/tasks.json" >/dev/null
 
 request create mdraid archive raid6 '["/dev/sdg","/dev/sdh","/dev/sdi","/dev/sdj"]' \
   'ERASE AND CREATE — archive — mdraid raid6 — /dev/sdg, /dev/sdh, /dev/sdi, /dev/sdj' > "$work/md.json"
@@ -69,5 +73,6 @@ ln -s "$work/create.json" "$work/indirect.json"
 if run 190 plan "$work/indirect.json" >/dev/null 2>&1; then
   printf 'error: storage operation accepted an indirect request\n' >&2; exit 1
 fi
+jq -e '[inputs] as $rest | [., $rest[]] | map(select(.category=="task" and (.action|startswith("storage-")) and .outcome=="succeeded")) | length==8' "$work/api/audit.jsonl" >/dev/null
 
 printf 'Bedrock protected storage lifecycle and RAID recovery tests passed.\n'

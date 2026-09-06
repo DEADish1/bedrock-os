@@ -27,4 +27,6 @@ Verified update downloads publish queued, byte-accurate running, succeeded, and 
 
 VM start, stop, force-stop, and restart publish three bounded steps: managed-state and libvirt preconditions verified, the requested command issued, and the expected final power state observed. Task and audit records identify only the action; VM names remain outside the feed.
 
+Storage create, expand, scrub, replace, export, and import operations publish three bounded steps: managed-state and safety preconditions verified, the backend operation completed, and durable state plus the existing storage audit committed. Task records identify only the operation kind; pool names and device paths remain private.
+
 All other paths return `404`. Mutating requests are deliberately disabled in this foundation and return `405` after authentication. Later mutation endpoints must delegate to the existing guarded Bedrock helpers so their independent precondition checks, exact confirmations, serialization, rollback, and audit boundaries remain authoritative.
