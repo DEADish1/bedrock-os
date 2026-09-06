@@ -118,6 +118,7 @@ Exit: every supported server task works through the UI and documented API.
 - [ ] Implement one-time QR/manual-code pairing with server approval and expiry.
   - A root-only backend issues QR/manual payloads, stores only code and client-key hashes, requires exact local approval, expires after ten monotonic minutes or reboot, caps attempts, and atomically rejects replay. Interface and relay ingress integration remain.
 - [ ] Issue per-device keys; support listing, renaming, expiry, and revocation.
+  - Pairing redemption atomically registers the client's distinct public key. A root-only manager provides privacy-bounded listing, bounded renaming/expiry, and exact-confirmation revocation; interface integration and active-session termination remain.
 - [ ] Add optional Google OpenID Connect without exposing server data to Google.
 - [ ] Build signed Windows and universal macOS desktop clients.
 - [ ] Add automatic client updates, certificate pinning, and secure local key storage.

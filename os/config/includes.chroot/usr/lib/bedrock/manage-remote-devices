@@ -1,0 +1,56 @@
+#!/usr/bin/python3
+import fcntl, hashlib, hmac, json, os, pathlib, re, stat, sys, tempfile, time
+
+ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+KEY = re.compile(r"^[0-9a-f]{64}$")
+FIELDS = {"id", "name", "public_key", "public_key_sha256", "created_unix", "expires_unix", "revoked", "last_seen_unix"}
+def fail(message): raise SystemExit(f"error: {message}")
+def load(path):
+    info=path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_size > 1048576: fail("remote state is unsafe")
+    try: value=json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError): fail("remote state is invalid")
+    if not isinstance(value,dict) or set(value)!={"schema","requests","devices"} or value["schema"]!=1 or not isinstance(value["requests"],list) or not isinstance(value["devices"],list) or len(value["devices"])>128: fail("remote state is invalid")
+    for item in value["devices"]:
+        if not isinstance(item,dict) or set(item)!=FIELDS or not ID.fullmatch(item["id"]) or not isinstance(item["name"],str) or not 1<=len(item["name"])<=64 or any(ord(c)<32 for c in item["name"]) or not KEY.fullmatch(item["public_key"]) or not KEY.fullmatch(item["public_key_sha256"]): fail("device state is invalid")
+        if type(item["created_unix"]) is not int or type(item["expires_unix"]) is not int or not 0<=item["created_unix"]<item["expires_unix"] or type(item["revoked"]) is not bool or (item["last_seen_unix"] is not None and (type(item["last_seen_unix"]) is not int or item["last_seen_unix"]<0)): fail("device state is invalid")
+        if not hmac.compare_digest(item["public_key_sha256"],hashlib.sha256(bytes.fromhex(item["public_key"])).hexdigest()): fail("device state is invalid")
+    return value
+def save(path,value):
+    handle,tmp=tempfile.mkstemp(prefix=".remote-state.",dir=path.parent)
+    try:
+        with os.fdopen(handle,"w",encoding="utf-8") as out: json.dump(value,out,sort_keys=True,separators=(",",":")); out.write("\n"); out.flush(); os.fsync(out.fileno())
+        os.chmod(tmp,0o600); os.replace(tmp,path)
+    finally:
+        if os.path.exists(tmp): os.unlink(tmp)
+def main():
+    if len(sys.argv)<2 or sys.argv[1] not in {"list","rename","expire","revoke"}: fail("usage: manage-remote-devices list | rename ID NAME | expire ID UNIX CONFIRMATION | revoke ID CONFIRMATION")
+    test=os.environ.get("BEDROCK_PAIRING_TEST_MODE")=="1"
+    if not test and os.geteuid()!=0: fail("remote device management requires root")
+    directory=pathlib.Path(os.environ.get("BEDROCK_PAIRING_STATE_DIR","/var/lib/bedrock/remote"))
+    if not directory.is_dir() or directory.is_symlink(): fail("remote state directory is unsafe")
+    path=directory/"pairings.json"; lock_path=directory/".pairing.lock"; now=int(os.environ.get("BEDROCK_PAIRING_TEST_WALL_NOW",str(int(time.time()))))
+    with lock_path.open("a+") as lock:
+        os.chmod(lock_path,0o600); fcntl.flock(lock,fcntl.LOCK_EX); value=load(path); command=sys.argv[1]
+        if command=="list":
+            if len(sys.argv)!=2: fail("list accepts no arguments")
+            public=[{"id":d["id"],"name":d["name"],"created_unix":d["created_unix"],"expires_unix":d["expires_unix"],"revoked":d["revoked"],"expired":d["expires_unix"]<now,"last_seen_unix":d["last_seen_unix"]} for d in value["devices"]]
+            print(json.dumps({"schema":1,"devices":public},sort_keys=True,separators=(",",":"))); return
+        if len(sys.argv)<3 or not ID.fullmatch(sys.argv[2]): fail("device identity is invalid")
+        matches=[d for d in value["devices"] if d["id"]==sys.argv[2]]
+        if len(matches)!=1: fail("device is unavailable")
+        device=matches[0]
+        if command=="rename":
+            if len(sys.argv)!=4 or not 1<=len(sys.argv[3])<=64 or any(ord(c)<32 for c in sys.argv[3]): fail("device name is invalid")
+            device["name"]=sys.argv[3]
+        elif command=="expire":
+            if len(sys.argv)!=5 or not sys.argv[3].isdigit() or sys.argv[4]!=f"EXPIRE REMOTE DEVICE {sys.argv[2]} AT {sys.argv[3]}": fail("expiry confirmation is invalid")
+            expiry=int(sys.argv[3])
+            if not now<expiry<=now+31536000: fail("device expiry is outside policy")
+            device["expires_unix"]=expiry
+        else:
+            if len(sys.argv)!=4 or sys.argv[3]!=f"REVOKE REMOTE DEVICE {sys.argv[2]}": fail("revocation confirmation is invalid")
+            if device["revoked"]: fail("device is already revoked")
+            device["revoked"]=True
+        save(path,value); print(json.dumps({"schema":1,"status":"completed","action":command,"device_id":device["id"]},sort_keys=True,separators=(",",":")))
+if __name__=="__main__": main()

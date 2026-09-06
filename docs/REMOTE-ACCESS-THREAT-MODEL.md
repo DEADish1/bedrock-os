@@ -57,4 +57,6 @@ The machine-readable invariant set is packaged at `/usr/share/bedrock/remote/tra
 
 ## Pairing implementation status
 
-The root-only `manage-remote-pairing` boundary implements pending-request issuance, exact server approval, and single-use redemption. It stores SHA-256 values for the manual code and client public key, never the plaintext code or raw client key. Requests expire after ten monotonic minutes, are invalidated by reboot, reject replay, and cap failed redemption attempts. The interface, relay ingress, per-device record issuance, and transport handshake remain open, so the roadmap pairing item is not yet complete.
+The root-only `manage-remote-pairing` boundary implements pending-request issuance, exact server approval, and single-use redemption. It stores SHA-256 values for the manual code and pending client public key, never the plaintext code or raw pending key. Requests expire after ten monotonic minutes, are invalidated by reboot, reject replay, and cap failed redemption attempts. Successful redemption atomically creates the active device record containing the public authentication key.
+
+`manage-remote-devices` lists privacy-bounded device metadata without keys or fingerprints, renames devices, sets a bounded expiry, and irreversibly revokes them using exact confirmation. The interface, relay ingress, active-session termination, and transport handshake remain open, so the roadmap pairing and device-lifecycle items are not yet complete.

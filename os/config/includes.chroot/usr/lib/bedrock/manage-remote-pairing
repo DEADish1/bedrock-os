@@ -30,17 +30,27 @@ def read_regular(path: pathlib.Path, limit: int) -> str:
 
 def load(path: pathlib.Path) -> dict:
     if not path.exists():
-        return {"schema": 1, "requests": []}
+        return {"schema": 1, "requests": [], "devices": []}
     try:
         value = json.loads(read_regular(path, 1048576))
     except (OSError, ValueError, json.JSONDecodeError):
         fail("pairing state is invalid")
-    if not isinstance(value, dict) or set(value) != {"schema", "requests"} or value["schema"] != 1 or not isinstance(value["requests"], list) or len(value["requests"]) > 128:
+    if isinstance(value, dict) and set(value) == {"schema", "requests"} and value.get("schema") == 1:
+        value["devices"] = []
+    if not isinstance(value, dict) or set(value) != {"schema", "requests", "devices"} or value["schema"] != 1 or not isinstance(value["requests"], list) or len(value["requests"]) > 128 or not isinstance(value["devices"], list) or len(value["devices"]) > 128:
         fail("pairing state is invalid")
     required = {"id", "boot_id", "client_key_sha256", "code_sha256", "created_monotonic", "expires_monotonic", "attempts", "approved", "used"}
     for item in value["requests"]:
         if not isinstance(item, dict) or set(item) != required or not ID.fullmatch(item["id"]) or not KEY.fullmatch(item["client_key_sha256"]) or not KEY.fullmatch(item["code_sha256"]):
             fail("pairing state is invalid")
+    device_fields = {"id", "name", "public_key", "public_key_sha256", "created_unix", "expires_unix", "revoked", "last_seen_unix"}
+    for item in value["devices"]:
+        if not isinstance(item, dict) or set(item) != device_fields or not ID.fullmatch(item["id"]) or not isinstance(item["name"], str) or not 1 <= len(item["name"]) <= 64 or not KEY.fullmatch(item["public_key"]) or not KEY.fullmatch(item["public_key_sha256"]):
+            fail("device state is invalid")
+        if type(item["created_unix"]) is not int or type(item["expires_unix"]) is not int or not 0 <= item["created_unix"] < item["expires_unix"] or type(item["revoked"]) is not bool or (item["last_seen_unix"] is not None and (type(item["last_seen_unix"]) is not int or item["last_seen_unix"] < 0)):
+            fail("device state is invalid")
+        if not hmac.compare_digest(item["public_key_sha256"], hashlib.sha256(bytes.fromhex(item["public_key"])).hexdigest()):
+            fail("device state is invalid")
         if type(item["created_monotonic"]) is not int or type(item["expires_monotonic"]) is not int or not 0 <= item["created_monotonic"] < item["expires_monotonic"] or type(item["attempts"]) is not int or not 0 <= item["attempts"] <= 5 or type(item["approved"]) is not bool or type(item["used"]) is not bool:
             fail("pairing state is invalid")
     return value
@@ -71,6 +81,7 @@ def main() -> None:
     boot_id = os.environ.get("BEDROCK_PAIRING_TEST_BOOT_ID") or read_regular(pathlib.Path("/proc/sys/kernel/random/boot_id"), 64)
     if not ID.fullmatch(boot_id): fail("boot identity is invalid")
     now = int(os.environ.get("BEDROCK_PAIRING_TEST_NOW", str(int(time.monotonic()))))
+    wall_now = int(os.environ.get("BEDROCK_PAIRING_TEST_WALL_NOW", str(int(time.time()))))
     if now < 0: fail("pairing time is invalid")
     state_path, lock_path = directory / "pairings.json", directory / ".pairing.lock"
     with lock_path.open("a+") as lock:
@@ -108,7 +119,15 @@ def main() -> None:
             valid = item["boot_id"] == boot_id and item["expires_monotonic"] >= now and item["approved"] and not item["used"] and item["attempts"] < 5 and hmac.compare_digest(item["code_sha256"], hashlib.sha256(sys.argv[3].encode("ascii")).hexdigest()) and hmac.compare_digest(item["client_key_sha256"], supplied_key)
             if not valid:
                 item["attempts"] = min(5, item["attempts"] + 1); save(state_path, state); fail("pairing redemption denied")
+            if any(device["public_key_sha256"] == supplied_key and not device["revoked"] for device in state["devices"]): fail("client key is already paired")
+            device_id = os.environ.get("BEDROCK_PAIRING_TEST_DEVICE_ID") or str(uuid.uuid4())
+            if not ID.fullmatch(device_id) or wall_now < 0: fail("device identity is invalid")
+            state["devices"].append({"id": device_id, "name": "New device", "public_key": sys.argv[4],
+                                     "public_key_sha256": supplied_key, "created_unix": wall_now,
+                                     "expires_unix": wall_now + 7776000, "revoked": False, "last_seen_unix": None})
+            state["devices"] = state["devices"][-128:]
             item["used"] = True; save(state_path, state)
-            print(json.dumps({"schema": 1, "status": "redeemed", "pairing_id": item["id"], "client_key_sha256": item["client_key_sha256"], "server_fingerprint": server_fingerprint}, sort_keys=True, separators=(",", ":")))
+            print(json.dumps({"schema": 1, "status": "redeemed", "pairing_id": item["id"], "device_id": device_id,
+                              "client_key_sha256": item["client_key_sha256"], "server_fingerprint": server_fingerprint}, sort_keys=True, separators=(",", ":")))
 
 if __name__ == "__main__": main()
