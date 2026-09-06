@@ -1,0 +1,11 @@
+[Unit]
+Description=Refresh Bedrock remote device status
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+RandomizedDelaySec=10s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

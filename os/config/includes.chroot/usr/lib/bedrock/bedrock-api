@@ -4,6 +4,7 @@ import hmac
 import json
 import os
 import pathlib
+import re
 import socketserver
 import stat
 from http.server import BaseHTTPRequestHandler
@@ -19,9 +20,11 @@ UPDATES = pathlib.Path(os.environ.get("BEDROCK_API_UPDATES", "/var/lib/bedrock/u
 TASKS = pathlib.Path(os.environ.get("BEDROCK_API_TASKS", "/var/lib/bedrock/api/tasks.json"))
 AUDIT = pathlib.Path(os.environ.get("BEDROCK_API_AUDIT", "/var/lib/bedrock/api/audit.jsonl"))
 OPENAPI = pathlib.Path(os.environ.get("BEDROCK_API_OPENAPI", "/usr/share/bedrock/api/openapi-v1.json"))
+REMOTE = pathlib.Path(os.environ.get("BEDROCK_API_REMOTE", "/var/lib/bedrock/remote/status.json"))
 
 TASK_STATES = {"queued", "running", "succeeded", "failed", "cancelled"}
 TASK_UNITS = {"bytes", "items", "percent", "steps"}
+DEVICE_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
 def regular_json(path: pathlib.Path, limit: int) -> object:
     info = path.lstat()
@@ -124,6 +127,18 @@ def audit_feed() -> dict:
                 raise ValueError("too many audit events")
     return {"schema": 1, "events": events[-100:]}
 
+def remote_feed() -> dict:
+    value = regular_json(REMOTE, 262144)
+    if not isinstance(value, dict) or set(value) != {"schema", "devices"} or value["schema"] != 1 or not isinstance(value["devices"], list) or len(value["devices"]) > 128:
+        raise ValueError("invalid remote status")
+    fields = {"id", "name", "created_unix", "expires_unix", "revoked", "expired", "last_seen_unix"}
+    for item in value["devices"]:
+        if not isinstance(item, dict) or set(item) != fields or not DEVICE_ID.fullmatch(bounded_string(item["id"], 64)) or not isinstance(item["name"], str) or not 1 <= len(item["name"]) <= 64 or any(ord(char) < 32 for char in item["name"]):
+            raise ValueError("invalid remote device")
+        if type(item["created_unix"]) is not int or type(item["expires_unix"]) is not int or not 0 <= item["created_unix"] < item["expires_unix"] or type(item["revoked"]) is not bool or type(item["expired"]) is not bool or (item["last_seen_unix"] is not None and (type(item["last_seen_unix"]) is not int or item["last_seen_unix"] < 0)):
+            raise ValueError("invalid remote device")
+    return value
+
 def dashboard() -> dict:
     result = {"schema": 1, "components": {}}
     components = result["components"]
@@ -211,6 +226,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, audit_feed())
             except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
                 self.send_json(503, {"schema": 1, "error": "audit-unavailable"})
+        elif self.path == "/api/v1/remote/devices":
+            try:
+                self.send_json(200, remote_feed())
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                self.send_json(503, {"schema": 1, "error": "remote-status-unavailable"})
         else:
             self.send_json(404, {"schema": 1, "error": "not-found"})
 
