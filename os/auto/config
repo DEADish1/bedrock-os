@@ -13,6 +13,7 @@ lb config noauto \
   --debian-installer none \
   --bootloaders "grub-efi" \
   --apt-recommends false \
+  --apt-options "--yes -o Acquire::Retries=5 -o Acquire::https::Timeout=60" \
   --memtest none \
   --iso-application "Bedrock Server OS" \
   --iso-publisher "Bedrock Server OS Project" \
