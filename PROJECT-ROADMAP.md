@@ -133,7 +133,8 @@ Exit: approved clients connect remotely, survive network changes, and can be imm
 - [ ] Add configuration export/import and bare-metal recovery documentation.
 - [ ] Build an isolated application/service system with resource limits and update policy.
 - [ ] Add notification destinations and actionable health alerts.
-- [ ] Implement diagnostic bundles with secret redaction and explicit user consent.
+- [x] Implement diagnostic bundles with secret redaction and explicit user consent.
+  - A root-only, exact-consent tool creates owner-readable archives from bounded allowlisted system state, records unavailable sources, redacts identifying and secret-bearing keys and values, refuses overwrite, and excludes logs, user data, credentials, pairing state, and command arguments. See [diagnostic bundle policy](docs/DIAGNOSTICS.md).
 - [ ] Add UPS shutdown integration and safe maintenance mode.
 - [ ] Run full restore drills for files, VM data, configuration, and failed system drives.
 

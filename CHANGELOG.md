@@ -4,6 +4,10 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+### Backup, recovery, apps, and operations 0.8
+
+- Added an exact-consent, root-only diagnostic bundle generator that packages only bounded allowlisted state, records unavailable sources, recursively redacts identifying and secret-bearing fields and values, excludes user data and credentials, refuses overwrite, and creates owner-readable archives for review before sharing.
+
 ### Management interface and API 0.6
 
 - Added a versioned, bearer-authenticated local management API on a permission-restricted Unix socket, with hash-only bounded token state, a hardened unprivileged service, and read-only health and virtualization-capability endpoints as the foundation for replacing prototype data.
