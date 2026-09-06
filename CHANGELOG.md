@@ -63,6 +63,8 @@ This file records completed work, decisions, validation, and the next starting p
 
 ### Physical acceptance preparation
 
+- Produced the first fully green short-lived physical/VM acceptance kit after two protected-writer builds, raw-image boot/rollback verification, reproducibility comparison, signed-media verification, and guarded Linux installer packaging; published the exact artifact and safe VMware, Hyper-V, Intel, AMD, USB, and system-install test order.
+
 - Added an on-image two-boot collector for VMware, Hyper-V Generation 2, physical Intel, and physical AMD acceptance. It verifies UEFI and Secure Boot state, exact platform DMI, x86-64 CPU/memory/disk/network inventory, a healthy marker tied to the running kernel boot ID, and a different healthy boot before emitting schema-2 evidence.
 - Generated boot reports contain only the strict privacy-safe allowlist. The collector rejects virtual DMI presented as physical hardware, wrong VMware/Hyper-V identity, incomplete inventory, stale health state, missing UEFI variables, reuse without reboot, and indirect output paths.
 - Added a non-destructive desktop evidence-workspace helper that binds the six acceptance report slots to one verified image SHA-256, rejects image changes and indirect inputs, shows missing or invalid sessions, and invokes the final bundle gate only after every role passes.

@@ -8,5 +8,7 @@ This checklist tracks the remaining work required before the first serious Bedro
 - [x] Build two independent OS images successfully.
 - [x] Prove both OS images are reproducible.
 - [x] Generate verified ISO and raw USB image artifacts with checksums.
-- [ ] Generate the physical/VM acceptance kit.
-- [ ] Publish the exact test procedure and artifact links for VMware, Hyper-V, Intel, and AMD sessions.
+- [x] Generate the physical/VM acceptance kit.
+- [x] Publish the exact test procedure and artifact links for VMware, Hyper-V, Intel, and AMD sessions.
+
+Evidence: [reproducible base-image run 34015349856](https://github.com/DEADish1/bedrock-os/actions/runs/34015349856), [protected-writer acceptance run 34033836329](https://github.com/DEADish1/bedrock-os/actions/runs/34033836329), and `docs/FIRST-TEST-IMAGE.md`.
