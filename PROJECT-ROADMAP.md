@@ -79,16 +79,23 @@ Exit: passed in [Storage and NAS acceptance run #1](https://github.com/DEADish1/
 
 ## 0.5.0 — Virtual machines and image library
 
-- [ ] Integrate KVM/QEMU and libvirt or an approved equivalent.
-- [ ] Create/start/stop/restart/delete/clone/snapshot VMs.
-- [ ] Assign vCPUs, RAM, storage, firmware, network, and boot order.
-- [ ] Implement GPU and USB passthrough with IOMMU validation and safety guidance.
-- [ ] Upload/import ISO, IMG, QCOW2, VHDX, VMDK, and supported archives.
-- [ ] Validate images, track provenance/checksums, and convert formats safely.
-- [ ] Provide browser console and remote-display access.
+- [x] Integrate KVM/QEMU and libvirt or an approved equivalent.
+  - KVM acceleration, packaged QEMU/OVMF, and the system libvirt connection fail closed through the boot capability report.
+- [x] Create/start/stop/restart/delete/clone/snapshot VMs.
+  - Guarded lifecycle helpers serialize changes, require exact confirmation, verify final state, and roll back partial mutations; deletion is recoverable from quarantine.
+- [x] Assign vCPUs, RAM, storage, firmware, network, and boot order.
+  - Resource reservations, persistent attachments, isolated networks, Q35/UEFI firmware, TPM 2.0, and bounded boot-order changes pass fixture validation.
+- [x] Implement GPU and USB passthrough with IOMMU validation and safety guidance.
+  - Review and mutation boundaries revalidate complete IOMMU groups or USB topology and reject boot-display, input, storage, hub, unauthorized, and host-critical devices.
+- [x] Upload/import ISO, IMG, QCOW2, VHDX, VMDK, and supported archives.
+  - Direct and single-member ZIP imports are bounded, path-safe, content-detected, and installed only after source and copied-byte verification.
+- [x] Validate images, track provenance/checksums, and convert formats safely.
+  - Imports and conversions reject encryption, backing chains, changed bytes, duplicates, and unsafe paths while recording a root-only provenance ledger.
+- [x] Provide browser console and remote-display access.
+  - One-time 60-second sessions redeem into a loopback-only, short-lived WebSocket proxy; VNC never listens on TCP.
 - [x] Document Windows drivers and macOS-on-Apple-hardware license/compatibility limits.
 
-Exit: supported Linux and Windows guests install, run, persist, snapshot, restore, and use assigned resources.
+Exit pending physical acceptance: one exact Bedrock image must still pass distinct Linux and Windows guest sessions proving installation, acceleration, assigned resources, console and agent readiness, reboot persistence, and snapshot restoration.
 
 ## 0.6.0 — Management interface and API
 
