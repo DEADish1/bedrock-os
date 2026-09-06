@@ -43,6 +43,8 @@ def load(path: pathlib.Path) -> dict:
     for item in value["requests"]:
         if not isinstance(item, dict) or set(item) != required or not ID.fullmatch(item["id"]) or not KEY.fullmatch(item["client_key_sha256"]) or not KEY.fullmatch(item["code_sha256"]):
             fail("pairing state is invalid")
+        if type(item["created_monotonic"]) is not int or type(item["expires_monotonic"]) is not int or not 0 <= item["created_monotonic"] < item["expires_monotonic"] or type(item["attempts"]) is not int or not 0 <= item["attempts"] <= 5 or type(item["approved"]) is not bool or type(item["used"]) is not bool:
+            fail("pairing state is invalid")
     device_fields = {"id", "name", "public_key", "public_key_sha256", "created_unix", "expires_unix", "revoked", "last_seen_unix"}
     for item in value["devices"]:
         if not isinstance(item, dict) or set(item) != device_fields or not ID.fullmatch(item["id"]) or not isinstance(item["name"], str) or not 1 <= len(item["name"]) <= 64 or not KEY.fullmatch(item["public_key"]) or not KEY.fullmatch(item["public_key_sha256"]):
@@ -51,8 +53,6 @@ def load(path: pathlib.Path) -> dict:
             fail("device state is invalid")
         if not hmac.compare_digest(item["public_key_sha256"], hashlib.sha256(bytes.fromhex(item["public_key"])).hexdigest()):
             fail("device state is invalid")
-        if type(item["created_monotonic"]) is not int or type(item["expires_monotonic"]) is not int or not 0 <= item["created_monotonic"] < item["expires_monotonic"] or type(item["attempts"]) is not int or not 0 <= item["attempts"] <= 5 or type(item["approved"]) is not bool or type(item["used"]) is not bool:
-            fail("pairing state is invalid")
     return value
 
 def save(path: pathlib.Path, value: dict) -> None:
