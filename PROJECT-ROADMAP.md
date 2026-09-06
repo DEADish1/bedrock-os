@@ -113,7 +113,8 @@ Exit: every supported server task works through the UI and documented API.
 
 ## 0.7.0 — Remote access and desktop clients
 
-- [ ] Design end-to-end encrypted remote transport and threat model.
+- [x] Design end-to-end encrypted remote transport and threat model.
+  - Noise XX mutual device authentication, relay TLS, transcript binding, record/rekey limits, revocation, privacy, adversaries, limitations, and implementation/review gates are fixed in a machine-validated policy and [threat model](docs/REMOTE-ACCESS-THREAT-MODEL.md). Implementation remains in the following items.
 - [ ] Implement one-time QR/manual-code pairing with server approval and expiry.
 - [ ] Issue per-device keys; support listing, renaming, expiry, and revocation.
 - [ ] Add optional Google OpenID Connect without exposing server data to Google.

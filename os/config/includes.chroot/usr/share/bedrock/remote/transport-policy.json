@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "status": "design-approved-implementation-pending",
+  "noise_protocol": "Noise_XX_25519_ChaChaPoly_SHA256",
+  "outer_transport": {"minimum_tls": "1.3", "zero_rtt": false, "relay_is_end_to_end_trusted": false},
+  "identity": {"server_static_key": "x25519", "per_device_static_key": "x25519", "oidc_can_approve_devices": false},
+  "pairing": {"server_console_approval": true, "single_use": true, "expires_seconds": 600, "binds_server_fingerprint": true},
+  "records": {"aead_associated_framing": true, "directional_sequence_bits": 64, "maximum_plaintext_bytes": 1048576, "unknown_versions_fail_closed": true},
+  "rehandshake": {"maximum_age_seconds": 3600, "maximum_direction_bytes": 1073741824, "maximum_records": 1048576},
+  "authorization": {"local_api_remains_authoritative": true, "mutation_idempotency_required": true, "revocation_checked_each_session": true, "active_revocation_terminates_session": true},
+  "relay": {"can_decrypt": false, "can_authorize": false, "plaintext_logs": false},
+  "implementation": {"reviewed_noise_library_required": true, "custom_cryptographic_primitives_allowed": false, "third_party_review_required": true}
+}
