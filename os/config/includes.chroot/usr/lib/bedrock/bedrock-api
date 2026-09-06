@@ -11,6 +11,11 @@ from http.server import BaseHTTPRequestHandler
 SOCKET = pathlib.Path(os.environ.get("BEDROCK_API_SOCKET", "/run/bedrock-api/api.sock"))
 TOKENS = pathlib.Path(os.environ.get("BEDROCK_API_TOKENS", "/var/lib/bedrock/api/tokens.json"))
 CAPABILITIES = pathlib.Path(os.environ.get("BEDROCK_API_CAPABILITIES", "/var/lib/bedrock/virtualization/capabilities.json"))
+HARDWARE = pathlib.Path(os.environ.get("BEDROCK_API_HARDWARE", "/var/lib/bedrock/hardware/inventory.json"))
+STORAGE = pathlib.Path(os.environ.get("BEDROCK_API_STORAGE", "/var/lib/bedrock/storage/health.json"))
+ALERTS = pathlib.Path(os.environ.get("BEDROCK_API_ALERTS", "/var/lib/bedrock/storage/alerts.json"))
+VMS = pathlib.Path(os.environ.get("BEDROCK_API_VMS", "/var/lib/bedrock/virtualization/status.json"))
+UPDATES = pathlib.Path(os.environ.get("BEDROCK_API_UPDATES", "/var/lib/bedrock/update/last-check.json"))
 
 def regular_json(path: pathlib.Path, limit: int) -> object:
     info = path.lstat()
@@ -32,6 +37,44 @@ def authorized(value: str | None) -> bool:
         return any(isinstance(item, dict) and set(item) == {"name", "sha256", "created_at", "revoked"} and item["revoked"] is False and hmac.compare_digest(item["sha256"], digest) for item in state["tokens"])
     except (OSError, ValueError, json.JSONDecodeError, TypeError):
         return False
+
+def dashboard() -> dict:
+    result = {"schema": 1, "components": {}}
+    components = result["components"]
+    readers = {
+        "hardware": lambda value: {
+            "architecture": value["cpu"]["architecture"],
+            "logical_processors": value["cpu"]["logical_processors"],
+            "virtualization_supported": value["cpu"]["virtualization_supported"],
+            "memory_total_bytes": value["memory"]["total_bytes"],
+            "disk_count": len(value["disks"]), "network_count": len(value["networks"]),
+        },
+        "storage": lambda value: {
+            "generated_unix": value["generated_unix"], "overall": value["overall"],
+            "disk_count": len(value["disks"]), "read_only": value["read_only"],
+        },
+        "alerts": lambda value: {
+            "generated_unix": value["generated_unix"], "attention_required": value["attention_required"],
+            "active_count": value["active_count"],
+        },
+        "vms": lambda value: {
+            "generated_unix": value["generated_unix"], "total": len(value["domains"]),
+            "running": sum(item["state"] == "running" for item in value["domains"]),
+        },
+        "updates": lambda value: {
+            key: value[key] for key in ("status", "checked_unix", "installed_generation", "available_generation", "available_version", "available_channel")
+        },
+    }
+    for name, path in (("hardware", HARDWARE), ("storage", STORAGE), ("alerts", ALERTS), ("vms", VMS), ("updates", UPDATES)):
+        try:
+            value = regular_json(path, 1048576)
+            if not isinstance(value, dict) or value.get("schema") not in (1, 2):
+                raise ValueError("invalid state schema")
+            components[name] = {"status": "available", "data": readers[name](value)}
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+            components[name] = {"status": "unavailable"}
+    result["partial"] = any(value["status"] != "available" for value in components.values())
+    return result
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -60,6 +103,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, {"schema": 1, "data": data})
             except (OSError, ValueError, json.JSONDecodeError):
                 self.send_json(503, {"schema": 1, "error": "capabilities-unavailable"})
+        elif self.path == "/api/v1/dashboard":
+            self.send_json(200, dashboard())
         else:
             self.send_json(404, {"schema": 1, "error": "not-found"})
 

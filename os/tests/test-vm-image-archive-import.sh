@@ -23,7 +23,11 @@ cat > "$work/bin/qemu-img" <<'EOF'
 #!/bin/sh
 printf '%s\n' '{"format":"qcow2","virtual-size":1073741824,"actual-size":16}'
 EOF
-chmod +x "$work/bin/unzip" "$work/bin/qemu-img"
+cat > "$work/bin/file" <<'EOF'
+#!/bin/sh
+printf '%s\n' application/octet-stream
+EOF
+chmod +x "$work/bin/unzip" "$work/bin/qemu-img" "$work/bin/file"
 archive_hash=$(sha256sum "$work/upload.zip" | awk '{print $1}'); archive_size=$(stat -c %s "$work/upload.zip")
 image_hash=$(sha256sum "$work/member" | awk '{print $1}'); image_size=$(stat -c %s "$work/member")
 authorize() { jq -n --arg ah "$archive_hash" --arg ih "$image_hash" --argjson as "$archive_size" --argjson is "$image_size" \

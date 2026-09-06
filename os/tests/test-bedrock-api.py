@@ -44,15 +44,28 @@ def main() -> None:
         socket_path = work / "api.sock"
         tokens = work / "tokens.json"
         capabilities = work / "capabilities.json"
+        hardware = work / "hardware.json"
+        storage = work / "storage.json"
+        alerts = work / "alerts.json"
+        vms = work / "vms.json"
+        updates = work / "updates.json"
         tokens.write_text(json.dumps({"schema": 1, "tokens": [{
             "name": "test-client", "sha256": hashlib.sha256(TOKEN.encode()).hexdigest(),
             "created_at": "2026-08-31T00:00:00Z", "revoked": False,
         }]}), encoding="utf-8")
         capabilities.write_text(json.dumps({"schema": 1, "status": "ready"}), encoding="utf-8")
+        hardware.write_text(json.dumps({"schema": 2, "cpu": {"architecture": "x86_64", "logical_processors": 8, "virtualization_supported": True}, "memory": {"total_bytes": 16000000000}, "disks": [{"serial": "must-not-leak"}], "networks": [{}]}), encoding="utf-8")
+        storage.write_text(json.dumps({"schema": 1, "generated_unix": 100, "overall": "healthy", "read_only": True, "disks": [{}, {}]}), encoding="utf-8")
+        alerts.write_text(json.dumps({"schema": 1, "generated_unix": 101, "attention_required": True, "active_count": 2}), encoding="utf-8")
+        vms.write_text(json.dumps({"schema": 1, "generated_unix": 102, "domains": [{"name": "private-name", "state": "running"}, {"name": "other", "state": "shut off"}]}), encoding="utf-8")
+        updates.write_text(json.dumps({"schema": 1, "status": "available", "checked_unix": 103, "installed_generation": 1, "available_generation": 2, "available_version": "0.6.0", "available_channel": "stable"}), encoding="utf-8")
         environment = os.environ | {
             "BEDROCK_API_SOCKET": str(socket_path),
             "BEDROCK_API_TOKENS": str(tokens),
             "BEDROCK_API_CAPABILITIES": str(capabilities),
+            "BEDROCK_API_HARDWARE": str(hardware), "BEDROCK_API_STORAGE": str(storage),
+            "BEDROCK_API_ALERTS": str(alerts), "BEDROCK_API_VMS": str(vms),
+            "BEDROCK_API_UPDATES": str(updates),
         }
         process = subprocess.Popen([sys.executable, str(API)], env=environment)
         try:
@@ -68,6 +81,16 @@ def main() -> None:
             assert request(socket_path, "GET", "/api/v1/health", None) == (401, {"schema": 1, "error": "unauthorized"})
             assert request(socket_path, "GET", "/api/v1/health")[0] == 200
             assert request(socket_path, "GET", "/api/v1/virtualization/capabilities") == (200, {"schema": 1, "data": {"schema": 1, "status": "ready"}})
+            dashboard_status, dashboard_body = request(socket_path, "GET", "/api/v1/dashboard")
+            assert dashboard_status == 200 and dashboard_body["partial"] is False
+            assert dashboard_body["components"]["hardware"]["data"]["disk_count"] == 1
+            assert dashboard_body["components"]["vms"]["data"] == {"generated_unix": 102, "running": 1, "total": 2}
+            assert "must-not-leak" not in json.dumps(dashboard_body) and "private-name" not in json.dumps(dashboard_body)
+            alerts.write_text("not-json", encoding="utf-8")
+            partial_status, partial_body = request(socket_path, "GET", "/api/v1/dashboard")
+            assert partial_status == 200 and partial_body["partial"] is True
+            assert partial_body["components"]["alerts"] == {"status": "unavailable"}
+            assert partial_body["components"]["hardware"]["status"] == "available"
             assert request(socket_path, "GET", "/api/v2/health")[0] == 404
             assert request(socket_path, "POST", "/api/v1/health", None)[0] == 401
             assert request(socket_path, "POST", "/api/v1/health")[0] == 405
