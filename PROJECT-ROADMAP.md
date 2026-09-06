@@ -101,7 +101,7 @@ Exit pending physical acceptance: one exact Bedrock image must still pass distin
 
 - [ ] Replace prototype data with a versioned authenticated API.
 - [ ] Implement dashboard telemetry, tasks, progress, alerts, and audit history.
-  - Authenticated privacy-safe dashboard, task/progress, active-alert, and bounded audit read contracts are implemented with independent failure behavior. A serialized task/audit producer rejects regressions and unsafe state; verified update downloads publish real byte progress and terminal audit outcomes. Remaining operations and UI integration must be wired before this item can close.
+  - Authenticated privacy-safe dashboard, task/progress, active-alert, and bounded audit read contracts are implemented with independent failure behavior. A serialized task/audit producer rejects regressions and unsafe state; verified update downloads and VM power actions publish real progress and terminal audit outcomes. Remaining operations and UI integration must be wired before this item can close.
 - [ ] Finish Storage, VMs, Images, Apps, Connect, Backup, Hardware, Settings, and Help.
 - [ ] Add advanced disclosures without hiding health or safety information.
 - [ ] Add keyboard-complete controls and WCAG 2.2 AA testing.

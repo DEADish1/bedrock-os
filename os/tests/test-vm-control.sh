@@ -3,6 +3,7 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 controller="$ROOT/os/config/includes.chroot/usr/lib/bedrock/control-vm"
+task_writer="$ROOT/os/config/includes.chroot/usr/lib/bedrock/record-api-task"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
 mkdir -p "$work/bin" "$work/state"
@@ -25,7 +26,7 @@ EOF
 chmod +x "$work/bin/virsh"
 : > "$work/virsh.log"
 request() { jq -n --arg action "$1" --arg confirmation "$2" '{schema:1,name:"test-vm",action:$action,confirmation:$confirmation}' > "$work/request.json"; }
-run() { BEDROCK_VM_TEST_MODE=1 BEDROCK_VM_STATE_ROOT="$work/state" BEDROCK_VM_DOMAINS="${BEDROCK_VM_DOMAINS_OVERRIDE:-$work/domains.json}" BEDROCK_VM_VIRSH="$work/bin/virsh" BEDROCK_VM_TEST_LOG="$work/virsh.log" BEDROCK_VM_RUNTIME_STATE="$work/runtime-state" "$controller" "$work/request.json"; }
+run() { BEDROCK_VM_TEST_MODE=1 BEDROCK_VM_STATE_ROOT="$work/state" BEDROCK_VM_DOMAINS="${BEDROCK_VM_DOMAINS_OVERRIDE:-$work/domains.json}" BEDROCK_VM_VIRSH="$work/bin/virsh" BEDROCK_VM_TEST_LOG="$work/virsh.log" BEDROCK_VM_RUNTIME_STATE="$work/runtime-state" BEDROCK_RECORD_API_TASK="$task_writer" BEDROCK_API_TASK_TEST_MODE=1 BEDROCK_API_TASK_STATE_DIR="$work/api" "$controller" "$work/request.json"; }
 request start 'START VM test-vm'; run | jq -e '.action=="start" and .previous_state=="shut off" and .state=="running"' >/dev/null
 request stop 'STOP VM test-vm'; run | jq -e '.action=="stop" and .state=="shut off"' >/dev/null
 printf 'running\n' > "$work/runtime-state"
@@ -42,4 +43,7 @@ grep -q 'start test-vm' "$work/virsh.log"
 grep -q 'shutdown test-vm --mode agent,acpi' "$work/virsh.log"
 grep -q 'destroy test-vm' "$work/virsh.log"
 grep -q 'reboot test-vm --mode agent,acpi' "$work/virsh.log"
+jq -e '[.tasks[] | select(.kind|startswith("vm-")) | select(.state=="succeeded" and .progress=={current:3,total:3,unit:"steps"})] | length==4' "$work/api/tasks.json" >/dev/null
+jq -e '[inputs] as $rest | [., $rest[]] | map(select(.category=="task" and (.action|startswith("vm-")) and .outcome=="succeeded")) | length==4' "$work/api/audit.jsonl" >/dev/null
+jq -e '[.tasks[] | select(.kind|startswith("vm-")) | select(.state=="failed")] | length>=1' "$work/api/tasks.json" >/dev/null
 printf 'VM control tests passed.\n'

@@ -25,4 +25,6 @@ Privileged operations publish state through `record-api-task`. The writer serial
 
 Verified update downloads publish queued, byte-accurate running, succeeded, and failed states. Resumed bytes count only after the complete artifact passes size and SHA-256 verification, and the final success state is emitted only after the whole signed bundle passes verification.
 
+VM start, stop, force-stop, and restart publish three bounded steps: managed-state and libvirt preconditions verified, the requested command issued, and the expected final power state observed. Task and audit records identify only the action; VM names remain outside the feed.
+
 All other paths return `404`. Mutating requests are deliberately disabled in this foundation and return `405` after authentication. Later mutation endpoints must delegate to the existing guarded Bedrock helpers so their independent precondition checks, exact confirmations, serialization, rollback, and audit boundaries remain authoritative.
