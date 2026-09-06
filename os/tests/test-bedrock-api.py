@@ -51,6 +51,7 @@ def main() -> None:
         updates = work / "updates.json"
         tasks = work / "tasks.json"
         audit = work / "audit.jsonl"
+        openapi = ROOT / "config/includes.chroot/usr/share/bedrock/api/openapi-v1.json"
         tokens.write_text(json.dumps({"schema": 1, "tokens": [{
             "name": "test-client", "sha256": hashlib.sha256(TOKEN.encode()).hexdigest(),
             "created_at": "2026-08-31T00:00:00Z", "revoked": False,
@@ -72,6 +73,7 @@ def main() -> None:
             "BEDROCK_API_ALERTS": str(alerts), "BEDROCK_API_VMS": str(vms),
             "BEDROCK_API_UPDATES": str(updates),
             "BEDROCK_API_TASKS": str(tasks), "BEDROCK_API_AUDIT": str(audit),
+            "BEDROCK_API_OPENAPI": str(openapi),
         }
         process = subprocess.Popen([sys.executable, str(API)], env=environment)
         try:
@@ -86,6 +88,10 @@ def main() -> None:
 
             assert request(socket_path, "GET", "/api/v1/health", None) == (401, {"schema": 1, "error": "unauthorized"})
             assert request(socket_path, "GET", "/api/v1/health")[0] == 200
+            schema_status, schema_body = request(socket_path, "GET", "/api/v1/openapi.json")
+            assert schema_status == 200 and schema_body["openapi"] == "3.1.0"
+            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/virtualization/capabilities"}
+            assert schema_body["security"] == [{"bearerAuth": []}]
             assert request(socket_path, "GET", "/api/v1/virtualization/capabilities") == (200, {"schema": 1, "data": {"schema": 1, "status": "ready"}})
             dashboard_status, dashboard_body = request(socket_path, "GET", "/api/v1/dashboard")
             assert dashboard_status == 200 and dashboard_body["partial"] is False

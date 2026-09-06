@@ -13,6 +13,7 @@ Send the token as `Authorization: Bearer TOKEN`. Missing, malformed, unknown, or
 ## Version 1 foundation
 
 - `GET /api/v1/health` reports API availability.
+- `GET /api/v1/openapi.json` returns the authenticated OpenAPI 3.1 contract for every implemented v1 route.
 - `GET /api/v1/dashboard` returns privacy-safe hardware, storage, alert, VM, and update summaries. Each component has an independent availability state, so stale or malformed subsystem data cannot suppress healthy telemetry from the others.
 - `GET /api/v1/virtualization/capabilities` returns the existing fail-closed virtualization capability report, or `503` while that report is unavailable.
 - `GET /api/v1/tasks` returns at most 256 bounded task records with monotonic timestamps and validated progress. It excludes command arguments, paths, user labels, and error text.
@@ -30,3 +31,5 @@ VM start, stop, force-stop, and restart publish three bounded steps: managed-sta
 Storage create, expand, scrub, replace, export, and import operations publish three bounded steps: managed-state and safety preconditions verified, the backend operation completed, and durable state plus the existing storage audit committed. Task records identify only the operation kind; pool names and device paths remain private.
 
 All other paths return `404`. Mutating requests are deliberately disabled in this foundation and return `405` after authentication. Later mutation endpoints must delegate to the existing guarded Bedrock helpers so their independent precondition checks, exact confirmations, serialization, rollback, and audit boundaries remain authoritative.
+
+The packaged schema is the machine-readable source of truth for interface clients. API tests require its route set and bearer security declaration to match the implementation; undocumented routes and unauthenticated schema discovery are rejected.

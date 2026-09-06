@@ -1,0 +1,36 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Bedrock local management API",
+    "version": "1.0.0"
+  },
+  "servers": [{"url": "http://localhost"}],
+  "security": [{"bearerAuth": []}],
+  "paths": {
+    "/api/v1/openapi.json": {"get": {"operationId": "getApiSchema", "responses": {"200": {"description": "Version 1 OpenAPI schema"}, "401": {"$ref": "#/components/responses/Unauthorized"}}}},
+    "/api/v1/health": {"get": {"operationId": "getHealth", "responses": {"200": {"description": "API health", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Health"}}}}, "401": {"$ref": "#/components/responses/Unauthorized"}}}},
+    "/api/v1/dashboard": {"get": {"operationId": "getDashboard", "responses": {"200": {"description": "Privacy-safe dashboard summary", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Dashboard"}}}}, "401": {"$ref": "#/components/responses/Unauthorized"}}}},
+    "/api/v1/tasks": {"get": {"operationId": "getTasks", "responses": {"200": {"description": "Bounded tasks and progress", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TaskFeed"}}}}, "401": {"$ref": "#/components/responses/Unauthorized"}, "503": {"$ref": "#/components/responses/Unavailable"}}}},
+    "/api/v1/alerts": {"get": {"operationId": "getAlerts", "responses": {"200": {"description": "Privacy-safe active alerts", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AlertFeed"}}}}, "401": {"$ref": "#/components/responses/Unauthorized"}, "503": {"$ref": "#/components/responses/Unavailable"}}}},
+    "/api/v1/audit": {"get": {"operationId": "getAudit", "responses": {"200": {"description": "Bounded audit history", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AuditFeed"}}}}, "401": {"$ref": "#/components/responses/Unauthorized"}, "503": {"$ref": "#/components/responses/Unavailable"}}}},
+    "/api/v1/virtualization/capabilities": {"get": {"operationId": "getVirtualizationCapabilities", "responses": {"200": {"description": "Virtualization capability report"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "503": {"$ref": "#/components/responses/Unavailable"}}}}
+  },
+  "components": {
+    "securitySchemes": {"bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "opaque-256-bit"}},
+    "responses": {
+      "Unauthorized": {"description": "Missing, malformed, unknown, or revoked bearer token"},
+      "Unavailable": {"description": "The independently validated state source is unavailable"}
+    },
+    "schemas": {
+      "Health": {"type": "object", "additionalProperties": false, "required": ["schema", "status", "api_version"], "properties": {"schema": {"const": 1}, "status": {"const": "ok"}, "api_version": {"const": "v1"}}},
+      "Dashboard": {"type": "object", "additionalProperties": false, "required": ["schema", "components", "partial"], "properties": {"schema": {"const": 1}, "components": {"type": "object"}, "partial": {"type": "boolean"}}},
+      "Progress": {"type": "object", "additionalProperties": false, "required": ["current", "total", "unit"], "properties": {"current": {"type": "integer", "minimum": 0}, "total": {"type": "integer", "minimum": 1}, "unit": {"enum": ["bytes", "items", "percent", "steps"]}}},
+      "Task": {"type": "object", "additionalProperties": false, "required": ["id", "kind", "state", "created_unix", "updated_unix", "progress"], "properties": {"id": {"type": "string", "maxLength": 64}, "kind": {"type": "string", "maxLength": 64}, "state": {"enum": ["queued", "running", "succeeded", "failed", "cancelled"]}, "created_unix": {"type": "integer", "minimum": 0}, "updated_unix": {"type": "integer", "minimum": 0}, "progress": {"$ref": "#/components/schemas/Progress"}}},
+      "TaskFeed": {"type": "object", "additionalProperties": false, "required": ["schema", "generated_unix", "tasks"], "properties": {"schema": {"const": 1}, "generated_unix": {"type": "integer", "minimum": 0}, "tasks": {"type": "array", "maxItems": 256, "items": {"$ref": "#/components/schemas/Task"}}}},
+      "Alert": {"type": "object", "additionalProperties": false, "required": ["id", "kind", "severity", "first_seen_unix", "last_seen_unix"], "properties": {"id": {"type": "string", "maxLength": 128}, "kind": {"type": "string", "maxLength": 64}, "severity": {"enum": ["warning", "critical"]}, "first_seen_unix": {"type": "integer", "minimum": 0}, "last_seen_unix": {"type": "integer", "minimum": 0}}},
+      "AlertFeed": {"type": "object", "additionalProperties": false, "required": ["schema", "generated_unix", "attention_required", "alerts"], "properties": {"schema": {"const": 1}, "generated_unix": {"type": "integer", "minimum": 0}, "attention_required": {"type": "boolean"}, "alerts": {"type": "array", "maxItems": 256, "items": {"$ref": "#/components/schemas/Alert"}}}},
+      "AuditEvent": {"type": "object", "additionalProperties": false, "required": ["id", "category", "action", "outcome", "occurred_unix"], "properties": {"id": {"type": "string", "maxLength": 128}, "category": {"type": "string", "maxLength": 64}, "action": {"type": "string", "maxLength": 64}, "outcome": {"enum": ["succeeded", "failed", "denied"]}, "occurred_unix": {"type": "integer", "minimum": 0}}},
+      "AuditFeed": {"type": "object", "additionalProperties": false, "required": ["schema", "events"], "properties": {"schema": {"const": 1}, "events": {"type": "array", "maxItems": 100, "items": {"$ref": "#/components/schemas/AuditEvent"}}}}
+    }
+  }
+}

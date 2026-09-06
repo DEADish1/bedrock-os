@@ -107,6 +107,7 @@ Exit pending physical acceptance: one exact Bedrock image must still pass distin
 - [ ] Add keyboard-complete controls and WCAG 2.2 AA testing.
 - [ ] Handle offline, reconnecting, partial failure, and concurrent changes.
 - [ ] Add API schema tests, authorization tests, and UI end-to-end tests.
+  - The authenticated OpenAPI 3.1 document covers every implemented v1 route and its bearer security policy. Route/schema agreement and token issue/revocation tests pass; complete response-schema and UI end-to-end coverage remain.
 
 Exit: every supported server task works through the UI and documented API.
 

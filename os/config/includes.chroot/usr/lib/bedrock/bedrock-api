@@ -18,6 +18,7 @@ VMS = pathlib.Path(os.environ.get("BEDROCK_API_VMS", "/var/lib/bedrock/virtualiz
 UPDATES = pathlib.Path(os.environ.get("BEDROCK_API_UPDATES", "/var/lib/bedrock/update/last-check.json"))
 TASKS = pathlib.Path(os.environ.get("BEDROCK_API_TASKS", "/var/lib/bedrock/api/tasks.json"))
 AUDIT = pathlib.Path(os.environ.get("BEDROCK_API_AUDIT", "/var/lib/bedrock/api/audit.jsonl"))
+OPENAPI = pathlib.Path(os.environ.get("BEDROCK_API_OPENAPI", "/usr/share/bedrock/api/openapi-v1.json"))
 
 TASK_STATES = {"queued", "running", "succeeded", "failed", "cancelled"}
 TASK_UNITS = {"bytes", "items", "percent", "steps"}
@@ -182,6 +183,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/v1/health":
             self.send_json(200, {"schema": 1, "status": "ok", "api_version": "v1"})
+        elif self.path == "/api/v1/openapi.json":
+            try:
+                self.send_json(200, regular_json(OPENAPI, 262144))
+            except (OSError, ValueError, json.JSONDecodeError):
+                self.send_json(503, {"schema": 1, "error": "schema-unavailable"})
         elif self.path == "/api/v1/virtualization/capabilities":
             try:
                 data = regular_json(CAPABILITIES, 65536)
