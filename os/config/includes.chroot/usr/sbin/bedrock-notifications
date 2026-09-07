@@ -1,0 +1,134 @@
+#!/usr/bin/python3
+import hashlib, json, os, pathlib, re, smtplib, ssl, stat, subprocess, sys, tempfile, time, urllib.parse, urllib.request
+from email.message import EmailMessage
+try:
+    import fcntl
+except ModuleNotFoundError:
+    if os.name!="nt": raise
+    class fcntl:
+        LOCK_EX=0
+        @staticmethod
+        def flock(_handle,_mode): pass
+
+ID=re.compile(r"^[a-z][a-z0-9-]{0,31}$"); HOST=re.compile(r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])$"); EMAIL=re.compile(r"^[^\s@]{1,64}@[^\s@]{1,190}$")
+ACTIONS={"disk-smart":"replace-disk","disk-temperature":"check-cooling","md-degraded":"open-array-recovery","zfs-health":"open-pool-recovery","hardware-raid-visibility":"install-controller-tooling","hardware-raid-controller":"review-controller","hardware-raid-disk":"replace-controller-disk","hardware-raid-volume":"open-volume-recovery","hardware-raid-cache":"disable-write-back-and-service-cache"}
+
+def fail(message): raise SystemExit(f"error: {message}")
+def regular(path,limit):
+    info=path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_size>limit: fail("notification input is unsafe")
+    return path.read_text(encoding="utf-8")
+def atomic(path,value):
+    path.parent.mkdir(parents=True,exist_ok=True); handle,temp=tempfile.mkstemp(prefix=".notifications.",dir=path.parent)
+    try:
+        with os.fdopen(handle,"w",encoding="utf-8") as out: json.dump(value,out,sort_keys=True,separators=(",",":")); out.write("\n"); out.flush(); os.fsync(out.fileno())
+        os.chmod(temp,0o600); os.replace(temp,path)
+    finally:
+        if os.path.exists(temp): os.unlink(temp)
+def load(path,default,limit=1048576):
+    if not path.exists(): return default
+    try: return json.loads(regular(path,limit))
+    except (OSError,ValueError,json.JSONDecodeError): fail("notification state is invalid")
+def validate_destination(item):
+    common={"id","name","kind","created_unix"}
+    if not isinstance(item,dict) or not common<=set(item) or not ID.fullmatch(item["id"]) or not isinstance(item["name"],str) or not 1<=len(item["name"])<=64 or item["kind"] not in {"webhook","email"} or type(item["created_unix"]) is not int or item["created_unix"]<0: fail("notification destination is invalid")
+    if item["kind"]=="webhook":
+        if set(item)!=common|{"endpoint"}: fail("notification destination is invalid")
+        parsed=urllib.parse.urlsplit(item["endpoint"])
+        if parsed.scheme!="https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.port not in {None,443} or not HOST.fullmatch(parsed.hostname): fail("webhook endpoint must be bounded HTTPS")
+    else:
+        if set(item)!=common|{"smtp_host","smtp_port","sender","recipient"} or not HOST.fullmatch(item["smtp_host"]) or type(item["smtp_port"]) is not int or not 1<=item["smtp_port"]<=65535 or not EMAIL.fullmatch(item["sender"]) or not EMAIL.fullmatch(item["recipient"]): fail("email destination is invalid")
+def destinations(path):
+    value=load(path,{"schema":1,"destinations":[]})
+    if not isinstance(value,dict) or set(value)!={"schema","destinations"} or value["schema"]!=1 or not isinstance(value["destinations"],list) or len(value["destinations"])>32: fail("notification destinations are invalid")
+    for item in value["destinations"]: validate_destination(item)
+    if len({item["id"] for item in value["destinations"]})!=len(value["destinations"]): fail("notification destinations are invalid")
+    return value
+def secret(base,item):
+    path=base/"secrets"/(item["id"]+(".token" if item["kind"]=="webhook" else ".json"))
+    try: info=path.lstat(); raw=regular(path,8192).strip()
+    except OSError: fail("notification secret is unavailable")
+    if os.name!="nt" and info.st_mode&0o077: fail("notification secret must be owner-only")
+    if item["kind"]=="webhook":
+        if not 16<=len(raw)<=4096 or any(ord(char)<33 for char in raw): fail("webhook token is invalid")
+        return raw
+    try: value=json.loads(raw)
+    except (ValueError,json.JSONDecodeError): fail("email credential is invalid")
+    if not isinstance(value,dict) or set(value)!={"username","password"} or not isinstance(value["username"],str) or not isinstance(value["password"],str) or not 1<=len(value["username"])<=256 or not 16<=len(value["password"])<=4096: fail("email credential is invalid")
+    return value
+def transport(base,item,payload):
+    test=os.environ.get("BEDROCK_NOTIFICATIONS_TEST_MODE")=="1"; credential=secret(base,item)
+    if test:
+        helper=os.environ.get("BEDROCK_NOTIFICATIONS_TEST_TRANSPORT")
+        if not helper: fail("test transport is unavailable")
+        result=subprocess.run([sys.executable,helper,item["kind"]],input=json.dumps({"destination":item,"payload":payload}),text=True,env=os.environ.copy())
+        if result.returncode: raise RuntimeError("delivery failed")
+        return
+    if item["kind"]=="webhook":
+        body=json.dumps(payload,separators=(",",":")).encode(); request=urllib.request.Request(item["endpoint"],data=body,headers={"Authorization":"Bearer "+credential,"Content-Type":"application/json","User-Agent":"Bedrock-Notifications/1"},method="POST")
+        with urllib.request.urlopen(request,timeout=15,context=ssl.create_default_context()) as response:
+            if not 200<=response.status<300: raise RuntimeError("delivery failed")
+    else:
+        message=EmailMessage(); message["From"]=item["sender"]; message["To"]=item["recipient"]; message["Subject"]=f"[{payload['severity'].upper()}] Bedrock: {payload['title']}"; message.set_content(f"{payload['title']}\n\nStatus: {payload['event']}\nRecommended action: {payload['action']}\nTime: {payload['occurred_unix']}\nReference: {payload['notification_id']}\n")
+        with smtplib.SMTP_SSL(item["smtp_host"],item["smtp_port"],timeout=15,context=ssl.create_default_context()) as smtp: smtp.login(credential["username"],credential["password"]); smtp.send_message(message)
+def validate_alerts(path):
+    try: value=json.loads(regular(path,1048576))
+    except (OSError,ValueError,json.JSONDecodeError): fail("health alert source is invalid")
+    if not isinstance(value,dict) or value.get("schema")!=1 or not isinstance(value.get("events"),list) or len(value["events"])>1000: fail("health alert source is invalid")
+    result=[]
+    for event in value["events"]:
+        fields={"event_id","action","alert_id","kind","resource","severity","previous_severity","occurred_unix"}
+        if not isinstance(event,dict) or set(event)!=fields or event["action"] not in {"opened","severity-changed","resolved"} or event["kind"] not in ACTIONS or event["severity"] not in {"warning","critical"} or type(event["occurred_unix"]) is not int or event["occurred_unix"]<0 or not all(isinstance(event[key],str) and 1<=len(event[key])<=512 for key in ("event_id","alert_id","resource")): fail("health alert event is invalid")
+        result.append(event)
+    return result
+def public_event(event):
+    titles={"disk-smart":"Disk health failure","disk-temperature":"High disk temperature","md-degraded":"Software RAID is degraded","zfs-health":"ZFS pool needs attention","hardware-raid-visibility":"Hardware RAID health is limited","hardware-raid-controller":"Hardware RAID controller needs attention","hardware-raid-disk":"Hardware RAID member needs attention","hardware-raid-volume":"Hardware RAID volume needs attention","hardware-raid-cache":"Hardware RAID cache protection needs attention"}
+    return {"schema":1,"notification_id":hashlib.sha256(event["event_id"].encode()).hexdigest()[:24],"event":event["action"],"kind":event["kind"],"severity":event["severity"],"title":titles[event["kind"]],"action":ACTIONS[event["kind"]],"occurred_unix":event["occurred_unix"]}
+def main():
+    if len(sys.argv)<2 or sys.argv[1] not in {"configure","list","remove","test","dispatch"}: fail("usage: bedrock-notifications configure|list|remove|test|dispatch ...")
+    test=os.environ.get("BEDROCK_NOTIFICATIONS_TEST_MODE")=="1"
+    if not test and os.geteuid()!=0: fail("notification management requires root")
+    base=pathlib.Path(os.environ.get("BEDROCK_NOTIFICATIONS_STATE_DIR","/var/lib/bedrock/notifications")) if test else pathlib.Path("/var/lib/bedrock/notifications")
+    alerts=pathlib.Path(os.environ.get("BEDROCK_NOTIFICATIONS_ALERTS","/var/lib/bedrock/storage/alerts.json")) if test else pathlib.Path("/var/lib/bedrock/storage/alerts.json")
+    base.mkdir(parents=True,exist_ok=True)
+    if not base.is_dir() or base.is_symlink(): fail("notification directory is unsafe")
+    with (base/".lock").open("a+") as lock:
+        os.chmod(base/".lock",0o600); fcntl.flock(lock,fcntl.LOCK_EX); path=base/"destinations.json"; state=destinations(path); command=sys.argv[1]; now=int(os.environ.get("BEDROCK_NOTIFICATIONS_TEST_NOW",str(int(time.time()))))
+        if command=="list":
+            if len(sys.argv)!=2: fail("list accepts no arguments")
+            print(json.dumps(state,sort_keys=True,separators=(",",":"))); return
+        if command=="dispatch":
+            if len(sys.argv)!=2: fail("dispatch accepts no arguments")
+            ledger_path=base/"delivered.json"; ledger=load(ledger_path,{"schema":1,"delivered":[]},4194304)
+            if not isinstance(ledger,dict) or set(ledger)!={"schema","delivered"} or ledger["schema"]!=1 or not isinstance(ledger["delivered"],list) or len(ledger["delivered"])>32768 or any(not isinstance(value,str) or not re.fullmatch(r"[0-9a-f]{64}",value) for value in ledger["delivered"]): fail("notification delivery state is invalid")
+            known=set(ledger["delivered"]); events=validate_alerts(alerts); delivered=0; failures=0
+            for item in state["destinations"]:
+                for event in events:
+                    identity=hashlib.sha256((item["id"]+"\0"+event["event_id"]).encode()).hexdigest()
+                    if identity in known: continue
+                    try: transport(base,item,public_event(event))
+                    except Exception: failures+=1; continue
+                    known.add(identity); ledger["delivered"].append(identity); delivered+=1
+            ledger["delivered"]=ledger["delivered"][-32768:]; atomic(ledger_path,ledger)
+            if failures: fail("one or more notification deliveries failed")
+            print(json.dumps({"schema":1,"status":"completed","delivered":delivered},sort_keys=True,separators=(",",":"))); return
+        if command=="configure":
+            if len(sys.argv)!=4: fail("configure requires REQUEST.json and exact confirmation")
+            try: request=json.loads(regular(pathlib.Path(sys.argv[2]),65536))
+            except (OSError,ValueError,json.JSONDecodeError): fail("notification request is invalid")
+            item=request|{"created_unix":now}; validate_destination(item); digest=hashlib.sha256(json.dumps(request,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+            if sys.argv[3]!=f"CONFIGURE NOTIFICATION {item['id']} {digest}" or any(old["id"]==item["id"] for old in state["destinations"]): fail("notification confirmation or identity is invalid")
+            secret(base,item); state["destinations"].append(item); atomic(path,state); print(json.dumps({"schema":1,"status":"configured","destination":item["id"]},sort_keys=True,separators=(",",":"))); return
+        if len(sys.argv)<3 or not ID.fullmatch(sys.argv[2]): fail("notification destination identity is invalid")
+        matches=[item for item in state["destinations"] if item["id"]==sys.argv[2]]
+        if len(matches)!=1: fail("notification destination is unavailable")
+        item=matches[0]
+        if command=="remove":
+            if len(sys.argv)!=4 or sys.argv[3]!=f"REMOVE NOTIFICATION {item['id']}": fail("notification removal confirmation is invalid")
+            state["destinations"].remove(item); atomic(path,state); print(json.dumps({"schema":1,"status":"removed","destination":item["id"]},sort_keys=True,separators=(",",":"))); return
+        if command=="test":
+            if len(sys.argv)!=4 or sys.argv[3]!=f"TEST NOTIFICATION {item['id']}": fail("notification test confirmation is invalid")
+            transport(base,item,{"schema":1,"notification_id":"test","event":"test","kind":"test","severity":"warning","title":"Bedrock test notification","action":"none","occurred_unix":now}); print('{"schema":1,"status":"delivered"}'); return
+        fail("unsupported notification command")
+
+if __name__=="__main__": main()

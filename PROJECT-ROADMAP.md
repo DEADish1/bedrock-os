@@ -134,7 +134,8 @@ Exit: approved clients connect remotely, survive network changes, and can be imm
 - [x] Add configuration export/import and bare-metal recovery documentation.
   - Exact-confirmation export/import uses a bounded allowlist, version and SHA-256 binding, link/traversal rejection, staged replacement, local rollback copies, and an explicit reboot gate while excluding credentials and bulk data. See [bare-metal recovery](docs/BARE-METAL-RECOVERY.md).
 - [ ] Build an isolated application/service system with resource limits and update policy.
-- [ ] Add notification destinations and actionable health alerts.
+- [x] Add notification destinations and actionable health alerts.
+  - Root-only HTTPS webhook and TLS email destinations use separate owner-only credentials, SHA-256-bound configuration, privacy-safe event payloads, specific recovery actions, per-destination deduplication, and scheduled retry of failed deliveries. See [health notifications](docs/NOTIFICATIONS.md).
 - [x] Implement diagnostic bundles with secret redaction and explicit user consent.
   - A root-only, exact-consent tool creates owner-readable archives from bounded allowlisted system state, records unavailable sources, redacts identifying and secret-bearing keys and values, refuses overwrite, and excludes logs, user data, credentials, pairing state, and command arguments. See [diagnostic bundle policy](docs/DIAGNOSTICS.md).
 - [ ] Add UPS shutdown integration and safe maintenance mode.
