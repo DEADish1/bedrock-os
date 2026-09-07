@@ -154,7 +154,8 @@ Exit: users can prove that data and configuration can be restored after realisti
 - [ ] Run soak, load, power-loss, disk-failure, network-loss, and recovery tests.
 - [ ] Complete penetration test, dependency review, SBOM, and vulnerability process.
 - [ ] Sign/notarize OS images, installers, clients, manifests, and releases.
-- [ ] Finish installation, admin, troubleshooting, recovery, privacy, and security docs.
+- [x] Finish installation, admin, troubleshooting, recovery, privacy, and security docs.
+  - A validated documentation index now connects installation and first-run procedures, routine administration, subsystem operations, troubleshooting, bare-metal and drill recovery, privacy/telemetry policy, security architecture, support, and milestone acceptance evidence.
 - [x] Finalize license notices, macOS guidance, telemetry policy, support, and issue templates.
   - The repository now carries a project-wide MIT license, third-party notice and release-obligation policy, off-by-default privacy/telemetry contract, supported macOS installer and unsupported macOS-host/guest boundaries, privacy-safe support guidance, private security-report routing, and structured public issue forms.
 - [ ] Recruit beta group, triage blockers, and publish release-candidate checksums.

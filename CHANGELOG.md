@@ -6,6 +6,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ### Release readiness 0.9
 
+- Completed the indexed installation, administration, troubleshooting, recovery, privacy, and security documentation set and added automated validation for every local Markdown link.
 - Added the repository MIT license, third-party redistribution notice policy, privacy and off-by-default telemetry contract, macOS release/support guidance, public support boundaries, private vulnerability routing, and privacy-conscious issue forms.
 
 ### Backup, recovery, apps, and operations 0.8
