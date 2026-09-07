@@ -21,6 +21,7 @@
       "/api/v1/audit",
       "/api/v1/backups",
       "/api/v1/dashboard",
+      "/api/v1/hardware",
       "/api/v1/health",
       "/api/v1/openapi.json",
       "/api/v1/remote/devices",

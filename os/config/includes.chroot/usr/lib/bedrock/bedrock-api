@@ -197,6 +197,34 @@ def backup_feed() -> dict:
             raise ValueError("invalid backup retention")
     return value
 
+def hardware_feed() -> dict:
+    value = regular_json(HARDWARE, 1048576)
+    if not isinstance(value, dict) or set(value) != {"schema", "cpu", "memory", "disks", "storage_controllers", "networks", "gpus", "usb_devices"} or value["schema"] != 2:
+        raise ValueError("invalid hardware inventory")
+    cpu, memory = value["cpu"], value["memory"]
+    cpu_fields = {"architecture", "model", "logical_processors", "sockets", "cores_per_socket", "threads_per_core", "virtualization", "virtualization_supported"}
+    if not isinstance(cpu, dict) or set(cpu) != cpu_fields or not isinstance(memory, dict) or set(memory) != {"total_bytes"}:
+        raise ValueError("invalid hardware inventory")
+    for key in ("logical_processors", "sockets", "cores_per_socket", "threads_per_core"):
+        if type(cpu[key]) is not int or cpu[key] < 1:
+            raise ValueError("invalid processor inventory")
+    result = {"schema": 1, "cpu": {"architecture": bounded_string(cpu["architecture"], 32), "model": bounded_string(cpu["model"], 160), "logical_processors": cpu["logical_processors"], "sockets": cpu["sockets"], "cores_per_socket": cpu["cores_per_socket"], "threads_per_core": cpu["threads_per_core"], "virtualization": bounded_string(cpu["virtualization"], 32), "virtualization_supported": cpu["virtualization_supported"]}, "memory": {"total_bytes": memory["total_bytes"]}}
+    if type(cpu["virtualization_supported"]) is not bool or type(memory["total_bytes"]) is not int or memory["total_bytes"] < 1:
+        raise ValueError("invalid hardware inventory")
+    collections = (value["disks"], value["storage_controllers"], value["networks"], value["gpus"], value["usb_devices"])
+    if any(not isinstance(items, list) or len(items) > 256 for items in collections):
+        raise ValueError("invalid hardware inventory")
+    result["disks"] = [{"model": bounded_string(item["model"], 160), "vendor": bounded_string(item["vendor"], 80), "size_bytes": item["size_bytes"], "rotational": item["rotational"], "transport": bounded_string(item["transport"], 32), "removable": item["removable"]} for item in value["disks"] if isinstance(item, dict)]
+    if len(result["disks"]) != len(value["disks"]) or any(type(item["size_bytes"]) is not int or item["size_bytes"] < 0 or type(item["rotational"]) is not bool or type(item["removable"]) is not bool for item in result["disks"]):
+        raise ValueError("invalid disk inventory")
+    result["storage_controllers"] = [{"class": bounded_string(item["class"], 32), "description": re.sub(r"^[0-9a-fA-F:.]+\s+", "", bounded_string(item["description"], 240))} for item in value["storage_controllers"] if isinstance(item, dict)]
+    result["networks"] = [{"mtu": item["mtu"], "state": bounded_string(item["state"], 32), "link_type": bounded_string(item["link_type"], 32)} for item in value["networks"] if isinstance(item, dict)]
+    result["gpus"] = [{"vendor": bounded_string(item["vendor"], 32), "driver": bounded_string(item["driver"], 64), "boot_vga": item["boot_vga"], "recognized_vendor": item["recognized_vendor"]} for item in value["gpus"] if isinstance(item, dict)]
+    if len(result["storage_controllers"]) != len(value["storage_controllers"]) or len(result["networks"]) != len(value["networks"]) or len(result["gpus"]) != len(value["gpus"]) or any(type(item["mtu"]) is not int or item["mtu"] < 576 for item in result["networks"]) or any(type(item["boot_vga"]) is not bool or type(item["recognized_vendor"]) is not bool for item in result["gpus"]):
+        raise ValueError("invalid hardware inventory")
+    result["usb_device_count"] = len(value["usb_devices"])
+    return result
+
 def dashboard() -> dict:
     result = {"schema": 1, "components": {}}
     components = result["components"]
@@ -299,6 +327,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, backup_feed())
             except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
                 self.send_json(503, {"schema": 1, "error": "backups-unavailable"})
+        elif self.path == "/api/v1/hardware":
+            try:
+                self.send_json(200, hardware_feed())
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                self.send_json(503, {"schema": 1, "error": "hardware-unavailable"})
         else:
             self.send_json(404, {"schema": 1, "error": "not-found"})
 

@@ -60,7 +60,7 @@ def main() -> None:
             "created_at": "2026-08-31T00:00:00Z", "revoked": False,
         }]}), encoding="utf-8")
         capabilities.write_text(json.dumps({"schema": 1, "status": "ready"}), encoding="utf-8")
-        hardware.write_text(json.dumps({"schema": 2, "cpu": {"architecture": "x86_64", "logical_processors": 8, "virtualization_supported": True}, "memory": {"total_bytes": 16000000000}, "disks": [{"serial": "must-not-leak"}], "networks": [{}]}), encoding="utf-8")
+        hardware.write_text(json.dumps({"schema": 2, "cpu": {"architecture": "x86_64", "model": "Bedrock CPU", "logical_processors": 8, "sockets": 1, "cores_per_socket": 4, "threads_per_core": 2, "virtualization": "AMD-V", "virtualization_supported": True}, "memory": {"total_bytes": 16000000000}, "disks": [{"name": "sda", "path": "/dev/sda", "model": "Bedrock SSD", "vendor": "Bedrock", "size_bytes": 1000000000, "rotational": False, "transport": "sata", "removable": False, "serial": "must-not-leak"}], "storage_controllers": [{"address": "0000:00:17.0", "class": "sata", "description": "0000:00:17.0 SATA controller"}], "networks": [{"name": "enp1s0", "mac": "00:11:22:33:44:55", "mtu": 1500, "state": "UP", "link_type": "ether"}], "gpus": [{"name": "card0", "pci_address": "0000:01:00.0", "vendor": "AMD", "vendor_id": "0x1002", "device_id": "0x1234", "driver": "amdgpu", "iommu_group": "7", "iommu_group_devices": ["0000:01:00.0"], "boot_vga": True, "recognized_vendor": True}], "usb_devices": [{"id": "1-1"}]}), encoding="utf-8")
         storage.write_text(json.dumps({"schema": 1, "generated_unix": 100, "overall": "healthy", "read_only": True, "disks": [{}, {}]}), encoding="utf-8")
         alerts.write_text(json.dumps({"schema": 1, "generated_unix": 101, "attention_required": True, "active_count": 1,
             "active": [{"alert_id": "disk-smart:sda", "kind": "disk-smart", "resource": "/dev/sda", "severity": "critical", "first_seen_unix": 90, "last_seen_unix": 101}]}), encoding="utf-8")
@@ -98,7 +98,7 @@ def main() -> None:
             assert request(socket_path, "GET", "/api/v1/health")[0] == 200
             schema_status, schema_body = request(socket_path, "GET", "/api/v1/openapi.json")
             assert schema_status == 200 and schema_body["openapi"] == "3.1.0"
-            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/backups", "/api/v1/remote/devices", "/api/v1/virtualization/capabilities"}
+            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/backups", "/api/v1/hardware", "/api/v1/remote/devices", "/api/v1/virtualization/capabilities"}
             assert schema_body["security"] == [{"bearerAuth": []}]
             assert request(socket_path, "GET", "/api/v1/virtualization/capabilities") == (200, {"schema": 1, "data": {"schema": 1, "status": "ready"}})
             dashboard_status, dashboard_body = request(socket_path, "GET", "/api/v1/dashboard")
@@ -120,6 +120,9 @@ def main() -> None:
             backup_status, backup_body = request(socket_path, "GET", "/api/v1/backups")
             assert backup_status == 200 and backup_body["plans"][0]["has_snapshot"] is True
             assert "source" not in json.dumps(backup_body) and "repository" not in json.dumps(backup_body) and "last_snapshot" not in json.dumps(backup_body)
+            hardware_status, hardware_body = request(socket_path, "GET", "/api/v1/hardware")
+            assert hardware_status == 200 and hardware_body["cpu"]["model"] == "Bedrock CPU" and hardware_body["usb_device_count"] == 1
+            assert not any(secret in json.dumps(hardware_body) for secret in ["must-not-leak", "/dev/sda", "00:11:22:33:44:55", "0000:01:00.0", "0x1002"])
             alerts.write_text("not-json", encoding="utf-8")
             partial_status, partial_body = request(socket_path, "GET", "/api/v1/dashboard")
             assert partial_status == 200 and partial_body["partial"] is True
@@ -142,6 +145,8 @@ def main() -> None:
             backups.unlink()
             backups.symlink_to(tokens)
             assert request(socket_path, "GET", "/api/v1/backups") == (503, {"schema": 1, "error": "backups-unavailable"})
+            hardware.write_text('{"schema":2,"cpu":{}}', encoding="utf-8")
+            assert request(socket_path, "GET", "/api/v1/hardware") == (503, {"schema": 1, "error": "hardware-unavailable"})
             assert request(socket_path, "GET", "/api/v2/health")[0] == 404
             assert request(socket_path, "POST", "/api/v1/health", None)[0] == 401
             assert request(socket_path, "POST", "/api/v1/health")[0] == 405

@@ -6,6 +6,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 - Added authenticated, strictly validated `/api/v1/apps` and `/api/v1/backups` read contracts backed by privacy-safe snapshots that exclude registry digests, paths, repositories, credentials, and snapshot identifiers.
 - Replaced the Apps and Backup interface placeholders with authenticated live status views that preserve the in-memory-only token boundary and isolate partial service failures.
+- Added a dedicated authenticated hardware inventory route with strict validation and privacy filtering for device, network, bus, and passthrough identifiers.
 
 ### Release readiness 0.9
 
