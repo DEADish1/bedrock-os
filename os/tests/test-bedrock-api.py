@@ -56,6 +56,8 @@ def main() -> None:
         apps = work / "apps.json"
         backups = work / "backups.json"
         images = work / "images.json"
+        update_policy = work / "update-policy.json"
+        default_update_policy = work / "default-update-policy.json"
         tokens.write_text(json.dumps({"schema": 1, "tokens": [{
             "name": "test-client", "sha256": hashlib.sha256(TOKEN.encode()).hexdigest(),
             "created_at": "2026-08-31T00:00:00Z", "revoked": False,
@@ -73,6 +75,8 @@ def main() -> None:
         apps.write_text(json.dumps({"schema": 1, "apps": [{"id": "media", "name": "Media", "network": "bridge", "port_count": 1, "resources": {"cpus": 1, "memory_mib": 512, "pids": 128}, "update_policy": "notify", "created_unix": 100}]}), encoding="utf-8")
         backups.write_text(json.dumps({"schema": 1, "plans": [{"id": "daily", "name": "Daily", "kind": "local", "schedule": {"frequency": "daily", "hour_utc": 2, "weekday": None}, "retention": {"daily": 7, "weekly": 4, "monthly": 3}, "created_unix": 100, "last_success_unix": 200, "has_snapshot": True}]}), encoding="utf-8")
         images.write_text(json.dumps({"schema": 1, "images": [{"name": "installer", "type": "iso", "sha256": "c" * 64, "size_bytes": 4096, "converted": False}]}), encoding="utf-8")
+        update_policy.write_text(json.dumps({"schema": 2, "automatic_checks": True, "setup_choice_recorded": True, "channel": "stable"}), encoding="utf-8")
+        default_update_policy.write_text(json.dumps({"schema": 2, "automatic_checks": False, "setup_choice_recorded": False, "channel": "stable"}), encoding="utf-8")
         environment = os.environ | {
             "BEDROCK_API_SOCKET": str(socket_path),
             "BEDROCK_API_TOKENS": str(tokens),
@@ -85,6 +89,8 @@ def main() -> None:
             "BEDROCK_API_REMOTE": str(remote),
             "BEDROCK_API_APPS": str(apps), "BEDROCK_API_BACKUPS": str(backups),
             "BEDROCK_API_IMAGES": str(images),
+            "BEDROCK_API_UPDATE_POLICY": str(update_policy),
+            "BEDROCK_API_DEFAULT_UPDATE_POLICY": str(default_update_policy),
         }
         process = subprocess.Popen([sys.executable, str(API)], env=environment)
         try:
@@ -101,7 +107,7 @@ def main() -> None:
             assert request(socket_path, "GET", "/api/v1/health")[0] == 200
             schema_status, schema_body = request(socket_path, "GET", "/api/v1/openapi.json")
             assert schema_status == 200 and schema_body["openapi"] == "3.1.0"
-            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/backups", "/api/v1/hardware", "/api/v1/images", "/api/v1/remote/devices", "/api/v1/storage", "/api/v1/virtualization/capabilities", "/api/v1/vms"}
+            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/backups", "/api/v1/hardware", "/api/v1/images", "/api/v1/remote/devices", "/api/v1/settings", "/api/v1/storage", "/api/v1/virtualization/capabilities", "/api/v1/vms"}
             assert schema_body["security"] == [{"bearerAuth": []}]
             assert request(socket_path, "GET", "/api/v1/virtualization/capabilities") == (200, {"schema": 1, "data": {"schema": 1, "status": "ready"}})
             dashboard_status, dashboard_body = request(socket_path, "GET", "/api/v1/dashboard")
@@ -133,6 +139,7 @@ def main() -> None:
             storage_status, storage_body = request(socket_path, "GET", "/api/v1/storage")
             assert storage_status == 200 and storage_body["disks"][0]["smart"]["temperature_c"] == 31 and storage_body["software_raid"]["zfs"]["pools"][0]["name"] == "main"
             assert not any(secret in json.dumps(storage_body) for secret in ["/dev/sda", "/dev/md0", "private-serial", "0000:01:00.0", "member_pattern"])
+            assert request(socket_path, "GET", "/api/v1/settings") == (200, {"schema": 1, "updates": {"automatic_checks": True, "setup_choice_recorded": True, "channel": "stable", "automatic_install": False}, "telemetry_enabled": False})
             alerts.write_text("not-json", encoding="utf-8")
             partial_status, partial_body = request(socket_path, "GET", "/api/v1/dashboard")
             assert partial_status == 200 and partial_body["partial"] is True
@@ -163,6 +170,8 @@ def main() -> None:
             assert request(socket_path, "GET", "/api/v1/images") == (503, {"schema": 1, "error": "images-unavailable"})
             storage.write_text('{"schema":1,"overall":"healthy"}', encoding="utf-8")
             assert request(socket_path, "GET", "/api/v1/storage") == (503, {"schema": 1, "error": "storage-unavailable"})
+            update_policy.write_text('{"schema":2,"automatic_checks":"yes"}', encoding="utf-8")
+            assert request(socket_path, "GET", "/api/v1/settings") == (503, {"schema": 1, "error": "settings-unavailable"})
             assert request(socket_path, "GET", "/api/v2/health")[0] == 404
             assert request(socket_path, "POST", "/api/v1/health", None)[0] == 401
             assert request(socket_path, "POST", "/api/v1/health")[0] == 405

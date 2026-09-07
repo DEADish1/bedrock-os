@@ -24,6 +24,8 @@ REMOTE = pathlib.Path(os.environ.get("BEDROCK_API_REMOTE", "/var/lib/bedrock/rem
 APPS = pathlib.Path(os.environ.get("BEDROCK_API_APPS", "/var/lib/bedrock/api/sources/apps.json"))
 BACKUPS = pathlib.Path(os.environ.get("BEDROCK_API_BACKUPS", "/var/lib/bedrock/api/sources/backups.json"))
 IMAGES = pathlib.Path(os.environ.get("BEDROCK_API_IMAGES", "/var/lib/bedrock/api/sources/images.json"))
+UPDATE_POLICY = pathlib.Path(os.environ.get("BEDROCK_API_UPDATE_POLICY", "/var/lib/bedrock/settings/update-policy.json"))
+DEFAULT_UPDATE_POLICY = pathlib.Path(os.environ.get("BEDROCK_API_DEFAULT_UPDATE_POLICY", "/usr/share/bedrock/default-update-policy.json"))
 
 TASK_STATES = {"queued", "running", "succeeded", "failed", "cancelled"}
 TASK_UNITS = {"bytes", "items", "percent", "steps"}
@@ -300,6 +302,16 @@ def storage_feed() -> dict:
             raise ValueError("invalid hardware RAID report")
     return {"schema": 1, "generated_unix": value["generated_unix"], "overall": value["overall"], "disks": safe_disks, "software_raid": {"md_arrays": md_arrays, "zfs": {"available": software["zfs"]["available"], "pools": zfs_pools}}, "hardware_raid": {"controller_count": len(hardware["controllers"]), "full_visibility_count": len(hardware["vendor_reports"]), "attention_count": sum(report["healthy"] is False for report in hardware["vendor_reports"])}}
 
+def settings_feed() -> dict:
+    try:
+        value = regular_json(UPDATE_POLICY, 65536)
+    except FileNotFoundError:
+        value = regular_json(DEFAULT_UPDATE_POLICY, 65536)
+    expected = {"schema", "automatic_checks", "setup_choice_recorded", "channel"}
+    if not isinstance(value, dict) or set(value) != expected or value["schema"] != 2 or type(value["automatic_checks"]) is not bool or type(value["setup_choice_recorded"]) is not bool or value["channel"] not in {"stable", "beta"}:
+        raise ValueError("invalid update policy")
+    return {"schema": 1, "updates": {"automatic_checks": value["automatic_checks"], "setup_choice_recorded": value["setup_choice_recorded"], "channel": value["channel"], "automatic_install": False}, "telemetry_enabled": False}
+
 def dashboard() -> dict:
     result = {"schema": 1, "components": {}}
     components = result["components"]
@@ -422,6 +434,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, storage_feed())
             except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
                 self.send_json(503, {"schema": 1, "error": "storage-unavailable"})
+        elif self.path == "/api/v1/settings":
+            try:
+                self.send_json(200, settings_feed())
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                self.send_json(503, {"schema": 1, "error": "settings-unavailable"})
         else:
             self.send_json(404, {"schema": 1, "error": "not-found"})
 
