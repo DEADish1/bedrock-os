@@ -149,7 +149,8 @@ Exit: users can prove that data and configuration can be restored after realisti
 
 ## 0.9.0 — Release candidate
 
-- [ ] Freeze 1.0 scope, APIs, migrations, and supported hardware matrix.
+- [x] Freeze 1.0 scope, APIs, migrations, and supported hardware matrix.
+  - A machine-validated [1.0 scope freeze](docs/1.0-SCOPE-FREEZE.md) fixes the supported product boundary, additive v1 API contract, 0.2 upgrade floor and atomic migration guarantees, minimum amd64/UEFI hardware baseline, deferred features, and acceptance-dependent hardware qualifications without treating unfinished work as complete.
 - [ ] Run upgrade tests from every supported pre-1.0 release.
 - [ ] Run soak, load, power-loss, disk-failure, network-loss, and recovery tests.
 - [ ] Complete penetration test, dependency review, SBOM, and vulnerability process.

@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "release": "1.0.0",
+  "frozen_at_utc": "2026-09-07T13:44:05Z",
+  "host": {
+    "architecture": "amd64",
+    "distribution": "trixie",
+    "firmware": "uefi",
+    "secure_boot_required": true,
+    "minimum_threads": 4,
+    "minimum_memory_gib": 8,
+    "minimum_system_drive_gib": 32,
+    "primary_network": "wired-ethernet"
+  },
+  "api": {
+    "major": "v1",
+    "compatibility": "additive-only",
+    "paths": [
+      "/api/v1/alerts",
+      "/api/v1/audit",
+      "/api/v1/dashboard",
+      "/api/v1/health",
+      "/api/v1/openapi.json",
+      "/api/v1/remote/devices",
+      "/api/v1/tasks",
+      "/api/v1/virtualization/capabilities"
+    ]
+  },
+  "migration": {
+    "minimum_source": "0.2.0",
+    "forward_only": true,
+    "backup_before_mutation": true,
+    "atomic_commit": true,
+    "failed_migration_blocks_promotion": true,
+    "downgrade_uses_previous_slot_and_state_backup": true
+  },
+  "in_scope": [
+    "immutable-signed-ab-os",
+    "safe-cross-platform-installer",
+    "storage-and-nas",
+    "virtual-machines-and-images",
+    "authenticated-management-interface",
+    "paired-remote-desktop-clients",
+    "encrypted-backup-and-recovery",
+    "isolated-applications",
+    "health-alerting-and-ups"
+  ],
+  "deferred": [
+    "arm64-hosts",
+    "legacy-bios",
+    "wifi-only-servers",
+    "apple-silicon-hosts",
+    "macos-guests",
+    "automatic-application-updates",
+    "unreviewed-hardware-raid",
+    "third-party-application-catalog"
+  ]
+}

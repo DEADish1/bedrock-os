@@ -1,6 +1,6 @@
 # Bedrock documentation
 
-Start with [architecture](ARCHITECTURE.md) and the [hardware support policy](HARDWARE-SUPPORT.md). Bedrock remains pre-release; unchecked gates in the [project roadmap](../PROJECT-ROADMAP.md) are not supported capabilities.
+Start with [architecture](ARCHITECTURE.md), the [1.0 scope freeze](1.0-SCOPE-FREEZE.md), and the [hardware support policy](HARDWARE-SUPPORT.md). Bedrock remains pre-release; unchecked gates in the [project roadmap](../PROJECT-ROADMAP.md) are not supported capabilities.
 
 ## Install and operate
 

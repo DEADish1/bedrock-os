@@ -178,6 +178,7 @@ grep -q '^ProtectSystem=strict$' "$OS_DIR/config/includes.chroot/usr/lib/systemd
 "$OS_DIR/scripts/validate-layout.sh"
 "$OS_DIR/scripts/validate-boot.sh"
 node "$OS_DIR/tests/test-doc-links.mjs"
+sh "$OS_DIR/tests/test-release-contract.sh"
 sh "$ROOT/installer/tests/test-target-selection.sh"
 sh "$ROOT/installer/tests/test-linux-list-targets.sh"
 sh "$ROOT/installer/tests/test-macos-list-targets.sh"

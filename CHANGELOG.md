@@ -6,6 +6,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ### Release readiness 0.9
 
+- Froze the machine-validated 1.0 product boundary, additive API surface, migration and rollback guarantees, minimum hardware baseline, deferred features, and evidence-dependent hardware qualifications.
 - Completed the indexed installation, administration, troubleshooting, recovery, privacy, and security documentation set and added automated validation for every local Markdown link.
 - Added the repository MIT license, third-party redistribution notice policy, privacy and off-by-default telemetry contract, macOS release/support guidance, public support boundaries, private vulnerability routing, and privacy-conscious issue forms.
 
