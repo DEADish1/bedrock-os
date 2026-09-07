@@ -1,0 +1,70 @@
+#!/usr/bin/python3
+import json, os, pathlib, stat, subprocess, sys, tempfile, time
+try:
+    import fcntl
+except ModuleNotFoundError:
+    if os.name!="nt": raise
+    class fcntl:
+        LOCK_EX=0
+        @staticmethod
+        def flock(_handle,_mode): pass
+
+ENTER="ENTER BEDROCK MAINTENANCE"; EXIT="EXIT BEDROCK MAINTENANCE"
+UNITS=("bedrock-update-check.timer","bedrock-backup.timer","bedrock-notifications.timer","bedrock-remote-status.timer","bedrock-storage-health.timer","bedrock-vm-status.timer","smbd.service","nmbd.service","nfs-server.service")
+def fail(message): raise SystemExit(f"error: {message}")
+def atomic(path,value):
+    path.parent.mkdir(parents=True,exist_ok=True); handle,temp=tempfile.mkstemp(prefix=".maintenance.",dir=path.parent)
+    try:
+        with os.fdopen(handle,"w",encoding="utf-8") as out: json.dump(value,out,sort_keys=True,separators=(",",":")); out.write("\n"); out.flush(); os.fsync(out.fileno())
+        os.chmod(temp,0o600); os.replace(temp,path)
+    finally:
+        if os.path.exists(temp): os.unlink(temp)
+def read_state(path):
+    if not path.exists(): return {"schema":1,"mode":"inactive","entered_unix":None,"units":[],"vms":[]}
+    info=path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_size>65536: fail("maintenance state is unsafe")
+    try: value=json.loads(path.read_text())
+    except (ValueError,json.JSONDecodeError): fail("maintenance state is invalid")
+    if not isinstance(value,dict) or set(value)!={"schema","mode","entered_unix","units","vms"} or value["schema"]!=1 or value["mode"] not in {"inactive","entering","active","failed"} or (value["entered_unix"] is not None and (type(value["entered_unix"]) is not int or value["entered_unix"]<0)) or not isinstance(value["units"],list) or not isinstance(value["vms"],list) or any(unit not in UNITS for unit in value["units"]) or any(not isinstance(name,str) or not name or len(name)>64 for name in value["vms"]): fail("maintenance state is invalid")
+    return value
+def call(command,*args,capture=False,ok=True):
+    prefix=[sys.executable,command] if os.environ.get("BEDROCK_MAINTENANCE_TEST_MODE")=="1" and command.endswith(".py") else [command]
+    result=subprocess.run([*prefix,*args],text=True,capture_output=capture)
+    if ok and result.returncode: fail("maintenance dependency failed")
+    return result
+def main():
+    if len(sys.argv)<2 or sys.argv[1] not in {"enter","exit","status"}: fail("usage: bedrock-maintenance enter|exit|status [EXACT PHRASE]")
+    test=os.environ.get("BEDROCK_MAINTENANCE_TEST_MODE")=="1"
+    if not test and os.geteuid()!=0: fail("maintenance mode requires root")
+    directory=pathlib.Path(os.environ.get("BEDROCK_MAINTENANCE_STATE_DIR","/run/bedrock-maintenance")) if test else pathlib.Path("/run/bedrock-maintenance")
+    systemctl=os.environ.get("BEDROCK_MAINTENANCE_SYSTEMCTL","systemctl") if test else "/bin/systemctl"; virsh=os.environ.get("BEDROCK_MAINTENANCE_VIRSH","virsh") if test else "/usr/bin/virsh"; domains=pathlib.Path(os.environ.get("BEDROCK_MAINTENANCE_DOMAINS","/var/lib/bedrock/virtualization/domains.json")) if test else pathlib.Path("/var/lib/bedrock/virtualization/domains.json")
+    directory.mkdir(parents=True,exist_ok=True)
+    if not directory.is_dir() or directory.is_symlink(): fail("maintenance directory is unsafe")
+    lock=(directory/".lock").open("a+"); os.chmod(directory/".lock",0o600); fcntl.flock(lock,fcntl.LOCK_EX)
+    state_path=directory/"state.json"; state=read_state(state_path); command=sys.argv[1]
+    if command=="status":
+        if len(sys.argv)!=2: fail("status accepts no arguments")
+        print(json.dumps(state,sort_keys=True,separators=(",",":"))); return
+    if command=="enter":
+        if len(sys.argv)!=3 or sys.argv[2]!=ENTER or state["mode"]!="inactive": fail("maintenance entry confirmation or state is invalid")
+        try: values=json.loads(domains.read_text()) if domains.exists() else {"schema":1,"domains":[]}
+        except (OSError,ValueError,json.JSONDecodeError): fail("managed VM state is invalid")
+        if not isinstance(values,dict) or set(values)!={"schema","domains"} or values["schema"]!=1 or not isinstance(values["domains"],list) or any(not isinstance(item,dict) or not isinstance(item.get("name"),str) for item in values["domains"]): fail("managed VM state is invalid")
+        managed={item["name"] for item in values["domains"]}; running=[name for name in call(virsh,"--connect","qemu:///system","list","--name","--state-running",capture=True).stdout.splitlines() if name]
+        if any(name not in managed for name in running): fail("an unmanaged VM is running")
+        active=[unit for unit in UNITS if call(systemctl,"is-active","--quiet",unit,ok=False).returncode==0]
+        state={"schema":1,"mode":"entering","entered_unix":int(os.environ.get("BEDROCK_MAINTENANCE_TEST_NOW",str(int(time.time())))),"units":active,"vms":running}; atomic(state_path,state)
+        for name in running: call(virsh,"--connect","qemu:///system","shutdown",name,"--mode","agent,acpi")
+        attempts=int(os.environ.get("BEDROCK_MAINTENANCE_TEST_ATTEMPTS","2")) if test else 60
+        for name in running:
+            for _ in range(attempts):
+                if call(virsh,"--connect","qemu:///system","domstate",name,capture=True,ok=False).stdout.strip()=="shut off": break
+                if not test: time.sleep(2)
+            else: state["mode"]="failed"; atomic(state_path,state); fail("a managed VM did not shut down")
+        for unit in active: call(systemctl,"stop",unit)
+        if not test: call("/bin/sync")
+        state["mode"]="active"; atomic(state_path,state); print(json.dumps(state,sort_keys=True,separators=(",",":"))); return
+    if len(sys.argv)!=3 or sys.argv[2]!=EXIT or state["mode"] not in {"entering","active","failed"}: fail("maintenance exit confirmation or state is invalid")
+    for unit in state["units"]: call(systemctl,"start",unit)
+    state={"schema":1,"mode":"inactive","entered_unix":None,"units":[],"vms":[]}; atomic(state_path,state); print(json.dumps(state,sort_keys=True,separators=(",",":")))
+if __name__=="__main__": main()

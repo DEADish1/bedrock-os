@@ -6,6 +6,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ### Backup, recovery, apps, and operations 0.8
 
+- Added a fail-closed maintenance mode that guards packaged mutations, quiesces managed guests, shares, and scheduled jobs, restores prior services explicitly, plus NUT low-battery/FSD handling that requests orderly poweroff; physical UPS acceptance remains open.
 - Added authenticated HTTPS webhook and TLS email health notifications with separate owner-only secrets, privacy-safe actionable payloads, per-destination event deduplication, explicit test/removal controls, and scheduled retry.
 - Added encrypted restic backup plans for local and SFTP repositories, hourly due-plan scheduling, bounded retention pruning, owner-only external secrets, verified snapshot history, and exact-confirmation no-overwrite restores.
 - Added an exact-consent, root-only diagnostic bundle generator that packages only bounded allowlisted state, records unavailable sources, recursively redacts identifying and secret-bearing fields and values, excludes user data and credentials, refuses overwrite, and creates owner-readable archives for review before sharing.

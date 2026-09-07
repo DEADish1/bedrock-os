@@ -30,6 +30,7 @@ mdadm
 network-manager
 nfs-kernel-server
 nvme-cli
+nut-client
 openssh-client
 openssl
 ovmf

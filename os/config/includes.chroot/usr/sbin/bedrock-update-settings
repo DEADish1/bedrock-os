@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+[ ! -x /usr/lib/bedrock/require-normal-mode ] || /usr/lib/bedrock/require-normal-mode
+
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 LC_ALL=C
 export PATH LC_ALL

@@ -1,0 +1,7 @@
+# UPS shutdown and maintenance mode
+
+`bedrock-maintenance enter "ENTER BEDROCK MAINTENANCE"` establishes the mutation guard, gracefully shuts down every running managed VM, refuses entry when an unmanaged VM is running, stops health/update/backup/notification/remote-status timers and active SMB/NFS services, syncs filesystems, and records exactly what was quiesced. If a guest does not stop, the state fails closed and mutations remain blocked. `bedrock-maintenance exit "EXIT BEDROCK MAINTENANCE"` restores only services that were active before entry.
+
+Bedrock packages the Network UPS Tools client and installs its `upssched` event policy at `/etc/nut/upssched.conf`. After selecting a supported UPS, configure the NUT `MONITOR` credentials and route the `ONLINE`, `ONBATT`, `LOWBATT`, and `FSD` notification flags through `/usr/sbin/upssched`. Online and battery transitions are recorded without secrets. `LOWBATT` and forced-shutdown events enter maintenance mode, record whether quiescing succeeded, and request an immediate systemd poweroff even if a guest failed to stop, prioritizing filesystem safety before battery exhaustion.
+
+Before relying on the integration, perform a controlled discharge acceptance test with expendable workloads: verify the correct UPS identity, loss-of-line status, graceful guest shutdown, stopped shares, filesystem sync, host poweroff above the configured reserve, and clean recovery after utility power returns. That hardware test remains a release gate.

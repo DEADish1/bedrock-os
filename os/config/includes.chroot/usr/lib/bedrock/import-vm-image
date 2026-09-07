@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+[ ! -x /usr/lib/bedrock/require-normal-mode ] || /usr/lib/bedrock/require-normal-mode
+
 [ "$#" -eq 2 ] || { printf 'usage: %s REQUEST.json SOURCE\n' "$0" >&2; exit 2; }
 request=$1
 source=$2

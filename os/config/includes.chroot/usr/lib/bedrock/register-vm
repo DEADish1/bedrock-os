@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+[ ! -x /usr/lib/bedrock/require-normal-mode ] || /usr/lib/bedrock/require-normal-mode
+
 [ "$#" -eq 3 ] || { printf 'usage: %s PLAN.json DOMAIN.xml AUTHORIZATION.json\n' "$0" >&2; exit 2; }
 plan=$1
 definition=$2

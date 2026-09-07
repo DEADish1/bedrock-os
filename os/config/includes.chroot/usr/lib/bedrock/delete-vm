@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+[ ! -x /usr/lib/bedrock/require-normal-mode ] || /usr/lib/bedrock/require-normal-mode
+
 [ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
 request=$1
 fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
