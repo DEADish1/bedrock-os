@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "bedrock_version": "0.8.0-acceptance",
+  "completed_at_utc": "2026-09-07T04:00:00Z",
+  "operator": "acceptance-operator",
+  "scenarios": {
+    "files": {
+      "status": "passed",
+      "original_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "restored_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "overwrite_prevented": true
+    },
+    "vm_data": {
+      "status": "passed",
+      "baseline_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "restored_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "guest_booted": true,
+      "snapshot_restore_verified": true
+    },
+    "configuration": {
+      "status": "passed",
+      "archive_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "reboot_verified": true,
+      "recovery_copy_retained": true,
+      "secrets_rotated": true
+    },
+    "failed_system_drive": {
+      "status": "passed",
+      "replacement_drive_id": "REPLACE-WITH-BY-ID-BASENAME",
+      "clean_install_verified": true,
+      "original_drive_untouched": true,
+      "pool_imported_without_creation": true,
+      "shares_verified": true,
+      "vms_verified": true
+    }
+  }
+}

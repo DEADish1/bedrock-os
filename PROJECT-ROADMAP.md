@@ -141,6 +141,7 @@ Exit: approved clients connect remotely, survive network changes, and can be imm
 - [ ] Add UPS shutdown integration and safe maintenance mode.
   - A guarded maintenance backend now blocks packaged mutation entry points, rejects unmanaged running guests, gracefully stops managed guests, quiesces active shares and timers, syncs filesystems, and restores only previously active units. NUT low-battery/FSD handling records state and requests poweroff even after a quiesce failure. A controlled physical UPS discharge/recovery acceptance run remains before this item can close.
 - [ ] Run full restore drills for files, VM data, configuration, and failed system drives.
+  - A strict, privacy-safe acceptance report now requires matching file and VM hashes, overwrite protection, VM boot and snapshot recovery, configuration reboot and credential rotation, plus a clean replacement-system-drive install and non-destructive pool import. The physical drill and signed-off report remain required before this item can close. See [full restore drill](docs/RESTORE-DRILL.md).
 
 Exit: users can prove that data and configuration can be restored after realistic failures.
 
