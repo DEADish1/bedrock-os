@@ -1,0 +1,33 @@
+name: Software defect
+description: Report a reproducible Bedrock software problem without secrets.
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not include credentials, private identifiers, or unreviewed logs. Security issues belong in private vulnerability reporting."
+  - type: input
+    id: version
+    attributes: {label: Bedrock version and image SHA-256, placeholder: "0.x.y and 64-character checksum"}
+    validations: {required: true}
+  - type: textarea
+    id: reproduction
+    attributes: {label: Reproduction steps, description: List the smallest repeatable sequence.}
+    validations: {required: true}
+  - type: textarea
+    id: expected
+    attributes: {label: Expected behavior}
+    validations: {required: true}
+  - type: textarea
+    id: observed
+    attributes: {label: Observed behavior}
+    validations: {required: true}
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy review
+      options:
+        - label: I removed credentials, keys, codes, tokens, serial numbers, addresses, and personal filenames.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true

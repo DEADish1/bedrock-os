@@ -4,6 +4,10 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+### Release readiness 0.9
+
+- Added the repository MIT license, third-party redistribution notice policy, privacy and off-by-default telemetry contract, macOS release/support guidance, public support boundaries, private vulnerability routing, and privacy-conscious issue forms.
+
 ### Backup, recovery, apps, and operations 0.8
 
 - Added a digest-pinned Podman application runtime with non-root read-only containers, capability removal, resource limits, bounded networking and persistence, exact-confirmation lifecycle management, and manual or notification-only updates.
