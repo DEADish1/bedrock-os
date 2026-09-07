@@ -29,8 +29,8 @@ lvm2
 mdadm
 network-manager
 nfs-kernel-server
-nvme-cli
 nut-client
+nvme-cli
 openssh-client
 openssl
 ovmf
