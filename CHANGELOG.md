@@ -13,6 +13,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Added a root-generated, path-free VM image status view and authenticated image inventory contract with format, size, SHA-256, and conversion provenance, refreshed after boot initialization, imports, and conversions.
 - Replaced sample image cards and the simulated upload action with authenticated verified inventory, checksum/provenance context, and explicit disconnected, unavailable, empty, and read-only states.
 - Added an authenticated, strictly validated storage health route exposing capacity, SMART, software RAID/ZFS, rebuild, and bounded hardware-RAID summaries without device paths, serials, member patterns, controller addresses, slot identifiers, or vendor descriptions.
+- Replaced the fabricated Storage pool and drive examples with authenticated live health, capacity, software-RAID/ZFS, rebuild-progress, disk-temperature, and hardware-RAID visibility views, including explicit disconnected, unavailable, empty, and read-only states.
 
 ### Release readiness 0.9
 
