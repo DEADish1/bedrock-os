@@ -14,6 +14,10 @@ This file records completed work, decisions, validation, and the next starting p
 - Added an exact-consent, root-only diagnostic bundle generator that packages only bounded allowlisted state, records unavailable sources, recursively redacts identifying and secret-bearing fields and values, excludes user data and credentials, refuses overwrite, and creates owner-readable archives for review before sharing.
 - Added version-bound configuration export/import with strict member allowlisting, per-file integrity checks, staged replacement, rollback copies, secret/data exclusion, and a documented bare-metal recovery sequence.
 
+### Remote access and clients 0.7
+
+- Added a fail-closed remote-device revocation hook that persists lost trust before synchronously stopping the device's dedicated systemd session target, while surfacing termination failures without reauthorizing the device.
+
 ### Management interface and API 0.6
 
 - Hardened authenticated API state and audit reads against symlink substitution and concurrent file mutation while preserving independent partial-failure responses.

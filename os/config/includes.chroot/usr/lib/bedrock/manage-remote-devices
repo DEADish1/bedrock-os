@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-import fcntl, hashlib, hmac, json, os, pathlib, re, stat, sys, tempfile, time
+import fcntl, hashlib, hmac, json, os, pathlib, re, stat, subprocess, sys, tempfile, time
 
 ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 KEY = re.compile(r"^[0-9a-f]{64}$")
@@ -52,5 +52,10 @@ def main():
             if len(sys.argv)!=4 or sys.argv[3]!=f"REVOKE REMOTE DEVICE {sys.argv[2]}": fail("revocation confirmation is invalid")
             if device["revoked"]: fail("device is already revoked")
             device["revoked"]=True
-        save(path,value); print(json.dumps({"schema":1,"status":"completed","action":command,"device_id":device["id"]},sort_keys=True,separators=(",",":")))
+        save(path,value)
+        if command=="revoke":
+            terminator=os.environ.get("BEDROCK_PAIRING_SESSION_TERMINATOR","terminate-remote-device-sessions") if test else "/usr/lib/bedrock/terminate-remote-device-sessions"
+            invocation=([sys.executable,terminator] if test and terminator.endswith(".py") else [terminator])+[device["id"]]
+            if subprocess.run(invocation,env=os.environ.copy()).returncode: fail("device was revoked but active-session termination failed")
+        print(json.dumps({"schema":1,"status":"completed","action":command,"device_id":device["id"]},sort_keys=True,separators=(",",":")))
 if __name__=="__main__": main()

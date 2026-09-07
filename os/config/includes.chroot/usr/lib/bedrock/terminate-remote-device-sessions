@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 1 ] || { printf 'error: one device identity is required\n' >&2; exit 2; }
+device=$1
+printf '%s' "$device" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' || { printf 'error: device identity is invalid\n' >&2; exit 1; }
+
+if [ "${BEDROCK_REMOTE_SESSION_TEST_MODE:-0}" = 1 ]; then
+  systemctl=${BEDROCK_REMOTE_SESSION_SYSTEMCTL:?test systemctl is required}
+else
+  [ "$(id -u)" -eq 0 ] || { printf 'error: session termination requires root\n' >&2; exit 1; }
+  systemctl=/bin/systemctl
+fi
+
+"$systemctl" stop "bedrock-remote-device@$device.target"
+printf '{"schema":1,"status":"terminated","device_id":"%s"}\n' "$device"
