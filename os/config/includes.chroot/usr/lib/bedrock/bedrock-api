@@ -21,6 +21,8 @@ TASKS = pathlib.Path(os.environ.get("BEDROCK_API_TASKS", "/var/lib/bedrock/api/t
 AUDIT = pathlib.Path(os.environ.get("BEDROCK_API_AUDIT", "/var/lib/bedrock/api/audit.jsonl"))
 OPENAPI = pathlib.Path(os.environ.get("BEDROCK_API_OPENAPI", "/usr/share/bedrock/api/openapi-v1.json"))
 REMOTE = pathlib.Path(os.environ.get("BEDROCK_API_REMOTE", "/var/lib/bedrock/remote/status.json"))
+APPS = pathlib.Path(os.environ.get("BEDROCK_API_APPS", "/var/lib/bedrock/api/sources/apps.json"))
+BACKUPS = pathlib.Path(os.environ.get("BEDROCK_API_BACKUPS", "/var/lib/bedrock/api/sources/backups.json"))
 
 TASK_STATES = {"queued", "running", "succeeded", "failed", "cancelled"}
 TASK_UNITS = {"bytes", "items", "percent", "steps"}
@@ -163,6 +165,38 @@ def remote_feed() -> dict:
             raise ValueError("invalid remote device")
     return value
 
+def app_feed() -> dict:
+    value = regular_json(APPS, 262144)
+    if not isinstance(value, dict) or set(value) != {"schema", "apps"} or value["schema"] != 1 or not isinstance(value["apps"], list) or len(value["apps"]) > 64:
+        raise ValueError("invalid application status")
+    fields = {"id", "name", "network", "port_count", "resources", "update_policy", "created_unix"}
+    for item in value["apps"]:
+        if not isinstance(item, dict) or set(item) != fields or not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", bounded_string(item["id"], 32)) or not 1 <= len(bounded_string(item["name"], 64)) <= 64:
+            raise ValueError("invalid application")
+        resources = item["resources"]
+        if item["network"] not in {"none", "bridge"} or item["update_policy"] not in {"manual", "notify"} or type(item["port_count"]) is not int or not 0 <= item["port_count"] <= 16 or type(item["created_unix"]) is not int or item["created_unix"] < 0:
+            raise ValueError("invalid application")
+        if not isinstance(resources, dict) or set(resources) != {"cpus", "memory_mib", "pids"} or type(resources["cpus"]) not in {int, float} or not .25 <= resources["cpus"] <= 16 or type(resources["memory_mib"]) is not int or not 128 <= resources["memory_mib"] <= 32768 or type(resources["pids"]) is not int or not 16 <= resources["pids"] <= 4096:
+            raise ValueError("invalid application resources")
+    return value
+
+def backup_feed() -> dict:
+    value = regular_json(BACKUPS, 262144)
+    if not isinstance(value, dict) or set(value) != {"schema", "plans"} or value["schema"] != 1 or not isinstance(value["plans"], list) or len(value["plans"]) > 64:
+        raise ValueError("invalid backup status")
+    fields = {"id", "name", "kind", "schedule", "retention", "created_unix", "last_success_unix", "has_snapshot"}
+    for item in value["plans"]:
+        if not isinstance(item, dict) or set(item) != fields or not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", bounded_string(item["id"], 32)) or not 1 <= len(bounded_string(item["name"], 64)) <= 64:
+            raise ValueError("invalid backup plan")
+        schedule, retention = item["schedule"], item["retention"]
+        if item["kind"] not in {"local", "remote"} or type(item["created_unix"]) is not int or item["created_unix"] < 0 or (item["last_success_unix"] is not None and (type(item["last_success_unix"]) is not int or item["last_success_unix"] < 0)) or type(item["has_snapshot"]) is not bool:
+            raise ValueError("invalid backup plan")
+        if not isinstance(schedule, dict) or set(schedule) != {"frequency", "hour_utc", "weekday"} or schedule["frequency"] not in {"daily", "weekly"} or type(schedule["hour_utc"]) is not int or not 0 <= schedule["hour_utc"] <= 23 or (schedule["frequency"] == "daily" and schedule["weekday"] is not None) or (schedule["frequency"] == "weekly" and (type(schedule["weekday"]) is not int or not 0 <= schedule["weekday"] <= 6)):
+            raise ValueError("invalid backup schedule")
+        if not isinstance(retention, dict) or set(retention) != {"daily", "weekly", "monthly"} or any(type(retention[key]) is not int or not 0 <= retention[key] <= 365 for key in retention) or sum(retention.values()) < 1:
+            raise ValueError("invalid backup retention")
+    return value
+
 def dashboard() -> dict:
     result = {"schema": 1, "components": {}}
     components = result["components"]
@@ -255,6 +289,16 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, remote_feed())
             except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
                 self.send_json(503, {"schema": 1, "error": "remote-status-unavailable"})
+        elif self.path == "/api/v1/apps":
+            try:
+                self.send_json(200, app_feed())
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                self.send_json(503, {"schema": 1, "error": "apps-unavailable"})
+        elif self.path == "/api/v1/backups":
+            try:
+                self.send_json(200, backup_feed())
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                self.send_json(503, {"schema": 1, "error": "backups-unavailable"})
         else:
             self.send_json(404, {"schema": 1, "error": "not-found"})
 

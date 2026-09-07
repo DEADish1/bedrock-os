@@ -17,7 +17,9 @@
     "compatibility": "additive-only",
     "paths": [
       "/api/v1/alerts",
+      "/api/v1/apps",
       "/api/v1/audit",
+      "/api/v1/backups",
       "/api/v1/dashboard",
       "/api/v1/health",
       "/api/v1/openapi.json",

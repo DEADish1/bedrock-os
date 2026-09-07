@@ -53,6 +53,8 @@ def main() -> None:
         audit = work / "audit.jsonl"
         openapi = ROOT / "config/includes.chroot/usr/share/bedrock/api/openapi-v1.json"
         remote = work / "remote.json"
+        apps = work / "apps.json"
+        backups = work / "backups.json"
         tokens.write_text(json.dumps({"schema": 1, "tokens": [{
             "name": "test-client", "sha256": hashlib.sha256(TOKEN.encode()).hexdigest(),
             "created_at": "2026-08-31T00:00:00Z", "revoked": False,
@@ -67,6 +69,8 @@ def main() -> None:
         tasks.write_text(json.dumps({"schema": 1, "generated_unix": 104, "tasks": [{"id": "task-1", "kind": "image-import", "state": "running", "created_unix": 100, "updated_unix": 104, "progress": {"current": 25, "total": 100, "unit": "percent"}}]}), encoding="utf-8")
         audit.write_text(json.dumps({"id": "event-1", "category": "storage", "action": "scrub", "outcome": "succeeded", "occurred_unix": 99}) + "\n", encoding="utf-8")
         remote.write_text(json.dumps({"schema": 1, "devices": [{"id": "42345678-1234-4123-8123-123456789abc", "name": "Office laptop", "created_unix": 1000, "expires_unix": 2000, "revoked": False, "expired": False, "last_seen_unix": None}]}), encoding="utf-8")
+        apps.write_text(json.dumps({"schema": 1, "apps": [{"id": "media", "name": "Media", "network": "bridge", "port_count": 1, "resources": {"cpus": 1, "memory_mib": 512, "pids": 128}, "update_policy": "notify", "created_unix": 100}]}), encoding="utf-8")
+        backups.write_text(json.dumps({"schema": 1, "plans": [{"id": "daily", "name": "Daily", "kind": "local", "schedule": {"frequency": "daily", "hour_utc": 2, "weekday": None}, "retention": {"daily": 7, "weekly": 4, "monthly": 3}, "created_unix": 100, "last_success_unix": 200, "has_snapshot": True}]}), encoding="utf-8")
         environment = os.environ | {
             "BEDROCK_API_SOCKET": str(socket_path),
             "BEDROCK_API_TOKENS": str(tokens),
@@ -77,6 +81,7 @@ def main() -> None:
             "BEDROCK_API_TASKS": str(tasks), "BEDROCK_API_AUDIT": str(audit),
             "BEDROCK_API_OPENAPI": str(openapi),
             "BEDROCK_API_REMOTE": str(remote),
+            "BEDROCK_API_APPS": str(apps), "BEDROCK_API_BACKUPS": str(backups),
         }
         process = subprocess.Popen([sys.executable, str(API)], env=environment)
         try:
@@ -93,7 +98,7 @@ def main() -> None:
             assert request(socket_path, "GET", "/api/v1/health")[0] == 200
             schema_status, schema_body = request(socket_path, "GET", "/api/v1/openapi.json")
             assert schema_status == 200 and schema_body["openapi"] == "3.1.0"
-            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/remote/devices", "/api/v1/virtualization/capabilities"}
+            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/backups", "/api/v1/remote/devices", "/api/v1/virtualization/capabilities"}
             assert schema_body["security"] == [{"bearerAuth": []}]
             assert request(socket_path, "GET", "/api/v1/virtualization/capabilities") == (200, {"schema": 1, "data": {"schema": 1, "status": "ready"}})
             dashboard_status, dashboard_body = request(socket_path, "GET", "/api/v1/dashboard")
@@ -109,6 +114,12 @@ def main() -> None:
             remote_status, remote_body = request(socket_path, "GET", "/api/v1/remote/devices")
             assert remote_status == 200 and remote_body["devices"][0]["name"] == "Office laptop"
             assert "public_key" not in json.dumps(remote_body) and "sha256" not in json.dumps(remote_body)
+            app_status, app_body = request(socket_path, "GET", "/api/v1/apps")
+            assert app_status == 200 and app_body["apps"][0]["id"] == "media"
+            assert "image" not in json.dumps(app_body) and "digest" not in json.dumps(app_body)
+            backup_status, backup_body = request(socket_path, "GET", "/api/v1/backups")
+            assert backup_status == 200 and backup_body["plans"][0]["has_snapshot"] is True
+            assert "source" not in json.dumps(backup_body) and "repository" not in json.dumps(backup_body) and "last_snapshot" not in json.dumps(backup_body)
             alerts.write_text("not-json", encoding="utf-8")
             partial_status, partial_body = request(socket_path, "GET", "/api/v1/dashboard")
             assert partial_status == 200 and partial_body["partial"] is True
@@ -125,6 +136,12 @@ def main() -> None:
             audit.unlink()
             audit.symlink_to(tokens)
             assert request(socket_path, "GET", "/api/v1/audit") == (503, {"schema": 1, "error": "audit-unavailable"})
+            apps.write_text('{"schema":1,"apps":[{"id":"Bad ID"}]}', encoding="utf-8")
+            assert request(socket_path, "GET", "/api/v1/apps") == (503, {"schema": 1, "error": "apps-unavailable"})
+            backups.write_text('{"schema":1,"plans":[]}', encoding="utf-8")
+            backups.unlink()
+            backups.symlink_to(tokens)
+            assert request(socket_path, "GET", "/api/v1/backups") == (503, {"schema": 1, "error": "backups-unavailable"})
             assert request(socket_path, "GET", "/api/v2/health")[0] == 404
             assert request(socket_path, "POST", "/api/v1/health", None)[0] == 401
             assert request(socket_path, "POST", "/api/v1/health")[0] == 405

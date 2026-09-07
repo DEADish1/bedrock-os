@@ -4,6 +4,8 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Added authenticated, strictly validated `/api/v1/apps` and `/api/v1/backups` read contracts backed by privacy-safe snapshots that exclude registry digests, paths, repositories, credentials, and snapshot identifiers.
+
 ### Release readiness 0.9
 
 - Froze the machine-validated 1.0 product boundary, additive API surface, migration and rollback guarantees, minimum hardware baseline, deferred features, and evidence-dependent hardware qualifications.

@@ -15,6 +15,7 @@ def main():
         env=os.environ|{"BEDROCK_APPS_TEST_MODE":"1","BEDROCK_APPS_STATE_DIR":str(state),"BEDROCK_APPS_DATA_DIR":str(data),"BEDROCK_APPS_PODMAN":str(podman),"BEDROCK_APPS_SKOPEO":str(skopeo),"BEDROCK_APPS_TEST_NOW":"1000","BEDROCK_TEST_APP_LOG":str(log)}; path=work/"request.json"; value=request(path)
         assert call(env,"install",str(path),"wrong",ok=False).returncode
         result=json.loads(call(env,"install",str(path),confirm("INSTALL",value)).stdout); assert result["status"]=="installed"
+        status=json.loads((state/"status.json").read_text()); assert status["apps"][0]["id"]=="photos" and "image" not in json.dumps(status) and "digest" not in json.dumps(status)
         commands=log.read_text(); assert "--read-only" in commands and "--cap-drop=all" in commands and "--security-opt=no-new-privileges" in commands and "--user 65532:65532" in commands and "--memory 512m" in commands and "--cpus 1.5" in commands and "--pids-limit 128" in commands and "--network bridge" in commands and "8443:8080/tcp" in commands and "@sha256:" in commands
         assert (data/"photos").is_dir() and len(json.loads(call(env,"list").stdout)["apps"])==1
         updates=json.loads(call(env,"check-updates").stdout); assert updates["updates"][0]["status"]=="available"
@@ -22,5 +23,6 @@ def main():
         updated=request(path,digest="sha256:"+"b"*64); call(env,"update",str(path),confirm("UPDATE",updated)); assert json.loads(call(env,"list").stdout)["apps"][0]["digest"].endswith("b"*64)
         call(env,"stop","photos","STOP APPLICATION photos"); call(env,"start","photos","START APPLICATION photos"); assert call(env,"remove","photos","wrong",ok=False).returncode; call(env,"remove","photos","REMOVE APPLICATION photos")
         assert json.loads(call(env,"list").stdout)["apps"]==[] and (data/"photos").is_dir()
+        assert json.loads((state/"status.json").read_text())["apps"]==[]
     print("Bedrock isolated application lifecycle, limits, and update-policy tests passed.")
 if __name__=="__main__": main()

@@ -20,8 +20,10 @@ Send the token as `Authorization: Bearer TOKEN`. Missing, malformed, unknown, or
 - `GET /api/v1/alerts` returns active alert identity, kind, severity, and timestamps without exposing device paths or other resource identifiers.
 - `GET /api/v1/audit` returns the newest 100 events from a bounded append-only feed. Events expose only a stable identity, category, action, outcome, and timestamp.
 - `GET /api/v1/remote/devices` returns names, lifecycle timestamps, and revoked/expired state from a root-generated privacy-safe view. Public keys and fingerprints remain inaccessible to the API service.
+- `GET /api/v1/apps` returns configured application identity, networking mode, resource limits, update policy, and creation time from a root-generated privacy-safe view. Registry locations and image digests remain inaccessible to the API service.
+- `GET /api/v1/backups` returns plan identity, schedule, retention, last-success time, and snapshot availability from a root-generated privacy-safe view. Source paths, repository locations, credentials, and snapshot identifiers remain inaccessible to the API service.
 
-Malformed, oversized, indirect, or unavailable task, alert, audit, and remote-device sources fail independently with `503`; the API never returns partially validated records.
+Malformed, oversized, indirect, or unavailable task, alert, audit, remote-device, application, and backup sources fail independently with `503`; the API never returns partially validated records.
 
 Privileged operations publish state through `record-api-task`. The writer serializes updates, rejects identity, timestamp, or progress regression, caps retained tasks at 256, and emits one privacy-bounded audit event when a task reaches a terminal state. Operations may expose stable task identity and kind, counters, and timestamps only; paths, command arguments, user labels, and raw error messages are prohibited.
 

@@ -20,6 +20,10 @@ def atomic(path,value):
         os.chmod(temp,0o600); os.replace(temp,path)
     finally:
         if os.path.exists(temp): os.unlink(temp)
+def publish(state,test):
+    path=pathlib.Path(os.environ.get("BEDROCK_APPS_STATUS",str(pathlib.Path(os.environ.get("BEDROCK_APPS_STATE_DIR","."))/"status.json"))) if test else pathlib.Path("/var/lib/bedrock/api/sources/apps.json")
+    safe={"schema":1,"apps":[{"id":item["id"],"name":item["name"],"network":item["network"],"port_count":len(item["ports"]),"resources":item["resources"],"update_policy":item["update_policy"],"created_unix":item["created_unix"]} for item in state["apps"]]}
+    path.parent.mkdir(parents=True,exist_ok=True); atomic(path,safe); os.chmod(path,0o644)
 def valid(item):
     if not isinstance(item,dict) or set(item)!=FIELDS or not NAME.fullmatch(item.get("id","")) or not isinstance(item.get("name"),str) or not 1<=len(item["name"])<=64 or not IMAGE.fullmatch(item.get("image","")) or not DIGEST.fullmatch(item.get("digest","")): fail("application definition is invalid")
     if item["network"] not in {"none","bridge"} or item["update_policy"] not in {"manual","notify"} or type(item["created_unix"]) is not int or item["created_unix"]<0: fail("application definition is invalid")
@@ -56,6 +60,7 @@ def main():
     base.mkdir(parents=True,exist_ok=True); data.mkdir(parents=True,exist_ok=True)
     if base.is_symlink() or data.is_symlink(): fail("application directory is unsafe")
     state_path=base/"apps.json"; lock=(base/".lock").open("a+"); os.chmod(base/".lock",0o600); fcntl.flock(lock,fcntl.LOCK_EX); state=load(state_path); action=sys.argv[1]
+    publish(state,test)
     if action=="list":
         if len(sys.argv)!=2: fail("list accepts no arguments")
         print(json.dumps(state,sort_keys=True,separators=(",",":"))); return
@@ -91,7 +96,7 @@ def main():
             if action=="update":
                 old=matches[0]; run(podman,*create_args(old,data),ok=False); run(podman,"start","bedrock-app-"+old["id"],ok=False)
             raise
-        state["apps"]=[existing for existing in state["apps"] if existing["id"]!=item["id"]]+[item]; atomic(state_path,state); print(json.dumps({"schema":1,"status":"installed" if action=="install" else "updated","id":item["id"]},sort_keys=True,separators=(",",":"))); return
+        state["apps"]=[existing for existing in state["apps"] if existing["id"]!=item["id"]]+[item]; atomic(state_path,state); publish(state,test); print(json.dumps({"schema":1,"status":"installed" if action=="install" else "updated","id":item["id"]},sort_keys=True,separators=(",",":"))); return
     if len(sys.argv)!=4 or not NAME.fullmatch(sys.argv[2]) or sys.argv[3]!=f"{action.upper()} APPLICATION {sys.argv[2]}": fail("application identity or confirmation is invalid")
     matches=[item for item in state["apps"] if item["id"]==sys.argv[2]]
     if len(matches)!=1: fail("application is unavailable")
@@ -99,6 +104,6 @@ def main():
     if action=="start": run(podman,"start",name)
     elif action=="stop": run(podman,"stop","--time","30",name)
     else:
-        run(podman,"stop","--time","30",name,ok=False); run(podman,"rm",name); state["apps"]=[item for item in state["apps"] if item["id"]!=sys.argv[2]]; atomic(state_path,state)
+        run(podman,"stop","--time","30",name,ok=False); run(podman,"rm",name); state["apps"]=[item for item in state["apps"] if item["id"]!=sys.argv[2]]; atomic(state_path,state); publish(state,test)
     print(json.dumps({"schema":1,"status":{"start":"started","stop":"stopped","remove":"removed"}[action],"id":sys.argv[2]},sort_keys=True,separators=(",",":")))
 if __name__=="__main__": main()

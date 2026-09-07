@@ -27,6 +27,10 @@ def atomic(path,value,mode=0o600):
         os.chmod(temp,mode); os.replace(temp,path)
     finally:
         if os.path.exists(temp): os.unlink(temp)
+def publish(state,test):
+    path=pathlib.Path(os.environ.get("BEDROCK_BACKUP_STATUS",str(pathlib.Path(os.environ.get("BEDROCK_BACKUP_STATE_DIR","."))/"status.json"))) if test else pathlib.Path("/var/lib/bedrock/api/sources/backups.json")
+    safe={"schema":1,"plans":[{"id":item["id"],"name":item["name"],"kind":item["kind"],"schedule":item["schedule"],"retention":item["retention"],"created_unix":item["created_unix"],"last_success_unix":item["last_success_unix"],"has_snapshot":item["last_snapshot"] is not None} for item in state["plans"]]}
+    atomic(path,safe,0o644)
 def validate_plan(item):
     if not isinstance(item,dict) or set(item)!=FIELDS or not NAME.fullmatch(item["id"]) or not isinstance(item["name"],str) or not 1<=len(item["name"])<=64: fail("backup plan is invalid")
     if item["kind"] not in {"local","remote"} or not isinstance(item["source"],str) or not isinstance(item["repository"],str): fail("backup plan is invalid")
@@ -92,7 +96,7 @@ def main():
     if os.environ.get("BEDROCK_BACKUP_TEST_MODE")!="1" and sys.argv[1]!="list" and subprocess.run(["/usr/lib/bedrock/require-normal-mode"]).returncode: fail("maintenance mode blocks backup mutation")
     base,data,repos,restores,restic=context(); state_path=base/"plans.json"; lock_path=base/".lock"; now=int(os.environ.get("BEDROCK_BACKUP_TEST_NOW",str(int(time.time()))))
     with lock_path.open("a+") as lock:
-        os.chmod(lock_path,0o600); fcntl.flock(lock,fcntl.LOCK_EX); state=load(state_path); command=sys.argv[1]
+        os.chmod(lock_path,0o600); fcntl.flock(lock,fcntl.LOCK_EX); state=load(state_path); command=sys.argv[1]; publish(state,os.environ.get("BEDROCK_BACKUP_TEST_MODE")=="1")
         if command=="list":
             if len(sys.argv)!=2: fail("list accepts no arguments")
             print(json.dumps(state,sort_keys=True,separators=(",",":"))); return
@@ -111,7 +115,7 @@ def main():
             if plan["kind"]=="local": confined(pathlib.Path(plan["repository"]),repos,not request["initialize"])
             elif not REMOTE.fullmatch(plan["repository"]): fail("remote repository must use a bounded SFTP destination")
             restic_call(restic,plan,password,"init" if request["initialize"] else "snapshots")
-            state["plans"].append(plan); atomic(state_path,state); print(json.dumps({"schema":1,"status":"created","plan":plan["id"]},sort_keys=True,separators=(",",":"))); return
+            state["plans"].append(plan); atomic(state_path,state); publish(state,os.environ.get("BEDROCK_BACKUP_TEST_MODE")=="1"); print(json.dumps({"schema":1,"status":"created","plan":plan["id"]},sort_keys=True,separators=(",",":"))); return
         if command=="run-due":
             if len(sys.argv)!=2: fail("run-due accepts no arguments")
             ran=[]; tm=time.gmtime(now)
@@ -119,14 +123,14 @@ def main():
                 interval=86400 if plan["schedule"]["frequency"]=="daily" else 604800
                 weekday_ok=plan["schedule"]["weekday"] is None or plan["schedule"]["weekday"]==tm.tm_wday
                 if tm.tm_hour==plan["schedule"]["hour_utc"] and weekday_ok and (plan["last_success_unix"] is None or now-plan["last_success_unix"]>=interval-3600): run_plan(base,data,repos,restic,state,plan,now); ran.append(plan["id"])
-            print(json.dumps({"schema":1,"status":"completed","ran":ran},sort_keys=True,separators=(",",":"))); return
+            publish(state,os.environ.get("BEDROCK_BACKUP_TEST_MODE")=="1"); print(json.dumps({"schema":1,"status":"completed","ran":ran},sort_keys=True,separators=(",",":"))); return
         if len(sys.argv)<3 or not NAME.fullmatch(sys.argv[2]): fail("backup plan identity is invalid")
         matches=[item for item in state["plans"] if item["id"]==sys.argv[2]]
         if len(matches)!=1: fail("backup plan is unavailable")
         plan=matches[0]
         if command=="run":
             if len(sys.argv)!=4 or sys.argv[3]!=f"RUN ENCRYPTED BACKUP {plan['id']}": fail("backup run confirmation is invalid")
-            snapshot=run_plan(base,data,repos,restic,state,plan,now); print(json.dumps({"schema":1,"status":"completed","snapshot":snapshot},sort_keys=True,separators=(",",":"))); return
+            snapshot=run_plan(base,data,repos,restic,state,plan,now); publish(state,os.environ.get("BEDROCK_BACKUP_TEST_MODE")=="1"); print(json.dumps({"schema":1,"status":"completed","snapshot":snapshot},sort_keys=True,separators=(",",":"))); return
         if len(sys.argv)!=5 or not SNAPSHOT.fullmatch(sys.argv[3]) or sys.argv[4]!=f"RESTORE BACKUP {plan['id']} SNAPSHOT {sys.argv[3]}": fail("restore confirmation is invalid")
         validate_paths(plan,data,repos); target=restores/plan["id"]
         if target.exists() or target.is_symlink(): fail("restore target already exists")

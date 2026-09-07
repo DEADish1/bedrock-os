@@ -27,7 +27,9 @@ if "restore" in sys.argv: pathlib.Path(sys.argv[sys.argv.index("--target")+1]).m
         assert invoke(env,"create",str(request_path),"wrong",ok=False).returncode
         invoke(env,"create",str(request_path),confirmation)
         listing=json.loads(invoke(env,"list").stdout); assert listing["plans"][0]["retention"]["monthly"]==6 and "password" not in json.dumps(listing)
+        status=json.loads((state/"status.json").read_text()); assert status["plans"][0]["id"]=="nightly" and "source" not in json.dumps(status) and "repository" not in json.dumps(status) and "last_snapshot" not in json.dumps(status)
         result=json.loads(invoke(env,"run","nightly","RUN ENCRYPTED BACKUP nightly").stdout); snapshot=result["snapshot"]
+        assert json.loads((state/"status.json").read_text())["plans"][0]["has_snapshot"] is True
         commands=log.read_text(); assert " backup " in commands and "forget --prune --keep-daily 7 --keep-weekly 4 --keep-monthly 6" in commands and "secret=True" in commands and "a-long-test-password" not in commands
         assert invoke(env,"restore","nightly",snapshot,"wrong",ok=False).returncode and not (restores/"nightly").exists()
         invoke(env,"restore","nightly",snapshot,f"RESTORE BACKUP nightly SNAPSHOT {snapshot}"); assert (restores/"nightly").is_dir()
