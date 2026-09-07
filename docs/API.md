@@ -25,8 +25,9 @@ Send the token as `Authorization: Bearer TOKEN`. Missing, malformed, unknown, or
 - `GET /api/v1/hardware` returns processor, memory, disk capability, storage-controller, network-link, GPU, and USB-count data while omitting device paths, interface names, MAC addresses, PCI/USB topology, numeric vendor/device IDs, serials, and IOMMU membership.
 - `GET /api/v1/vms` returns the bounded managed VM inventory with lifecycle state, autostart, assigned CPU and memory, snapshot count, and logical image/network attachment names. It does not expose disk paths, console sockets, MAC addresses, libvirt XML, or host device topology.
 - `GET /api/v1/images` returns the verified image name, format, byte size, SHA-256, and conversion provenance flag from a root-generated path-free view. Managed filesystem locations remain inaccessible to the API service.
+- `GET /api/v1/storage` returns disk capacity and SMART summaries, Linux RAID and ZFS health and rebuild progress, and bounded hardware-RAID visibility counts. Device paths, serial numbers, member patterns, controller addresses, slot identifiers, and vendor descriptions remain inaccessible to clients.
 
-Malformed, oversized, indirect, or unavailable task, alert, audit, remote-device, application, backup, hardware, VM, and image sources fail independently with `503`; the API never returns partially validated records.
+Malformed, oversized, indirect, or unavailable task, alert, audit, remote-device, application, backup, hardware, VM, image, and storage sources fail independently with `503`; the API never returns partially validated records.
 
 Privileged operations publish state through `record-api-task`. The writer serializes updates, rejects identity, timestamp, or progress regression, caps retained tasks at 256, and emits one privacy-bounded audit event when a task reaches a terminal state. Operations may expose stable task identity and kind, counters, and timestamps only; paths, command arguments, user labels, and raw error messages are prohibited.
 

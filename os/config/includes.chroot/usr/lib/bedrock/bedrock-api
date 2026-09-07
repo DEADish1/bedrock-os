@@ -254,6 +254,52 @@ def image_feed() -> dict:
         raise ValueError("duplicate image")
     return value
 
+def storage_feed() -> dict:
+    value = regular_json(STORAGE, 1048576)
+    expected = {"schema", "generated_unix", "overall", "read_only", "disks", "software_raid", "hardware_raid"}
+    if not isinstance(value, dict) or set(value) != expected or value["schema"] != 1 or type(value["generated_unix"]) is not int or value["generated_unix"] < 0 or value["overall"] not in {"healthy", "attention", "limited"} or value["read_only"] is not True:
+        raise ValueError("invalid storage status")
+    disks = value["disks"]
+    if not isinstance(disks, list) or len(disks) > 256:
+        raise ValueError("invalid disk status")
+    safe_disks = []
+    for item in disks:
+        if not isinstance(item, dict) or not {"size_bytes", "model", "transport", "smart"}.issubset(item) or type(item["size_bytes"]) is not int or item["size_bytes"] < 0:
+            raise ValueError("invalid disk status")
+        smart = item["smart"]
+        if not isinstance(smart, dict) or not {"available", "temperature_c", "power_on_hours", "health"}.issubset(smart) or type(smart["available"]) is not bool or smart["health"] not in {"healthy", "failing", "standby", "unknown"}:
+            raise ValueError("invalid SMART status")
+        for key in ("temperature_c", "power_on_hours"):
+            if smart[key] is not None and (type(smart[key]) is not int or smart[key] < 0):
+                raise ValueError("invalid SMART status")
+        safe_disks.append({"model": bounded_string(item["model"], 160), "size_bytes": item["size_bytes"], "transport": bounded_string(item["transport"], 32), "smart": {"available": smart["available"], "temperature_c": smart["temperature_c"], "power_on_hours": smart["power_on_hours"], "health": smart["health"]}})
+    software = value["software_raid"]
+    if not isinstance(software, dict) or set(software) != {"md_arrays", "zfs"} or not isinstance(software["md_arrays"], list) or len(software["md_arrays"]) > 128 or not isinstance(software["zfs"], dict) or set(software["zfs"]) != {"available", "pools"} or type(software["zfs"]["available"]) is not bool or not isinstance(software["zfs"]["pools"], list) or len(software["zfs"]["pools"]) > 128:
+        raise ValueError("invalid software RAID status")
+    md_arrays = []
+    for item in software["md_arrays"]:
+        if not isinstance(item, dict) or not {"name", "level", "state", "expected_members", "active_members", "health", "sync"}.issubset(item) or item["health"] not in {"healthy", "degraded", "unknown"} or type(item["expected_members"]) is not int or type(item["active_members"]) is not int or not 0 <= item["active_members"] <= item["expected_members"]:
+            raise ValueError("invalid Linux RAID status")
+        sync = item["sync"]
+        if not isinstance(sync, dict) or set(sync) != {"action", "percent"} or sync["action"] not in {None, "recovery", "resync", "reshape", "check"} or type(sync["percent"]) not in {int, float} or not 0 <= sync["percent"] <= 100:
+            raise ValueError("invalid Linux RAID progress")
+        md_arrays.append({key: item[key] for key in ("name", "level", "state", "expected_members", "active_members", "health", "sync")})
+        for key in ("name", "level", "state"):
+            bounded_string(md_arrays[-1][key], 64)
+    zfs_pools = []
+    for item in software["zfs"]["pools"]:
+        if not isinstance(item, dict) or set(item) != {"name", "size_bytes", "allocated_bytes", "free_bytes", "health", "status"} or item["status"] not in {"healthy", "degraded", "failing", "unknown"} or any(type(item[key]) is not int or item[key] < 0 for key in ("size_bytes", "allocated_bytes", "free_bytes")):
+            raise ValueError("invalid ZFS status")
+        zfs_pools.append(item)
+        bounded_string(item["name"], 64); bounded_string(item["health"], 32)
+    hardware = value["hardware_raid"]
+    if not isinstance(hardware, dict) or not {"controllers", "vendor_reports"}.issubset(hardware) or not isinstance(hardware["controllers"], list) or len(hardware["controllers"]) > 64 or not isinstance(hardware["vendor_reports"], list) or len(hardware["vendor_reports"]) > 64:
+        raise ValueError("invalid hardware RAID status")
+    for report in hardware["vendor_reports"]:
+        if not isinstance(report, dict) or type(report.get("healthy")) is not bool or not all(isinstance(report.get(key), list) and len(report[key]) <= 256 for key in ("physical_drives", "logical_volumes", "cache_protection")):
+            raise ValueError("invalid hardware RAID report")
+    return {"schema": 1, "generated_unix": value["generated_unix"], "overall": value["overall"], "disks": safe_disks, "software_raid": {"md_arrays": md_arrays, "zfs": {"available": software["zfs"]["available"], "pools": zfs_pools}}, "hardware_raid": {"controller_count": len(hardware["controllers"]), "full_visibility_count": len(hardware["vendor_reports"]), "attention_count": sum(report["healthy"] is False for report in hardware["vendor_reports"])}}
+
 def dashboard() -> dict:
     result = {"schema": 1, "components": {}}
     components = result["components"]
@@ -371,6 +417,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, image_feed())
             except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
                 self.send_json(503, {"schema": 1, "error": "images-unavailable"})
+        elif self.path == "/api/v1/storage":
+            try:
+                self.send_json(200, storage_feed())
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                self.send_json(503, {"schema": 1, "error": "storage-unavailable"})
         else:
             self.send_json(404, {"schema": 1, "error": "not-found"})
 

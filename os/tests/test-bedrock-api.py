@@ -62,7 +62,7 @@ def main() -> None:
         }]}), encoding="utf-8")
         capabilities.write_text(json.dumps({"schema": 1, "status": "ready"}), encoding="utf-8")
         hardware.write_text(json.dumps({"schema": 2, "cpu": {"architecture": "x86_64", "model": "Bedrock CPU", "logical_processors": 8, "sockets": 1, "cores_per_socket": 4, "threads_per_core": 2, "virtualization": "AMD-V", "virtualization_supported": True}, "memory": {"total_bytes": 16000000000}, "disks": [{"name": "sda", "path": "/dev/sda", "model": "Bedrock SSD", "vendor": "Bedrock", "size_bytes": 1000000000, "rotational": False, "transport": "sata", "removable": False, "serial": "must-not-leak"}], "storage_controllers": [{"address": "0000:00:17.0", "class": "sata", "description": "0000:00:17.0 SATA controller"}], "networks": [{"name": "enp1s0", "mac": "00:11:22:33:44:55", "mtu": 1500, "state": "UP", "link_type": "ether"}], "gpus": [{"name": "card0", "pci_address": "0000:01:00.0", "vendor": "AMD", "vendor_id": "0x1002", "device_id": "0x1234", "driver": "amdgpu", "iommu_group": "7", "iommu_group_devices": ["0000:01:00.0"], "boot_vga": True, "recognized_vendor": True}], "usb_devices": [{"id": "1-1"}]}), encoding="utf-8")
-        storage.write_text(json.dumps({"schema": 1, "generated_unix": 100, "overall": "healthy", "read_only": True, "disks": [{}, {}]}), encoding="utf-8")
+        storage.write_text(json.dumps({"schema": 1, "generated_unix": 100, "overall": "healthy", "read_only": True, "disks": [{"path": "/dev/sda", "serial": "private-serial", "model": "Bedrock SSD", "size_bytes": 1000000000, "transport": "sata", "smart": {"available": True, "passed": True, "temperature_c": 31, "power_on_hours": 1000, "power_mode": "ACTIVE", "command_exit": 0, "health": "healthy"}}, {"path": "/dev/sdb", "serial": None, "model": "Archive", "size_bytes": 2000000000, "transport": "sas", "smart": {"available": False, "passed": None, "temperature_c": None, "power_on_hours": None, "power_mode": "unknown", "command_exit": 1, "health": "unknown"}}], "software_raid": {"md_arrays": [{"name": "md0", "path": "/dev/md0", "level": "raid1", "state": "active", "member_pattern": "UU", "expected_members": 2, "active_members": 2, "health": "healthy", "sync": {"action": None, "percent": 0}}], "zfs": {"available": True, "pools": [{"name": "main", "size_bytes": 1000, "allocated_bytes": 400, "free_bytes": 600, "health": "ONLINE", "status": "healthy"}]}}, "hardware_raid": {"controllers": [{"address": "0000:01:00.0"}], "management_tools": [], "vendor_reports": [], "explanation": "limited"}}), encoding="utf-8")
         alerts.write_text(json.dumps({"schema": 1, "generated_unix": 101, "attention_required": True, "active_count": 1,
             "active": [{"alert_id": "disk-smart:sda", "kind": "disk-smart", "resource": "/dev/sda", "severity": "critical", "first_seen_unix": 90, "last_seen_unix": 101}]}), encoding="utf-8")
         vms.write_text(json.dumps({"schema": 1, "generated_unix": 102, "domains": [{"name": "private-name", "state": "running", "autostart": True, "vcpus": 4, "memory_mib": 8192, "snapshot_count": 2, "image_attachments": ["windows"], "network_attachments": ["private-lan"]}, {"name": "other", "state": "shut off", "autostart": False, "vcpus": 2, "memory_mib": 2048, "snapshot_count": 0, "image_attachments": [], "network_attachments": []}]}), encoding="utf-8")
@@ -101,7 +101,7 @@ def main() -> None:
             assert request(socket_path, "GET", "/api/v1/health")[0] == 200
             schema_status, schema_body = request(socket_path, "GET", "/api/v1/openapi.json")
             assert schema_status == 200 and schema_body["openapi"] == "3.1.0"
-            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/backups", "/api/v1/hardware", "/api/v1/images", "/api/v1/remote/devices", "/api/v1/virtualization/capabilities", "/api/v1/vms"}
+            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/backups", "/api/v1/hardware", "/api/v1/images", "/api/v1/remote/devices", "/api/v1/storage", "/api/v1/virtualization/capabilities", "/api/v1/vms"}
             assert schema_body["security"] == [{"bearerAuth": []}]
             assert request(socket_path, "GET", "/api/v1/virtualization/capabilities") == (200, {"schema": 1, "data": {"schema": 1, "status": "ready"}})
             dashboard_status, dashboard_body = request(socket_path, "GET", "/api/v1/dashboard")
@@ -130,6 +130,9 @@ def main() -> None:
             assert vm_status == 200 and vm_body["domains"][0]["name"] == "private-name" and vm_body["domains"][0]["snapshot_count"] == 2
             image_status, image_body = request(socket_path, "GET", "/api/v1/images")
             assert image_status == 200 and image_body["images"][0]["sha256"] == "c" * 64 and "path" not in json.dumps(image_body)
+            storage_status, storage_body = request(socket_path, "GET", "/api/v1/storage")
+            assert storage_status == 200 and storage_body["disks"][0]["smart"]["temperature_c"] == 31 and storage_body["software_raid"]["zfs"]["pools"][0]["name"] == "main"
+            assert not any(secret in json.dumps(storage_body) for secret in ["/dev/sda", "/dev/md0", "private-serial", "0000:01:00.0", "member_pattern"])
             alerts.write_text("not-json", encoding="utf-8")
             partial_status, partial_body = request(socket_path, "GET", "/api/v1/dashboard")
             assert partial_status == 200 and partial_body["partial"] is True
@@ -158,6 +161,8 @@ def main() -> None:
             assert request(socket_path, "GET", "/api/v1/vms") == (503, {"schema": 1, "error": "vms-unavailable"})
             images.write_text('{"schema":1,"images":[{"name":"bad","path":"/secret"}]}', encoding="utf-8")
             assert request(socket_path, "GET", "/api/v1/images") == (503, {"schema": 1, "error": "images-unavailable"})
+            storage.write_text('{"schema":1,"overall":"healthy"}', encoding="utf-8")
+            assert request(socket_path, "GET", "/api/v1/storage") == (503, {"schema": 1, "error": "storage-unavailable"})
             assert request(socket_path, "GET", "/api/v2/health")[0] == 404
             assert request(socket_path, "POST", "/api/v1/health", None)[0] == 401
             assert request(socket_path, "POST", "/api/v1/health")[0] == 405
