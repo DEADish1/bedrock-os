@@ -43,8 +43,8 @@ quota
 restic
 samba
 sg3-utils
-smartmontools
 skopeo
+smartmontools
 sudo
 swtpm
 swtpm-tools
