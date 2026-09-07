@@ -14,6 +14,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Replaced sample image cards and the simulated upload action with authenticated verified inventory, checksum/provenance context, and explicit disconnected, unavailable, empty, and read-only states.
 - Added an authenticated, strictly validated storage health route exposing capacity, SMART, software RAID/ZFS, rebuild, and bounded hardware-RAID summaries without device paths, serials, member patterns, controller addresses, slot identifiers, or vendor descriptions.
 - Replaced the fabricated Storage pool and drive examples with authenticated live health, capacity, software-RAID/ZFS, rebuild-progress, disk-temperature, and hardware-RAID visibility views, including explicit disconnected, unavailable, empty, and read-only states.
+- Replaced the simulated Remote Access pairing, sample devices, identity flow, and client downloads with authenticated trusted-device status covering active, expired, revoked, empty, disconnected, and unavailable states.
 
 ### Release readiness 0.9
 
