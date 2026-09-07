@@ -15,6 +15,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Added an authenticated, strictly validated storage health route exposing capacity, SMART, software RAID/ZFS, rebuild, and bounded hardware-RAID summaries without device paths, serials, member patterns, controller addresses, slot identifiers, or vendor descriptions.
 - Replaced the fabricated Storage pool and drive examples with authenticated live health, capacity, software-RAID/ZFS, rebuild-progress, disk-temperature, and hardware-RAID visibility views, including explicit disconnected, unavailable, empty, and read-only states.
 - Replaced the simulated Remote Access pairing, sample devices, identity flow, and client downloads with authenticated trusted-device status covering active, expired, revoked, empty, disconnected, and unavailable states.
+- Added a live Activity interface for bounded task progress, active health alerts, and audit history with independent empty, partial, disconnected, and unavailable states.
 
 ### Release readiness 0.9
 
