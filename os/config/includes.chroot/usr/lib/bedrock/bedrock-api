@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 import re
+import socket
 import socketserver
 import stat
 from http.server import BaseHTTPRequestHandler
@@ -27,6 +28,7 @@ IMAGES = pathlib.Path(os.environ.get("BEDROCK_API_IMAGES", "/var/lib/bedrock/api
 UPDATE_POLICY = pathlib.Path(os.environ.get("BEDROCK_API_UPDATE_POLICY", "/var/lib/bedrock/settings/update-policy.json"))
 DEFAULT_UPDATE_POLICY = pathlib.Path(os.environ.get("BEDROCK_API_DEFAULT_UPDATE_POLICY", "/usr/share/bedrock/default-update-policy.json"))
 NAS = pathlib.Path(os.environ.get("BEDROCK_API_NAS", "/var/lib/bedrock/storage/nas.json"))
+ACTION_BROKER = pathlib.Path(os.environ.get("BEDROCK_API_ACTION_BROKER", "/run/bedrock-action-broker/action.sock"))
 
 TASK_STATES = {"queued", "running", "succeeded", "failed", "cancelled"}
 TASK_UNITS = {"bytes", "items", "percent", "steps"}
@@ -69,6 +71,53 @@ def authorized(value: str | None) -> bool:
         return any(isinstance(item, dict) and set(item) == {"name", "sha256", "created_at", "revoked"} and item["revoked"] is False and hmac.compare_digest(item["sha256"], digest) for item in state["tokens"])
     except (OSError, ValueError, json.JSONDecodeError, TypeError):
         return False
+
+def update_policy_action(request_id: str, body: object) -> dict:
+    if not DEVICE_ID.fullmatch(request_id):
+        raise ValueError("invalid idempotency key")
+    if not isinstance(body, dict) or set(body) != {"schema", "setting", "value", "beta_risk_acknowledged"} or body["schema"] != 1:
+        raise ValueError("invalid update-policy request")
+    setting, value, acknowledged = body["setting"], body["value"], body["beta_risk_acknowledged"]
+    if type(acknowledged) is not bool:
+        raise ValueError("invalid update-policy request")
+    if not ((setting == "automatic_checks" and type(value) is bool and not acknowledged) or
+            (setting == "channel" and value == "stable" and not acknowledged) or
+            (setting == "channel" and value == "beta" and acknowledged)):
+        raise ValueError("invalid update-policy request")
+    broker_request = {"schema": 1, "request_id": request_id, "action": "update-policy",
+                      "setting": setting, "value": value, "beta_risk_acknowledged": acknowledged}
+    raw = json.dumps(broker_request, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.settimeout(5)
+    try:
+        client.connect(str(ACTION_BROKER))
+        client.sendall(raw)
+        client.shutdown(socket.SHUT_WR)
+        chunks, length = [], 0
+        while True:
+            chunk = client.recv(min(4096, 4097 - length))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            length += len(chunk)
+            if length > 4096:
+                raise OSError("oversized broker response")
+    finally:
+        client.close()
+    try:
+        result = json.loads(b"".join(chunks).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise OSError("invalid broker response") from error
+    if not isinstance(result, dict) or result.get("schema") != 1 or result.get("request_id") != request_id:
+        raise OSError("invalid broker response")
+    if result.get("status") == "succeeded" and set(result) == {"schema", "request_id", "status", "replayed"} and type(result["replayed"]) is bool:
+        return result
+    error = result.get("error")
+    if result.get("status") in {"rejected", "failed"} and isinstance(error, dict) and set(error) == {"code", "message"} and error.get("code") in {
+        "idempotency-conflict", "action-failed", "internal-error"
+    }:
+        return result
+    raise OSError("invalid broker response")
 
 def bounded_string(value: object, maximum: int) -> str:
     if not isinstance(value, str) or not value or len(value) > maximum or any(ord(char) < 32 for char in value):
@@ -483,6 +532,37 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(401, {"schema": 1, "error": "unauthorized"})
             return
         self.send_json(405, {"schema": 1, "error": "read-only-foundation"})
+
+    def do_PUT(self) -> None:
+        if not authorized(self.headers.get("Authorization")):
+            self.send_json(401, {"schema": 1, "error": "unauthorized"})
+            return
+        if self.path != "/api/v1/settings":
+            self.send_json(405, {"schema": 1, "error": "method-not-allowed"})
+            return
+        if self.headers.get("Transfer-Encoding") is not None or self.headers.get("Content-Type") != "application/json":
+            self.send_json(400, {"schema": 1, "error": "invalid-request"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", ""))
+            if not 1 <= length <= 4096:
+                raise ValueError("invalid body length")
+            body = json.loads(self.rfile.read(length).decode("utf-8"))
+            result = update_policy_action(self.headers.get("Idempotency-Key", ""), body)
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+            self.send_json(400, {"schema": 1, "error": "invalid-request"})
+            return
+        except (OSError, socket.timeout):
+            self.send_json(503, {"schema": 1, "error": "action-broker-unavailable"})
+            return
+        if result["status"] == "succeeded":
+            self.send_json(200, result)
+        elif result["error"]["code"] == "idempotency-conflict":
+            self.send_json(409, result)
+        elif result["error"]["code"] == "action-failed":
+            self.send_json(422, result)
+        else:
+            self.send_json(503, {"schema": 1, "error": "action-broker-unavailable"})
 
     def log_message(self, _format: str, *_args: object) -> None:
         return

@@ -9,9 +9,11 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 API = ROOT / "config/includes.chroot/usr/lib/bedrock/bedrock-api"
+BROKER = ROOT / "config/includes.chroot/usr/lib/bedrock/bedrock-action-broker"
 TOKEN = "a" * 64
 
 
@@ -26,10 +28,13 @@ class UnixConnection(http.client.HTTPConnection):
         self.sock.connect(str(self.path))
 
 
-def request(socket_path: pathlib.Path, method: str, path: str, token: str | None = TOKEN):
+def request(socket_path: pathlib.Path, method: str, path: str, token: str | None = TOKEN, body=None, extra_headers=None):
     connection = UnixConnection(socket_path)
     headers = {} if token is None else {"Authorization": f"Bearer {token}"}
-    connection.request(method, path, headers=headers)
+    if extra_headers:
+        headers.update(extra_headers)
+    payload = None if body is None else json.dumps(body).encode("utf-8")
+    connection.request(method, path, body=payload, headers=headers)
     response = connection.getresponse()
     body = json.loads(response.read())
     connection.close()
@@ -59,6 +64,12 @@ def main() -> None:
         update_policy = work / "update-policy.json"
         default_update_policy = work / "default-update-policy.json"
         nas = work / "nas.json"
+        action_socket = work / "action.sock"
+        action_results = work / "action-results.json"
+        action_calls = work / "action-calls"
+        action_helper = work / "update-helper"
+        action_helper.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$BEDROCK_TEST_CALLS\"\n", encoding="utf-8")
+        action_helper.chmod(0o755)
         tokens.write_text(json.dumps({"schema": 1, "tokens": [{
             "name": "test-client", "sha256": hashlib.sha256(TOKEN.encode()).hexdigest(),
             "created_at": "2026-08-31T00:00:00Z", "revoked": False,
@@ -94,7 +105,25 @@ def main() -> None:
             "BEDROCK_API_UPDATE_POLICY": str(update_policy),
             "BEDROCK_API_DEFAULT_UPDATE_POLICY": str(default_update_policy),
             "BEDROCK_API_NAS": str(nas),
+            "BEDROCK_API_ACTION_BROKER": str(action_socket),
         }
+        broker_environment = os.environ | {
+            "BEDROCK_ACTION_BROKER_TEST_MODE": "1",
+            "BEDROCK_ACTION_BROKER_EXPECTED_UID": str(os.getuid()),
+            "BEDROCK_ACTION_BROKER_SOCKET": str(action_socket),
+            "BEDROCK_ACTION_BROKER_STATE": str(action_results),
+            "BEDROCK_ACTION_BROKER_UPDATE_HELPER": str(action_helper),
+            "BEDROCK_TEST_CALLS": str(action_calls),
+        }
+        broker = subprocess.Popen([sys.executable, str(BROKER)], env=broker_environment)
+        for _ in range(50):
+            if action_socket.exists():
+                break
+            if broker.poll() is not None:
+                raise AssertionError("broker exited before creating its socket")
+            time.sleep(0.05)
+        else:
+            raise AssertionError("broker socket was not created")
         process = subprocess.Popen([sys.executable, str(API)], env=environment)
         try:
             for _ in range(50):
@@ -112,6 +141,7 @@ def main() -> None:
             assert schema_status == 200 and schema_body["openapi"] == "3.1.0"
             assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/backups", "/api/v1/hardware", "/api/v1/images", "/api/v1/remote/devices", "/api/v1/settings", "/api/v1/storage", "/api/v1/users", "/api/v1/virtualization/capabilities", "/api/v1/vms"}
             assert schema_body["security"] == [{"bearerAuth": []}]
+            assert set(schema_body["paths"]["/api/v1/settings"]) == {"get", "put"}
             assert request(socket_path, "GET", "/api/v1/virtualization/capabilities") == (200, {"schema": 1, "data": {"schema": 1, "status": "ready"}})
             dashboard_status, dashboard_body = request(socket_path, "GET", "/api/v1/dashboard")
             assert dashboard_status == 200 and dashboard_body["partial"] is False
@@ -143,6 +173,17 @@ def main() -> None:
             assert storage_status == 200 and storage_body["disks"][0]["smart"]["temperature_c"] == 31 and storage_body["software_raid"]["zfs"]["pools"][0]["name"] == "main"
             assert not any(secret in json.dumps(storage_body) for secret in ["/dev/sda", "/dev/md0", "private-serial", "0000:01:00.0", "member_pattern"])
             assert request(socket_path, "GET", "/api/v1/settings") == (200, {"schema": 1, "updates": {"automatic_checks": True, "setup_choice_recorded": True, "channel": "stable", "automatic_install": False}, "telemetry_enabled": False})
+            update_id = str(uuid.uuid4())
+            update_body = {"schema": 1, "setting": "channel", "value": "beta", "beta_risk_acknowledged": True}
+            update_headers = {"Content-Type": "application/json", "Idempotency-Key": update_id}
+            assert request(socket_path, "PUT", "/api/v1/settings", body=update_body, extra_headers=update_headers) == (200, {"schema": 1, "request_id": update_id, "status": "succeeded", "replayed": False})
+            assert request(socket_path, "PUT", "/api/v1/settings", body=update_body, extra_headers=update_headers)[1]["replayed"] is True
+            conflict_body = update_body | {"value": "stable", "beta_risk_acknowledged": False}
+            assert request(socket_path, "PUT", "/api/v1/settings", body=conflict_body, extra_headers=update_headers)[0] == 409
+            assert action_calls.read_text(encoding="utf-8").splitlines() == ["channel beta I_ACCEPT_PRERELEASE_UPDATE_RISK"]
+            assert request(socket_path, "PUT", "/api/v1/settings", None, update_body, update_headers)[0] == 401
+            assert request(socket_path, "PUT", "/api/v1/settings", body=update_body, extra_headers={"Content-Type": "application/json"})[0] == 400
+            assert request(socket_path, "PUT", "/api/v1/settings", body=update_body | {"command": "id"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
             users_status, users_body = request(socket_path, "GET", "/api/v1/users")
             assert users_status == 200 and users_body["users"][0]["credential_generation"] == 1 and users_body["groups"][0]["member_count"] == 1
             assert not any(secret in json.dumps(users_body) for secret in ["/private/path", "private-share", "private-snapshot", "members", "datasets", "shares", "snapshots"])
@@ -193,6 +234,8 @@ def main() -> None:
         finally:
             process.terminate()
             process.wait(timeout=5)
+            broker.terminate()
+            broker.wait(timeout=5)
     print("Bedrock local API tests passed.")
 
 

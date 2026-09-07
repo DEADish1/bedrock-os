@@ -4,7 +4,8 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
-- Added a separately hardened root action broker with kernel Unix-peer authentication, strict bounded update-policy requests, shell-free guarded-helper delegation, output suppression, and a persistent bounded idempotency ledger that rejects conflicting request reuse; public API mutations remain disabled pending route-level authorization tests.
+- Added authenticated idempotent update-policy mutation through `PUT /api/v1/settings`, including strict request/header validation, explicit beta-risk acknowledgement, broker failure/conflict mapping, and OpenAPI plus end-to-end API coverage.
+- Added a separately hardened root action broker with kernel Unix-peer authentication, strict bounded update-policy requests, shell-free guarded-helper delegation, output suppression, and a persistent bounded idempotency ledger that rejects conflicting request reuse.
 - Added authenticated, strictly validated `/api/v1/apps` and `/api/v1/backups` read contracts backed by privacy-safe snapshots that exclude registry digests, paths, repositories, credentials, and snapshot identifiers.
 - Replaced the Apps and Backup interface placeholders with authenticated live status views that preserve the in-memory-only token boundary and isolate partial service failures.
 - Added a dedicated authenticated hardware inventory route with strict validation and privacy filtering for device, network, bus, and passthrough identifiers.
