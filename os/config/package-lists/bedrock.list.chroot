@@ -38,6 +38,7 @@ python3-minimal
 qemu-system-x86
 qemu-utils
 quota
+restic
 samba
 sg3-utils
 smartmontools

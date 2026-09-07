@@ -129,7 +129,8 @@ Exit: approved clients connect remotely, survive network changes, and can be imm
 
 ## 0.8.0 — Backup, recovery, apps, and operations
 
-- [ ] Implement local and remote backup plans, schedules, retention, encryption, and restore.
+- [x] Implement local and remote backup plans, schedules, retention, encryption, and restore.
+  - Root-only restic plans support confined local and bounded SFTP repositories, external owner-only passwords, daily/weekly UTC scheduling, daily/weekly/monthly retention, verified snapshot history, and exact-confirmation restores into new destinations. See [encrypted backups](docs/BACKUP.md).
 - [x] Add configuration export/import and bare-metal recovery documentation.
   - Exact-confirmation export/import uses a bounded allowlist, version and SHA-256 binding, link/traversal rejection, staged replacement, local rollback copies, and an explicit reboot gate while excluding credentials and bulk data. See [bare-metal recovery](docs/BARE-METAL-RECOVERY.md).
 - [ ] Build an isolated application/service system with resource limits and update policy.
