@@ -130,7 +130,8 @@ Exit: approved clients connect remotely, survive network changes, and can be imm
 ## 0.8.0 — Backup, recovery, apps, and operations
 
 - [ ] Implement local and remote backup plans, schedules, retention, encryption, and restore.
-- [ ] Add configuration export/import and bare-metal recovery documentation.
+- [x] Add configuration export/import and bare-metal recovery documentation.
+  - Exact-confirmation export/import uses a bounded allowlist, version and SHA-256 binding, link/traversal rejection, staged replacement, local rollback copies, and an explicit reboot gate while excluding credentials and bulk data. See [bare-metal recovery](docs/BARE-METAL-RECOVERY.md).
 - [ ] Build an isolated application/service system with resource limits and update policy.
 - [ ] Add notification destinations and actionable health alerts.
 - [x] Implement diagnostic bundles with secret redaction and explicit user consent.

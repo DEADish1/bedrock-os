@@ -1,0 +1,124 @@
+#!/usr/bin/python3
+import hashlib, io, json, os, pathlib, shutil, stat, sys, tarfile, tempfile, time
+
+EXPORT_PHRASE = "EXPORT BEDROCK CONFIGURATION"
+RESTORE_PHRASE = "RESTORE BEDROCK CONFIGURATION"
+FILES = (
+    "setup/complete.json", "settings/update-policy.json", "storage/resources.json",
+    "storage/nas.json", "storage/services/nfs-exports.json",
+    "virtualization/domains.json", "virtualization/images.json",
+    "virtualization/image-provenance.json", "virtualization/networks.json",
+    "virtualization/network-attachments.json", "virtualization/attachments.json",
+    "virtualization/passthrough.json",
+)
+
+def fail(message): raise SystemExit(f"error: {message}")
+def regular(path, limit):
+    info=path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_size>limit: raise ValueError("unsafe file")
+    return path.read_bytes()
+def add(bundle,name,data):
+    info=tarfile.TarInfo(name); info.size=len(data); info.mode=0o600; info.mtime=0
+    bundle.addfile(info,io.BytesIO(data))
+def roots():
+    test=os.environ.get("BEDROCK_CONFIG_BACKUP_TEST_MODE")=="1"
+    if not test and os.geteuid()!=0: fail("configuration backup requires root")
+    root=pathlib.Path(os.environ.get("BEDROCK_CONFIG_BACKUP_ROOT","/")) if test else pathlib.Path("/")
+    return root,root/"var/lib/bedrock"
+def safe_output(path):
+    direct=path.parent
+    if path.suffixes[-2:]!=[".tar",".gz"] or path.exists() or path.is_symlink() or not direct.is_dir() or direct.is_symlink(): fail("output must be a new .tar.gz file in a direct directory")
+    return direct.resolve()
+def state_path(state,relative,create=False):
+    if not state.is_dir() or state.is_symlink(): fail("Bedrock state directory is unsafe")
+    current=state
+    parts=pathlib.PurePosixPath(relative).parts
+    for index,part in enumerate(parts[:-1]):
+        current=current/part
+        if not current.exists():
+            if not create: return current.joinpath(*parts[index+1:])
+            current.mkdir(mode=0o700)
+        if not current.is_dir() or current.is_symlink(): fail("configuration state path is unsafe")
+    return current/parts[-1]
+def release(root):
+    raw=regular(root/"etc/bedrock-release",65536).decode("utf-8")
+    values=dict(line.split("=",1) for line in raw.splitlines() if "=" in line)
+    value=values.get("BEDROCK_VERSION","")
+    if not value or len(value)>64: fail("Bedrock release metadata is unavailable")
+    return value
+def export_bundle(root,state,archive):
+    parent=safe_output(archive); records=[]; payload={}
+    for relative in FILES:
+        path=state_path(state,relative)
+        if not path.exists(): continue
+        try:
+            raw=regular(path,1048576); json.loads(raw)
+        except (OSError,ValueError,json.JSONDecodeError,UnicodeError): fail(f"configuration source is unsafe: {relative}")
+        target="configuration/"+relative; payload[target]=raw
+        records.append({"path":relative,"sha256":hashlib.sha256(raw).hexdigest(),"size":len(raw)})
+    manifest={"schema":1,"bedrock_version":release(root),"created_unix":int(os.environ.get("BEDROCK_CONFIG_BACKUP_TEST_NOW",str(int(time.time())))),"files":records,"excludes":["api credentials","pairing keys","user data","VM disks","logs"]}
+    handle,temp=tempfile.mkstemp(prefix=".bedrock-config.",suffix=".tar.gz",dir=parent); os.close(handle)
+    try:
+        with tarfile.open(temp,"w:gz",format=tarfile.PAX_FORMAT) as bundle:
+            add(bundle,"configuration/manifest.json",(json.dumps(manifest,sort_keys=True,separators=(",",":"))+"\n").encode())
+            for name in sorted(payload): add(bundle,name,payload[name])
+        os.chmod(temp,0o600); os.replace(temp,archive)
+    finally:
+        if os.path.exists(temp): os.unlink(temp)
+    print(json.dumps({"schema":1,"status":"exported","files":len(records),"output":str(archive)},sort_keys=True,separators=(",",":")))
+def load_bundle(root,archive):
+    raw=regular(archive,16777216)
+    with tarfile.open(fileobj=io.BytesIO(raw),mode="r:gz") as bundle:
+        members=bundle.getmembers()
+        if len(members)>len(FILES)+1 or any(not member.isfile() or member.issym() or member.islnk() for member in members): fail("backup archive contains unsafe members")
+        names=[member.name for member in members]
+        if len(names)!=len(set(names)) or "configuration/manifest.json" not in names: fail("backup archive structure is invalid")
+        try: manifest=json.load(bundle.extractfile("configuration/manifest.json"))
+        except (ValueError,TypeError,json.JSONDecodeError): fail("backup manifest is invalid")
+        if not isinstance(manifest,dict) or set(manifest)!={"schema","bedrock_version","created_unix","files","excludes"} or manifest["schema"]!=1 or manifest["bedrock_version"]!=release(root) or type(manifest["created_unix"]) is not int or not isinstance(manifest["files"],list): fail("backup is incompatible")
+        payload={}; expected={"configuration/manifest.json"}
+        for item in manifest["files"]:
+            if not isinstance(item,dict) or set(item)!={"path","sha256","size"} or item["path"] not in FILES or type(item["size"]) is not int or not 0<=item["size"]<=1048576 or not isinstance(item["sha256"],str) or len(item["sha256"])!=64: fail("backup manifest entry is invalid")
+            name="configuration/"+item["path"]; expected.add(name)
+            stream=bundle.extractfile(name)
+            if stream is None: fail("backup file is missing")
+            content=stream.read(1048577)
+            if len(content)!=item["size"] or not hashlib.sha256(content).hexdigest()==item["sha256"]: fail("backup integrity check failed")
+            try: json.loads(content)
+            except (ValueError,json.JSONDecodeError,UnicodeError): fail("backup configuration is invalid")
+            payload[item["path"]]=content
+        if set(names)!=expected or len(payload)!=len(manifest["files"]): fail("backup archive structure is invalid")
+        return payload
+def restore(root,state,archive):
+    payload=load_bundle(root,archive)
+    recovery_root=state_path(state,"recovery/placeholder",create=True).parent
+    recovery=recovery_root/("config-"+str(int(os.environ.get("BEDROCK_CONFIG_BACKUP_TEST_NOW",str(int(time.time()))))) )
+    if recovery.exists() or recovery.is_symlink(): fail("recovery directory already exists")
+    recovery.mkdir(parents=True,mode=0o700)
+    staged=[]; replaced=[]
+    try:
+        for relative,content in payload.items():
+            target=state_path(state,relative,create=True)
+            if target.exists():
+                old=regular(target,1048576); backup=recovery/relative; backup.parent.mkdir(parents=True,exist_ok=True); backup.write_bytes(old); os.chmod(backup,0o600)
+            handle,temp=tempfile.mkstemp(prefix=".restore.",dir=target.parent)
+            with os.fdopen(handle,"wb") as output: output.write(content); output.flush(); os.fsync(output.fileno())
+            os.chmod(temp,0o600); staged.append((pathlib.Path(temp),target))
+        for temp,target in staged: os.replace(temp,target); replaced.append(target)
+    except Exception:
+        for target in replaced:
+            backup=recovery/target.relative_to(state)
+            if backup.exists(): os.replace(backup,target)
+            elif target.exists(): target.unlink()
+        raise
+    print(json.dumps({"schema":1,"status":"restored","files":len(payload),"recovery":str(recovery),"reboot_required":True},sort_keys=True,separators=(",",":")))
+def main():
+    if len(sys.argv)!=4 or sys.argv[1] not in {"export","restore"}: fail("usage: bedrock-config-backup export|restore EXACT_PHRASE ARCHIVE.tar.gz")
+    command,phrase,archive=sys.argv[1],sys.argv[2],pathlib.Path(sys.argv[3]); root,state=roots()
+    if command=="export":
+        if phrase!=EXPORT_PHRASE: fail("export consent phrase is invalid")
+        export_bundle(root,state,archive)
+    else:
+        if phrase!=RESTORE_PHRASE: fail("restore confirmation phrase is invalid")
+        restore(root,state,archive)
+if __name__=="__main__": main()
