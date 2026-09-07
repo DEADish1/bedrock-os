@@ -17,6 +17,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Replaced the simulated Remote Access pairing, sample devices, identity flow, and client downloads with authenticated trusted-device status covering active, expired, revoked, empty, disconnected, and unavailable states.
 - Added a live Activity interface for bounded task progress, active health alerts, and audit history with independent empty, partial, disconnected, and unavailable states.
 - Added an authenticated Settings read contract exposing validated update-check and release-channel policy plus enforced manual installation and telemetry-disabled state without host, account, network, or credential data.
+- Added the live read-only Settings policy view and a Help index connecting the interface to installation, setup, administration, troubleshooting, privacy/diagnostics, and support guidance.
 
 ### Release readiness 0.9
 
