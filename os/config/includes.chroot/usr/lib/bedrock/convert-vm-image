@@ -81,5 +81,6 @@ mv "$provenance_new" "$provenance" || fail "provenance commit failed"
 provenance_new=; images_replaced=0; rm -f "$rollback"; installed=0
 trap - EXIT INT TERM
 rmdir "$lock"
+[ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ] || /usr/lib/bedrock/collect-image-status
 jq -S -n --arg source "$source_name" --arg target "$target" --arg type "$target_type" --arg hash "$target_hash" --arg path "$destination" --argjson size "$target_size" \
   '{schema:1,status:"converted",source:$source,target:$target,type:$type,sha256:$hash,size_bytes:$size,path:$path,attached:false}'

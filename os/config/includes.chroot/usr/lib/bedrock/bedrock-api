@@ -23,6 +23,7 @@ OPENAPI = pathlib.Path(os.environ.get("BEDROCK_API_OPENAPI", "/usr/share/bedrock
 REMOTE = pathlib.Path(os.environ.get("BEDROCK_API_REMOTE", "/var/lib/bedrock/remote/status.json"))
 APPS = pathlib.Path(os.environ.get("BEDROCK_API_APPS", "/var/lib/bedrock/api/sources/apps.json"))
 BACKUPS = pathlib.Path(os.environ.get("BEDROCK_API_BACKUPS", "/var/lib/bedrock/api/sources/backups.json"))
+IMAGES = pathlib.Path(os.environ.get("BEDROCK_API_IMAGES", "/var/lib/bedrock/api/sources/images.json"))
 
 TASK_STATES = {"queued", "running", "succeeded", "failed", "cancelled"}
 TASK_UNITS = {"bytes", "items", "percent", "steps"}
@@ -241,6 +242,18 @@ def vm_feed() -> dict:
         raise ValueError("duplicate virtual machine")
     return value
 
+def image_feed() -> dict:
+    value = regular_json(IMAGES, 524288)
+    if not isinstance(value, dict) or set(value) != {"schema", "images"} or value["schema"] != 1 or not isinstance(value["images"], list) or len(value["images"]) > 256:
+        raise ValueError("invalid image status")
+    fields = {"name", "type", "sha256", "size_bytes", "converted"}
+    for item in value["images"]:
+        if not isinstance(item, dict) or set(item) != fields or not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", bounded_string(item["name"], 32)) or item["type"] not in {"iso", "img", "qcow2", "vhdx", "vmdk"} or not re.fullmatch(r"[0-9a-f]{64}", bounded_string(item["sha256"], 64)) or type(item["size_bytes"]) is not int or not 1 <= item["size_bytes"] <= 4398046511104 or type(item["converted"]) is not bool:
+            raise ValueError("invalid image")
+    if len({item["name"] for item in value["images"]}) != len(value["images"]):
+        raise ValueError("duplicate image")
+    return value
+
 def dashboard() -> dict:
     result = {"schema": 1, "components": {}}
     components = result["components"]
@@ -353,6 +366,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, vm_feed())
             except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
                 self.send_json(503, {"schema": 1, "error": "vms-unavailable"})
+        elif self.path == "/api/v1/images":
+            try:
+                self.send_json(200, image_feed())
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                self.send_json(503, {"schema": 1, "error": "images-unavailable"})
         else:
             self.send_json(404, {"schema": 1, "error": "not-found"})
 

@@ -10,6 +10,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Added the live Hardware interface with capacity, virtualization, graphics, and connection summaries plus explicit unauthenticated and unavailable states.
 - Added an authenticated, strictly validated managed-VM inventory route exposing lifecycle, allocation, snapshot, and logical attachment status without host paths, console sockets, MAC addresses, raw definitions, or passthrough topology.
 - Replaced the sample VM table and simulated create success path with authenticated live inventory, explicit disconnected/unavailable/empty states, and an honest read-only boundary until mutation routes exist.
+- Added a root-generated, path-free VM image status view and authenticated image inventory contract with format, size, SHA-256, and conversion provenance, refreshed after boot initialization, imports, and conversions.
 
 ### Release readiness 0.9
 

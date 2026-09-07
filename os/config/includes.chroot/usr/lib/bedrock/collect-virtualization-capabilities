@@ -61,6 +61,7 @@ if [ "${BEDROCK_VM_TEST_MODE:-0}" != 1 ]; then
     [ ! -e "$target" ] || { [ -f "$target" ] && [ ! -L "$target" ]; } || { printf 'error: virtualization state is indirect: %s\n' "$target" >&2; exit 1; }
     [ -e "$target" ] || install -m 0600 "/usr/share/bedrock/empty-vm-$state.json" "$target"
   done
+  /usr/lib/bedrock/collect-image-status
 fi
 temporary=$(mktemp "$directory/.capabilities.XXXXXX")
 trap 'rm -f "$temporary"' EXIT INT TERM

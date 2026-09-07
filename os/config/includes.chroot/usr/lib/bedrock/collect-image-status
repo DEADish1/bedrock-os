@@ -1,0 +1,43 @@
+#!/bin/sh
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+if [ "${BEDROCK_IMAGE_STATUS_TEST_MODE:-0}" = 1 ]; then
+  images=${BEDROCK_IMAGE_STATUS_IMAGES:?test mode requires images}
+  provenance=${BEDROCK_IMAGE_STATUS_PROVENANCE:?test mode requires provenance}
+  output=${BEDROCK_IMAGE_STATUS_OUTPUT:?test mode requires output}
+else
+  [ "$(id -u)" -eq 0 ] || fail "image status collection requires root"
+  images=/var/lib/bedrock/virtualization/images.json
+  provenance=/var/lib/bedrock/virtualization/image-provenance.json
+  output=/var/lib/bedrock/api/sources/images.json
+fi
+for input in "$images" "$provenance"; do [ -f "$input" ] && [ ! -L "$input" ] || fail "image status input is missing or indirect"; done
+jq -e '
+  (keys|sort)==(["images","schema"]|sort) and .schema==1 and (.images|type=="array" and length<=256) and
+  all(.images[]; (keys|sort)==(["name","path","sha256","size_bytes","type"]|sort) and
+    (.name|type=="string" and test("^[a-z][a-z0-9-]{0,31}$")) and
+    (.type|IN("iso","img","qcow2","vhdx","vmdk")) and
+    (.sha256|type=="string" and test("^[0-9a-f]{64}$")) and
+    (.size_bytes|type=="number" and floor==. and .>=1 and .<=4398046511104) and
+    (.path|type=="string")) and ([.images[].name]|unique|length)==(.images|length)
+' "$images" >/dev/null || fail "image state is invalid"
+jq -e '
+  (keys|sort)==(["conversions","schema"]|sort) and .schema==1 and (.conversions|type=="array" and length<=256) and
+  all(.conversions[]; (keys|sort)==(["source","source_sha256","source_type","target","target_sha256","target_type"]|sort) and
+    (.source|type=="string" and test("^[a-z][a-z0-9-]{0,31}$")) and
+    (.target|type=="string" and test("^[a-z][a-z0-9-]{0,31}$")) and
+    (.source_type|IN("img","qcow2","vhdx","vmdk")) and (.target_type|IN("img","qcow2")) and
+    (.source_sha256|type=="string" and test("^[0-9a-f]{64}$")) and (.target_sha256|type=="string" and test("^[0-9a-f]{64}$")))
+' "$provenance" >/dev/null || fail "image provenance is invalid"
+directory=$(dirname -- "$output")
+mkdir -p "$directory"
+[ -d "$directory" ] && [ ! -L "$directory" ] || fail "image status directory is indirect"
+[ ! -e "$output" ] || { [ -f "$output" ] && [ ! -L "$output" ]; } || fail "image status output is indirect"
+temporary=$(mktemp "$directory/.images.XXXXXX")
+trap 'rm -f "$temporary"' EXIT INT TERM
+jq -S --slurpfile provenance "$provenance" '{schema:1,images:[.images[]|{name,type,sha256,size_bytes,converted:(.name as $name|any($provenance[0].conversions[]; .target==$name))}]}' "$images" > "$temporary"
+chmod 0644 "$temporary"
+mv "$temporary" "$output"
+trap - EXIT INT TERM

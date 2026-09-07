@@ -55,6 +55,7 @@ def main() -> None:
         remote = work / "remote.json"
         apps = work / "apps.json"
         backups = work / "backups.json"
+        images = work / "images.json"
         tokens.write_text(json.dumps({"schema": 1, "tokens": [{
             "name": "test-client", "sha256": hashlib.sha256(TOKEN.encode()).hexdigest(),
             "created_at": "2026-08-31T00:00:00Z", "revoked": False,
@@ -71,6 +72,7 @@ def main() -> None:
         remote.write_text(json.dumps({"schema": 1, "devices": [{"id": "42345678-1234-4123-8123-123456789abc", "name": "Office laptop", "created_unix": 1000, "expires_unix": 2000, "revoked": False, "expired": False, "last_seen_unix": None}]}), encoding="utf-8")
         apps.write_text(json.dumps({"schema": 1, "apps": [{"id": "media", "name": "Media", "network": "bridge", "port_count": 1, "resources": {"cpus": 1, "memory_mib": 512, "pids": 128}, "update_policy": "notify", "created_unix": 100}]}), encoding="utf-8")
         backups.write_text(json.dumps({"schema": 1, "plans": [{"id": "daily", "name": "Daily", "kind": "local", "schedule": {"frequency": "daily", "hour_utc": 2, "weekday": None}, "retention": {"daily": 7, "weekly": 4, "monthly": 3}, "created_unix": 100, "last_success_unix": 200, "has_snapshot": True}]}), encoding="utf-8")
+        images.write_text(json.dumps({"schema": 1, "images": [{"name": "installer", "type": "iso", "sha256": "c" * 64, "size_bytes": 4096, "converted": False}]}), encoding="utf-8")
         environment = os.environ | {
             "BEDROCK_API_SOCKET": str(socket_path),
             "BEDROCK_API_TOKENS": str(tokens),
@@ -82,6 +84,7 @@ def main() -> None:
             "BEDROCK_API_OPENAPI": str(openapi),
             "BEDROCK_API_REMOTE": str(remote),
             "BEDROCK_API_APPS": str(apps), "BEDROCK_API_BACKUPS": str(backups),
+            "BEDROCK_API_IMAGES": str(images),
         }
         process = subprocess.Popen([sys.executable, str(API)], env=environment)
         try:
@@ -98,7 +101,7 @@ def main() -> None:
             assert request(socket_path, "GET", "/api/v1/health")[0] == 200
             schema_status, schema_body = request(socket_path, "GET", "/api/v1/openapi.json")
             assert schema_status == 200 and schema_body["openapi"] == "3.1.0"
-            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/backups", "/api/v1/hardware", "/api/v1/remote/devices", "/api/v1/virtualization/capabilities", "/api/v1/vms"}
+            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/backups", "/api/v1/hardware", "/api/v1/images", "/api/v1/remote/devices", "/api/v1/virtualization/capabilities", "/api/v1/vms"}
             assert schema_body["security"] == [{"bearerAuth": []}]
             assert request(socket_path, "GET", "/api/v1/virtualization/capabilities") == (200, {"schema": 1, "data": {"schema": 1, "status": "ready"}})
             dashboard_status, dashboard_body = request(socket_path, "GET", "/api/v1/dashboard")
@@ -125,6 +128,8 @@ def main() -> None:
             assert not any(secret in json.dumps(hardware_body) for secret in ["must-not-leak", "/dev/sda", "00:11:22:33:44:55", "0000:01:00.0", "0x1002"])
             vm_status, vm_body = request(socket_path, "GET", "/api/v1/vms")
             assert vm_status == 200 and vm_body["domains"][0]["name"] == "private-name" and vm_body["domains"][0]["snapshot_count"] == 2
+            image_status, image_body = request(socket_path, "GET", "/api/v1/images")
+            assert image_status == 200 and image_body["images"][0]["sha256"] == "c" * 64 and "path" not in json.dumps(image_body)
             alerts.write_text("not-json", encoding="utf-8")
             partial_status, partial_body = request(socket_path, "GET", "/api/v1/dashboard")
             assert partial_status == 200 and partial_body["partial"] is True
@@ -151,6 +156,8 @@ def main() -> None:
             assert request(socket_path, "GET", "/api/v1/hardware") == (503, {"schema": 1, "error": "hardware-unavailable"})
             vms.write_text('{"schema":1,"generated_unix":103,"domains":[{"name":"bad name"}]}', encoding="utf-8")
             assert request(socket_path, "GET", "/api/v1/vms") == (503, {"schema": 1, "error": "vms-unavailable"})
+            images.write_text('{"schema":1,"images":[{"name":"bad","path":"/secret"}]}', encoding="utf-8")
+            assert request(socket_path, "GET", "/api/v1/images") == (503, {"schema": 1, "error": "images-unavailable"})
             assert request(socket_path, "GET", "/api/v2/health")[0] == 404
             assert request(socket_path, "POST", "/api/v1/health", None)[0] == 401
             assert request(socket_path, "POST", "/api/v1/health")[0] == 405
