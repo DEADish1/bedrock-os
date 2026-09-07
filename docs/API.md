@@ -41,4 +41,6 @@ Storage create, expand, scrub, replace, export, and import operations publish th
 
 All other paths return `404`. Mutating requests are deliberately disabled in this foundation and return `405` after authentication. Later mutation endpoints must delegate to the existing guarded Bedrock helpers so their independent precondition checks, exact confirmations, serialization, rollback, and audit boundaries remain authoritative.
 
+The first mutation-side privilege boundary is now packaged separately from the API. A root action broker listens only on `/run/bedrock-action-broker/action.sock`, authenticates the kernel-reported peer as the `bedrock-api` account, accepts a strict bounded schema, and maps update-policy choices to fixed arguments for `bedrock-update-settings` without invoking a shell. Successful request UUIDs and request hashes are retained in a bounded owner-only ledger so identical retries are safe and conflicting reuse fails closed. The broker never returns helper output. No public mutating API route is enabled until its authenticated authorization, conflict, response-schema, and end-to-end tests are added.
+
 The packaged schema is the machine-readable source of truth for interface clients. API tests require its route set and bearer security declaration to match the implementation; undocumented routes and unauthenticated schema discovery are rejected.

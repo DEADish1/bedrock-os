@@ -2,7 +2,7 @@
 
 Bedrock uses an immutable, dm-verity-protected system image with signed UEFI artifacts, counted A/B boot attempts, signed update metadata, and health-gated promotion. Development keys and unsigned preview clients are never release eligible. Production signing keys must stay outside ordinary build workspaces.
 
-The local management API runs without root on a permission-restricted Unix socket. Bearer credentials are stored as bounded hashes and are immediately rejected after revocation. Privileged operations remain separate, fixed-path helpers with strict schemas, stable identities, exact confirmations, locking, fresh authoritative-state checks, atomic state replacement, and rollback where possible.
+The local management API runs without root on a permission-restricted Unix socket. Bearer credentials are stored as bounded hashes and are immediately rejected after revocation. A separate root action broker authenticates its Unix peer from kernel credentials, accepts only bounded allowlisted schemas, invokes fixed-path helpers without a shell, suppresses command output, and persists bounded request hashes for idempotent replay and conflict rejection. Privileged operations remain separate, fixed-path helpers with strict schemas, stable identities, exact confirmations, locking, fresh authoritative-state checks, atomic state replacement, and rollback where possible.
 
 VMs use KVM/libvirt and local-only console sockets. Uploaded images are inspected without mounting and reject backing chains, encryption, changed bytes, and unsafe archive members. Applications are digest-pinned, non-root Podman containers with read-only roots, all capabilities dropped, no privilege escalation, explicit limits, controlled networking, and one confined writable data mount.
 

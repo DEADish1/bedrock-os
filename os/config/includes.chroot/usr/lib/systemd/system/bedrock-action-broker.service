@@ -1,15 +1,13 @@
 [Unit]
-Description=Bedrock versioned local management API
-After=bedrock-virtualization-capabilities.service bedrock-action-broker.service
-Wants=bedrock-action-broker.service
-ConditionPathExists=/var/lib/bedrock/api/tokens.json
+Description=Bedrock privileged action broker
+After=local-fs.target
 
 [Service]
 Type=simple
-ExecStart=/usr/lib/bedrock/bedrock-api
-User=bedrock-api
+ExecStart=/usr/lib/bedrock/bedrock-action-broker
+User=root
 Group=bedrock-api
-RuntimeDirectory=bedrock-api
+RuntimeDirectory=bedrock-action-broker
 RuntimeDirectoryMode=0750
 UMask=0007
 NoNewPrivileges=true
@@ -17,6 +15,11 @@ PrivateDevices=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
+ReadWritePaths=/var/lib/bedrock/api /var/lib/bedrock/settings /run/bedrock-action-broker
+CapabilityBoundingSet=
+RestrictNamespaces=true
+ProtectClock=true
+ProtectHostname=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

@@ -100,7 +100,7 @@ Exit pending physical acceptance: one exact Bedrock image must still pass distin
 ## 0.6.0 — Management interface and API
 
 - [ ] Replace prototype data with a versioned authenticated API.
-  - The overview now starts disconnected, keeps the bearer token in memory only, clears it after use, and renders live authenticated dashboard components with explicit unavailable/partial states. Remaining management areas still need live routes before this item can close.
+  - The overview and every named management area now use live authenticated read routes, keep the bearer token in memory only, and render explicit unavailable/partial states. A separately hardened, kernel-peer-authenticated root action broker now provides the first idempotent update-policy privilege boundary; authenticated API mutations remain before this item can close.
 - [ ] Implement dashboard telemetry, tasks, progress, alerts, and audit history.
   - Authenticated privacy-safe dashboard, task/progress, active-alert, and bounded audit read contracts are implemented with independent failure behavior and now render in a live Activity interface with explicit empty, partial, disconnected, and unavailable states. A serialized task/audit producer rejects regressions and unsafe state; verified update downloads, VM power actions, and guarded storage operations publish real progress and terminal audit outcomes. Remaining operations must be wired before this item can close.
 - [ ] Finish Storage, VMs, Images, Apps, Connect, Backup, Hardware, Settings, and Help.

@@ -1,0 +1,191 @@
+#!/usr/bin/python3
+import hashlib
+import json
+import os
+import pathlib
+import pwd
+import socket
+import struct
+import subprocess
+import tempfile
+import uuid
+
+MAX_REQUEST_BYTES = 16 * 1024
+MAX_RESULTS = 256
+
+
+class RequestError(Exception):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def environment():
+    test_mode = os.environ.get("BEDROCK_ACTION_BROKER_TEST_MODE") == "1"
+    return {
+        "test_mode": test_mode,
+        "socket": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_SOCKET", "/run/bedrock-action-broker/action.sock")),
+        "state": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_STATE", "/var/lib/bedrock/api/action-results.json")),
+        "helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_UPDATE_HELPER", "/usr/sbin/bedrock-update-settings")),
+        "expected_uid": int(os.environ["BEDROCK_ACTION_BROKER_EXPECTED_UID"]) if test_mode else pwd.getpwnam("bedrock-api").pw_uid,
+    }
+
+
+def response(request_id, status, **extra):
+    value = {"schema": 1, "request_id": request_id, "status": status}
+    value.update(extra)
+    return value
+
+
+def parse_request(raw):
+    try:
+        request = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise RequestError("invalid-json", "request must be one UTF-8 JSON object")
+    if not isinstance(request, dict) or set(request) != {
+        "schema", "request_id", "action", "setting", "value", "beta_risk_acknowledged"
+    }:
+        raise RequestError("invalid-request", "request fields do not match the action schema")
+    if request["schema"] != 1 or request["action"] != "update-policy":
+        raise RequestError("unsupported-action", "only schema-1 update-policy is supported")
+    request_id = request["request_id"]
+    try:
+        parsed_id = uuid.UUID(request_id)
+    except (AttributeError, TypeError, ValueError):
+        raise RequestError("invalid-request-id", "request_id must be a canonical UUID v4")
+    if parsed_id.version != 4 or str(parsed_id) != request_id:
+        raise RequestError("invalid-request-id", "request_id must be a canonical UUID v4")
+    if type(request["beta_risk_acknowledged"]) is not bool:
+        raise RequestError("invalid-request", "beta_risk_acknowledged must be boolean")
+
+    setting, value, acknowledged = request["setting"], request["value"], request["beta_risk_acknowledged"]
+    if setting == "automatic_checks" and type(value) is bool and not acknowledged:
+        arguments = ["automatic-checks", "on" if value else "off"]
+    elif setting == "channel" and value == "stable" and not acknowledged:
+        arguments = ["channel", "stable"]
+    elif setting == "channel" and value == "beta" and acknowledged:
+        arguments = ["channel", "beta", "I_ACCEPT_PRERELEASE_UPDATE_RISK"]
+    else:
+        raise RequestError("invalid-update-policy", "setting, value, and beta acknowledgement are inconsistent")
+    canonical = json.dumps(request, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return request, hashlib.sha256(canonical).hexdigest(), arguments
+
+
+def load_state(path):
+    if path.is_symlink():
+        raise RuntimeError("action result state is indirect or not a regular file")
+    if not path.exists():
+        return {"schema": 1, "results": []}
+    if not path.is_file():
+        raise RuntimeError("action result state is indirect or not a regular file")
+    state = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(state, dict) or set(state) != {"schema", "results"} or state["schema"] != 1:
+        raise RuntimeError("action result state has an invalid envelope")
+    results = state["results"]
+    if not isinstance(results, list) or len(results) > MAX_RESULTS:
+        raise RuntimeError("action result state has an invalid result list")
+    for item in results:
+        if not isinstance(item, dict) or set(item) != {"request_id", "request_sha256", "action", "status"}:
+            raise RuntimeError("action result state contains an invalid result")
+        if item["action"] != "update-policy" or item["status"] != "succeeded":
+            raise RuntimeError("action result state contains an unsupported result")
+    return state
+
+
+def save_state(path, state):
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
+    descriptor, temporary = tempfile.mkstemp(prefix=".action-results.", dir=path.parent)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(state, stream, sort_keys=True, separators=(",", ":"))
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def execute(raw, settings):
+    request, digest, arguments = parse_request(raw)
+    state = load_state(settings["state"])
+    existing = next((item for item in state["results"] if item["request_id"] == request["request_id"]), None)
+    if existing:
+        if existing["request_sha256"] != digest:
+            raise RequestError("idempotency-conflict", "request_id was already used for different input")
+        return response(request["request_id"], "succeeded", replayed=True)
+    helper_environment = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"}
+    if settings["test_mode"]:
+        helper_environment["BEDROCK_TEST_CALLS"] = os.environ["BEDROCK_TEST_CALLS"]
+    completed = subprocess.run(
+        [str(settings["helper"]), *arguments], stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30,
+        env=helper_environment, close_fds=True,
+    )
+    if completed.returncode != 0:
+        raise RequestError("action-failed", "guarded update-policy helper rejected the action")
+    state["results"].append({
+        "request_id": request["request_id"], "request_sha256": digest,
+        "action": "update-policy", "status": "succeeded",
+    })
+    state["results"] = state["results"][-MAX_RESULTS:]
+    save_state(settings["state"], state)
+    return response(request["request_id"], "succeeded", replayed=False)
+
+
+def receive(connection):
+    chunks, length = [], 0
+    while True:
+        chunk = connection.recv(min(4096, MAX_REQUEST_BYTES + 1 - length))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        length += len(chunk)
+        if length > MAX_REQUEST_BYTES:
+            raise RequestError("request-too-large", "request exceeds 16384 bytes")
+    if not chunks:
+        raise RequestError("invalid-json", "request must be one UTF-8 JSON object")
+    return b"".join(chunks)
+
+
+def serve():
+    settings = environment()
+    settings["socket"].parent.mkdir(parents=True, exist_ok=True, mode=0o750)
+    if settings["socket"].exists() or settings["socket"].is_symlink():
+        settings["socket"].unlink()
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(settings["socket"]))
+    os.chmod(settings["socket"], 0o660)
+    listener.listen(16)
+    while True:
+        connection, _ = listener.accept()
+        with connection:
+            request_id = None
+            try:
+                _, uid, _ = struct.unpack("3i", connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))
+                if uid != settings["expected_uid"]:
+                    raise RequestError("unauthorized-peer", "peer is not the Bedrock API service account")
+                raw = receive(connection)
+                try:
+                    decoded = json.loads(raw.decode("utf-8"))
+                    request_id = decoded.get("request_id") if isinstance(decoded, dict) else None
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    pass
+                result = execute(raw, settings)
+            except RequestError as error:
+                result = response(request_id, "rejected", error={"code": error.code, "message": error.message})
+            except (OSError, RuntimeError, subprocess.SubprocessError, json.JSONDecodeError):
+                result = response(request_id, "failed", error={"code": "internal-error", "message": "action broker could not safely complete the request"})
+            connection.sendall(json.dumps(result, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n")
+
+
+if __name__ == "__main__":
+    serve()
