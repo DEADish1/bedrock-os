@@ -4,7 +4,7 @@ path=pathlib.Path(os.environ["BEDROCK_MAINTENANCE_GUARD_STATE"]) if os.environ.g
 if not path.exists(): raise SystemExit(0)
 try:
     info=path.lstat(); value=json.loads(path.read_text())
-    if not stat.S_ISREG(info.st_mode) or info.st_size>65536 or not isinstance(value,dict) or set(value)!={"schema","mode","entered_unix","units","vms"} or value.get("schema")!=1 or value.get("mode") not in {"inactive","entering","active","failed"}: raise ValueError
+    if not stat.S_ISREG(info.st_mode) or info.st_size>65536 or not isinstance(value,dict) or set(value)!={"schema","mode","entered_unix","units","vms","apps"} or value.get("schema")!=1 or value.get("mode") not in {"inactive","entering","active","failed"}: raise ValueError
 except (OSError,ValueError,json.JSONDecodeError):
     print("error: maintenance state is unsafe; mutations are blocked",file=sys.stderr); raise SystemExit(1)
 if value.get("mode") in {"entering","active","failed"}:

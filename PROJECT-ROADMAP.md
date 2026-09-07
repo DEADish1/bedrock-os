@@ -133,7 +133,8 @@ Exit: approved clients connect remotely, survive network changes, and can be imm
   - Root-only restic plans support confined local and bounded SFTP repositories, external owner-only passwords, daily/weekly UTC scheduling, daily/weekly/monthly retention, verified snapshot history, and exact-confirmation restores into new destinations. See [encrypted backups](docs/BACKUP.md).
 - [x] Add configuration export/import and bare-metal recovery documentation.
   - Exact-confirmation export/import uses a bounded allowlist, version and SHA-256 binding, link/traversal rejection, staged replacement, local rollback copies, and an explicit reboot gate while excluding credentials and bulk data. See [bare-metal recovery](docs/BARE-METAL-RECOVERY.md).
-- [ ] Build an isolated application/service system with resource limits and update policy.
+- [x] Build an isolated application/service system with resource limits and update policy.
+  - Digest-pinned Podman workloads run non-root with read-only roots, no capabilities or privilege escalation, bounded CPU/memory/PIDs, controlled bridge exposure, one confined persistent-data mount, exact-confirmation lifecycle operations, and manual or notification-only update policy. See [isolated applications](docs/APPLICATIONS.md).
 - [x] Add notification destinations and actionable health alerts.
   - Root-only HTTPS webhook and TLS email destinations use separate owner-only credentials, SHA-256-bound configuration, privacy-safe event payloads, specific recovery actions, per-destination deduplication, and scheduled retry of failed deliveries. See [health notifications](docs/NOTIFICATIONS.md).
 - [x] Implement diagnostic bundles with secret redaction and explicit user consent.

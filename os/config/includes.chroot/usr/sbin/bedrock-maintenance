@@ -10,7 +10,7 @@ except ModuleNotFoundError:
         def flock(_handle,_mode): pass
 
 ENTER="ENTER BEDROCK MAINTENANCE"; EXIT="EXIT BEDROCK MAINTENANCE"
-UNITS=("bedrock-update-check.timer","bedrock-backup.timer","bedrock-notifications.timer","bedrock-remote-status.timer","bedrock-storage-health.timer","bedrock-vm-status.timer","smbd.service","nmbd.service","nfs-server.service")
+UNITS=("bedrock-update-check.timer","bedrock-app-update-check.timer","bedrock-backup.timer","bedrock-notifications.timer","bedrock-remote-status.timer","bedrock-storage-health.timer","bedrock-vm-status.timer","smbd.service","nmbd.service","nfs-server.service")
 def fail(message): raise SystemExit(f"error: {message}")
 def atomic(path,value):
     path.parent.mkdir(parents=True,exist_ok=True); handle,temp=tempfile.mkstemp(prefix=".maintenance.",dir=path.parent)
@@ -20,12 +20,12 @@ def atomic(path,value):
     finally:
         if os.path.exists(temp): os.unlink(temp)
 def read_state(path):
-    if not path.exists(): return {"schema":1,"mode":"inactive","entered_unix":None,"units":[],"vms":[]}
+    if not path.exists(): return {"schema":1,"mode":"inactive","entered_unix":None,"units":[],"vms":[],"apps":[]}
     info=path.lstat()
     if not stat.S_ISREG(info.st_mode) or info.st_size>65536: fail("maintenance state is unsafe")
     try: value=json.loads(path.read_text())
     except (ValueError,json.JSONDecodeError): fail("maintenance state is invalid")
-    if not isinstance(value,dict) or set(value)!={"schema","mode","entered_unix","units","vms"} or value["schema"]!=1 or value["mode"] not in {"inactive","entering","active","failed"} or (value["entered_unix"] is not None and (type(value["entered_unix"]) is not int or value["entered_unix"]<0)) or not isinstance(value["units"],list) or not isinstance(value["vms"],list) or any(unit not in UNITS for unit in value["units"]) or any(not isinstance(name,str) or not name or len(name)>64 for name in value["vms"]): fail("maintenance state is invalid")
+    if not isinstance(value,dict) or set(value)!={"schema","mode","entered_unix","units","vms","apps"} or value["schema"]!=1 or value["mode"] not in {"inactive","entering","active","failed"} or (value["entered_unix"] is not None and (type(value["entered_unix"]) is not int or value["entered_unix"]<0)) or not isinstance(value["units"],list) or not isinstance(value["vms"],list) or not isinstance(value["apps"],list) or any(unit not in UNITS for unit in value["units"]) or any(not isinstance(name,str) or not name or len(name)>76 for name in value["vms"]+value["apps"]): fail("maintenance state is invalid")
     return value
 def call(command,*args,capture=False,ok=True):
     prefix=[sys.executable,command] if os.environ.get("BEDROCK_MAINTENANCE_TEST_MODE")=="1" and command.endswith(".py") else [command]
@@ -37,7 +37,7 @@ def main():
     test=os.environ.get("BEDROCK_MAINTENANCE_TEST_MODE")=="1"
     if not test and os.geteuid()!=0: fail("maintenance mode requires root")
     directory=pathlib.Path(os.environ.get("BEDROCK_MAINTENANCE_STATE_DIR","/run/bedrock-maintenance")) if test else pathlib.Path("/run/bedrock-maintenance")
-    systemctl=os.environ.get("BEDROCK_MAINTENANCE_SYSTEMCTL","systemctl") if test else "/bin/systemctl"; virsh=os.environ.get("BEDROCK_MAINTENANCE_VIRSH","virsh") if test else "/usr/bin/virsh"; domains=pathlib.Path(os.environ.get("BEDROCK_MAINTENANCE_DOMAINS","/var/lib/bedrock/virtualization/domains.json")) if test else pathlib.Path("/var/lib/bedrock/virtualization/domains.json")
+    systemctl=os.environ.get("BEDROCK_MAINTENANCE_SYSTEMCTL","systemctl") if test else "/bin/systemctl"; virsh=os.environ.get("BEDROCK_MAINTENANCE_VIRSH","virsh") if test else "/usr/bin/virsh"; podman=os.environ.get("BEDROCK_MAINTENANCE_PODMAN","podman") if test else "/usr/bin/podman"; domains=pathlib.Path(os.environ.get("BEDROCK_MAINTENANCE_DOMAINS","/var/lib/bedrock/virtualization/domains.json")) if test else pathlib.Path("/var/lib/bedrock/virtualization/domains.json")
     directory.mkdir(parents=True,exist_ok=True)
     if not directory.is_dir() or directory.is_symlink(): fail("maintenance directory is unsafe")
     lock=(directory/".lock").open("a+"); os.chmod(directory/".lock",0o600); fcntl.flock(lock,fcntl.LOCK_EX)
@@ -53,7 +53,9 @@ def main():
         managed={item["name"] for item in values["domains"]}; running=[name for name in call(virsh,"--connect","qemu:///system","list","--name","--state-running",capture=True).stdout.splitlines() if name]
         if any(name not in managed for name in running): fail("an unmanaged VM is running")
         active=[unit for unit in UNITS if call(systemctl,"is-active","--quiet",unit,ok=False).returncode==0]
-        state={"schema":1,"mode":"entering","entered_unix":int(os.environ.get("BEDROCK_MAINTENANCE_TEST_NOW",str(int(time.time())))),"units":active,"vms":running}; atomic(state_path,state)
+        app_result=call(podman,"ps","--filter","name=^bedrock-app-","--format","{{.Names}}",capture=True,ok=False); apps=[] if app_result.returncode else [line.strip() for line in app_result.stdout.splitlines() if line.strip()]
+        if any(not name.startswith("bedrock-app-") or len(name)>76 for name in apps): fail("container runtime returned unsafe application identity")
+        state={"schema":1,"mode":"entering","entered_unix":int(os.environ.get("BEDROCK_MAINTENANCE_TEST_NOW",str(int(time.time())))),"units":active,"vms":running,"apps":apps}; atomic(state_path,state)
         for name in running: call(virsh,"--connect","qemu:///system","shutdown",name,"--mode","agent,acpi")
         attempts=int(os.environ.get("BEDROCK_MAINTENANCE_TEST_ATTEMPTS","2")) if test else 60
         for name in running:
@@ -61,10 +63,13 @@ def main():
                 if call(virsh,"--connect","qemu:///system","domstate",name,capture=True,ok=False).stdout.strip()=="shut off": break
                 if not test: time.sleep(2)
             else: state["mode"]="failed"; atomic(state_path,state); fail("a managed VM did not shut down")
+        for name in apps:
+            if call(podman,"stop","--time","30",name,ok=False).returncode: state["mode"]="failed"; atomic(state_path,state); fail("managed application did not stop")
         for unit in active: call(systemctl,"stop",unit)
         if not test: call("/bin/sync")
         state["mode"]="active"; atomic(state_path,state); print(json.dumps(state,sort_keys=True,separators=(",",":"))); return
     if len(sys.argv)!=3 or sys.argv[2]!=EXIT or state["mode"] not in {"entering","active","failed"}: fail("maintenance exit confirmation or state is invalid")
     for unit in state["units"]: call(systemctl,"start",unit)
-    state={"schema":1,"mode":"inactive","entered_unix":None,"units":[],"vms":[]}; atomic(state_path,state); print(json.dumps(state,sort_keys=True,separators=(",",":")))
+    for name in state["apps"]: call(podman,"start",name)
+    state={"schema":1,"mode":"inactive","entered_unix":None,"units":[],"vms":[],"apps":[]}; atomic(state_path,state); print(json.dumps(state,sort_keys=True,separators=(",",":")))
 if __name__=="__main__": main()

@@ -6,6 +6,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ### Backup, recovery, apps, and operations 0.8
 
+- Added a digest-pinned Podman application runtime with non-root read-only containers, capability removal, resource limits, bounded networking and persistence, exact-confirmation lifecycle management, and manual or notification-only updates.
 - Added a strict full-restore acceptance record covering file integrity, VM data and boot recovery, configuration recovery and credential rotation, and non-destructive recovery onto a replacement system drive; the physical drill remains open.
 - Added a fail-closed maintenance mode that guards packaged mutations, quiesces managed guests, shares, and scheduled jobs, restores prior services explicitly, plus NUT low-battery/FSD handling that requests orderly poweroff; physical UPS acceptance remains open.
 - Added authenticated HTTPS webhook and TLS email health notifications with separate owner-only secrets, privacy-safe actionable payloads, per-destination event deduplication, explicit test/removal controls, and scheduled retry.

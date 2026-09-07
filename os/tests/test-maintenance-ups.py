@@ -8,7 +8,7 @@ def invoke(tool,env,*args,ok=True):
 def main():
     guarded=["clone-vm","control-vm","convert-vm-image","create-passthrough-plan","create-vm-plan","delete-vm","import-vm-image","import-vm-image-archive","manage-isolated-network","manage-vm-image-attachment","manage-vm-network-attachment","manage-vm-passthrough","manage-vm-snapshot","register-vm","render-vm-domain","update-vm-resources"]
     for name in guarded: assert "/usr/lib/bedrock/require-normal-mode" in (ROOT/"os/config/includes.chroot/usr/lib/bedrock"/name).read_text()
-    for name in ["bedrock-nas","bedrock-storage","bedrock-storage-guided","bedrock-update","bedrock-update-settings"]: assert "/usr/lib/bedrock/require-normal-mode" in (ROOT/"os/config/includes.chroot/usr/sbin"/name).read_text()
+    for name in ["bedrock-apps","bedrock-nas","bedrock-storage","bedrock-storage-guided","bedrock-update","bedrock-update-settings"]: assert "/usr/lib/bedrock/require-normal-mode" in (ROOT/"os/config/includes.chroot/usr/sbin"/name).read_text()
     policy=(ROOT/"os/config/includes.chroot/etc/nut/upssched.conf").read_text(); assert "AT LOWBATT * EXECUTE LOWBATT" in policy and "AT FSD * EXECUTE FSD" in policy
     with tempfile.TemporaryDirectory() as temporary:
         work=pathlib.Path(temporary); state=work/"maintenance"; runtime=work/"vm-state"; runtime.write_text("running"); log=work/"operations.log"; domains=work/"domains.json"; domains.write_text(json.dumps({"schema":1,"domains":[{"name":"media-vm","vcpus":2,"memory_mib":2048}]}))
@@ -25,13 +25,18 @@ elif "shutdown" in args:
     open(os.environ["BEDROCK_TEST_OPERATION_LOG"],"a").write("virsh shutdown media-vm\\n")
 elif "domstate" in args: print("shut off" if state.read_text()=="off" else "running")
 ''')
-        env=os.environ|{"BEDROCK_MAINTENANCE_TEST_MODE":"1","BEDROCK_MAINTENANCE_STATE_DIR":str(state),"BEDROCK_MAINTENANCE_SYSTEMCTL":str(systemctl),"BEDROCK_MAINTENANCE_VIRSH":str(virsh),"BEDROCK_MAINTENANCE_DOMAINS":str(domains),"BEDROCK_MAINTENANCE_TEST_NOW":"1000","BEDROCK_TEST_OPERATION_LOG":str(log),"BEDROCK_TEST_VM_STATE":str(runtime)}
+        podman=work/"podman.py"; podman.write_text('''import os,sys
+args=sys.argv[1:]
+if args and args[0]=="ps": print("bedrock-app-photos")
+else: open(os.environ["BEDROCK_TEST_OPERATION_LOG"],"a").write("podman "+" ".join(args)+"\\n")
+''')
+        env=os.environ|{"BEDROCK_MAINTENANCE_TEST_MODE":"1","BEDROCK_MAINTENANCE_STATE_DIR":str(state),"BEDROCK_MAINTENANCE_SYSTEMCTL":str(systemctl),"BEDROCK_MAINTENANCE_VIRSH":str(virsh),"BEDROCK_MAINTENANCE_PODMAN":str(podman),"BEDROCK_MAINTENANCE_DOMAINS":str(domains),"BEDROCK_MAINTENANCE_TEST_NOW":"1000","BEDROCK_TEST_OPERATION_LOG":str(log),"BEDROCK_TEST_VM_STATE":str(runtime)}
         assert invoke(MAINT,env,"enter","wrong",ok=False).returncode
         active=json.loads(invoke(MAINT,env,"enter","ENTER BEDROCK MAINTENANCE").stdout); assert active["mode"]=="active" and active["vms"]==["media-vm"]
-        operations=log.read_text(); assert "virsh shutdown media-vm" in operations and "systemctl stop smbd.service" in operations and "systemctl stop bedrock-backup.timer" in operations
+        operations=log.read_text(); assert "virsh shutdown media-vm" in operations and "podman stop --time 30 bedrock-app-photos" in operations and "systemctl stop smbd.service" in operations and "systemctl stop bedrock-backup.timer" in operations
         guard_env=env|{"BEDROCK_MAINTENANCE_GUARD_TEST_MODE":"1","BEDROCK_MAINTENANCE_GUARD_STATE":str(state/"state.json")}; assert invoke(GUARD,guard_env,ok=False).returncode
         assert invoke(MAINT,env,"exit","wrong",ok=False).returncode
-        assert json.loads(invoke(MAINT,env,"exit","EXIT BEDROCK MAINTENANCE").stdout)["mode"]=="inactive" and invoke(GUARD,guard_env).returncode==0
+        assert json.loads(invoke(MAINT,env,"exit","EXIT BEDROCK MAINTENANCE").stdout)["mode"]=="inactive" and invoke(GUARD,guard_env).returncode==0 and "podman start bedrock-app-photos" in log.read_text()
         runtime.write_text("running"); stuck=env|{"BEDROCK_TEST_VM_STUCK":"1"}; assert invoke(MAINT,stuck,"enter","ENTER BEDROCK MAINTENANCE",ok=False).returncode
         assert json.loads(invoke(MAINT,env,"status").stdout)["mode"]=="failed" and invoke(GUARD,guard_env,ok=False).returncode
         invoke(MAINT,env,"exit","EXIT BEDROCK MAINTENANCE")

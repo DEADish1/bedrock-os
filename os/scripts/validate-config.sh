@@ -174,6 +174,7 @@ grep -q '^User=bedrock-api$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/sys
 grep -q '^RestrictAddressFamilies=AF_UNIX$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-api.service"
 grep -q '^ProtectSystem=strict$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-api.service"
 [ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/timers.target.wants/bedrock-vm-status.timer" ] || { printf 'error: VM status timer is not enabled\n' >&2; exit 1; }
+[ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/timers.target.wants/bedrock-app-update-check.timer" ] || { printf 'error: application update timer is not enabled\n' >&2; exit 1; }
 "$OS_DIR/scripts/validate-layout.sh"
 "$OS_DIR/scripts/validate-boot.sh"
 sh "$ROOT/installer/tests/test-target-selection.sh"
@@ -227,6 +228,7 @@ python3 "$OS_DIR/tests/test-config-backup.py"
 python3 "$OS_DIR/tests/test-backup.py"
 python3 "$OS_DIR/tests/test-notifications.py"
 python3 "$OS_DIR/tests/test-maintenance-ups.py"
+python3 "$OS_DIR/tests/test-apps.py"
 sh "$OS_DIR/tests/test-restore-drill-report.sh"
 sh "$OS_DIR/tests/test-storage-health.sh"
 sh "$OS_DIR/tests/test-storage-alerts.sh"

@@ -35,6 +35,7 @@ openssh-client
 openssl
 ovmf
 pciutils
+podman
 python3-minimal
 qemu-system-x86
 qemu-utils
@@ -43,6 +44,7 @@ restic
 samba
 sg3-utils
 smartmontools
+skopeo
 sudo
 swtpm
 swtpm-tools

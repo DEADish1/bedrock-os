@@ -1,0 +1,16 @@
+[Unit]
+Description=Check Bedrock application image updates
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/bedrock-apps check-updates
+User=root
+UMask=0077
+RuntimeDirectory=bedrock-app-update
+Environment=HOME=/run/bedrock-app-update
+Nice=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=-/var/lib/bedrock/apps -/srv/bedrock/apps /run/bedrock-app-update

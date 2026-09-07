@@ -1,0 +1,104 @@
+#!/usr/bin/python3
+import hashlib,json,os,pathlib,re,stat,subprocess,sys,tempfile,time
+try: import fcntl
+except ModuleNotFoundError:
+    if os.name!="nt": raise
+    class fcntl:
+        LOCK_EX=0
+        @staticmethod
+        def flock(_handle,_mode): pass
+
+NAME=re.compile(r"^[a-z][a-z0-9-]{0,31}$")
+IMAGE=re.compile(r"^[a-z0-9.-]+(?::[0-9]{1,5})?/[a-z0-9._/-]{1,220}:[A-Za-z0-9._-]{1,64}$")
+DIGEST=re.compile(r"^sha256:[0-9a-f]{64}$")
+FIELDS={"id","name","image","digest","network","ports","resources","update_policy","created_unix"}
+def fail(message): raise SystemExit("error: "+message)
+def atomic(path,value):
+    handle,temp=tempfile.mkstemp(prefix=".apps.",dir=path.parent)
+    try:
+        with os.fdopen(handle,"w") as out: json.dump(value,out,sort_keys=True,separators=(",",":")); out.write("\n"); out.flush(); os.fsync(out.fileno())
+        os.chmod(temp,0o600); os.replace(temp,path)
+    finally:
+        if os.path.exists(temp): os.unlink(temp)
+def valid(item):
+    if not isinstance(item,dict) or set(item)!=FIELDS or not NAME.fullmatch(item.get("id","")) or not isinstance(item.get("name"),str) or not 1<=len(item["name"])<=64 or not IMAGE.fullmatch(item.get("image","")) or not DIGEST.fullmatch(item.get("digest","")): fail("application definition is invalid")
+    if item["network"] not in {"none","bridge"} or item["update_policy"] not in {"manual","notify"} or type(item["created_unix"]) is not int or item["created_unix"]<0: fail("application definition is invalid")
+    resources=item["resources"]
+    if not isinstance(resources,dict) or set(resources)!={"cpus","memory_mib","pids"} or type(resources["cpus"]) not in {int,float} or not .25<=resources["cpus"]<=16 or type(resources["memory_mib"]) is not int or not 128<=resources["memory_mib"]<=32768 or type(resources["pids"]) is not int or not 16<=resources["pids"]<=4096: fail("application resources are invalid")
+    if not isinstance(item["ports"],list) or len(item["ports"])>16 or len({(p.get("host"),p.get("container"),p.get("protocol")) for p in item["ports"] if isinstance(p,dict)})!=len(item["ports"]): fail("application ports are invalid")
+    for port in item["ports"]:
+        if not isinstance(port,dict) or set(port)!={"host","container","protocol"} or type(port["host"]) is not int or type(port["container"]) is not int or not 1024<=port["host"]<=65535 or not 1<=port["container"]<=65535 or port["protocol"] not in {"tcp","udp"} or item["network"]!="bridge": fail("application port is invalid")
+def load(path):
+    if not path.exists(): return {"schema":1,"apps":[]}
+    info=path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_size>1048576: fail("application state is unsafe")
+    try: value=json.loads(path.read_text())
+    except (OSError,ValueError,json.JSONDecodeError): fail("application state is invalid")
+    if not isinstance(value,dict) or set(value)!={"schema","apps"} or value["schema"]!=1 or not isinstance(value["apps"],list) or len(value["apps"])>64: fail("application state is invalid")
+    for item in value["apps"]: valid(item)
+    if len({item["id"] for item in value["apps"]})!=len(value["apps"]): fail("application state is invalid")
+    return value
+def run(binary,*args,capture=False,ok=True):
+    command=([sys.executable,binary] if os.environ.get("BEDROCK_APPS_TEST_MODE")=="1" and binary.endswith(".py") else [binary])+list(args)
+    result=subprocess.run(command,text=True,capture_output=capture,env=os.environ.copy())
+    if ok and result.returncode: fail("container runtime operation failed")
+    return result
+def create_args(item,data):
+    args=["create","--name","bedrock-app-"+item["id"],"--read-only","--cap-drop=all","--security-opt=no-new-privileges","--user","65532:65532","--memory",str(item["resources"]["memory_mib"])+"m","--cpus",str(item["resources"]["cpus"]),"--pids-limit",str(item["resources"]["pids"]),"--network",item["network"],"--volume",str(data/item["id"])+":/data:rw"]
+    for port in item["ports"]: args.extend(["--publish",f"{port['host']}:{port['container']}/{port['protocol']}"])
+    return args+[item["image"]+"@"+item["digest"]]
+def main():
+    if len(sys.argv)<2 or sys.argv[1] not in {"install","list","start","stop","update","remove","check-updates"}: fail("usage: bedrock-apps install|list|start|stop|update|remove|check-updates")
+    test=os.environ.get("BEDROCK_APPS_TEST_MODE")=="1"
+    if not test and os.geteuid()!=0: fail("application management requires root")
+    if not test and sys.argv[1] not in {"list","check-updates"} and run("/usr/lib/bedrock/require-normal-mode",ok=False).returncode: fail("maintenance mode blocks application mutation")
+    base=pathlib.Path(os.environ.get("BEDROCK_APPS_STATE_DIR","/var/lib/bedrock/apps")) if test else pathlib.Path("/var/lib/bedrock/apps"); data=pathlib.Path(os.environ.get("BEDROCK_APPS_DATA_DIR","/srv/bedrock/apps")) if test else pathlib.Path("/srv/bedrock/apps"); podman=os.environ.get("BEDROCK_APPS_PODMAN","podman") if test else "/usr/bin/podman"; skopeo=os.environ.get("BEDROCK_APPS_SKOPEO","skopeo") if test else "/usr/bin/skopeo"
+    base.mkdir(parents=True,exist_ok=True); data.mkdir(parents=True,exist_ok=True)
+    if base.is_symlink() or data.is_symlink(): fail("application directory is unsafe")
+    state_path=base/"apps.json"; lock=(base/".lock").open("a+"); os.chmod(base/".lock",0o600); fcntl.flock(lock,fcntl.LOCK_EX); state=load(state_path); action=sys.argv[1]
+    if action=="list":
+        if len(sys.argv)!=2: fail("list accepts no arguments")
+        print(json.dumps(state,sort_keys=True,separators=(",",":"))); return
+    if action=="check-updates":
+        if len(sys.argv)!=2: fail("check-updates accepts no arguments")
+        updates=[]
+        for item in state["apps"]:
+            if item["update_policy"]!="notify": continue
+            result=run(skopeo,"inspect","--format","{{.Digest}}","docker://"+item["image"],capture=True,ok=False); candidate=result.stdout.strip()
+            updates.append({"id":item["id"],"status":"available" if result.returncode==0 and DIGEST.fullmatch(candidate) and candidate!=item["digest"] else "current" if candidate==item["digest"] else "unavailable","candidate":candidate if DIGEST.fullmatch(candidate) else None})
+        print(json.dumps({"schema":1,"updates":updates},sort_keys=True,separators=(",",":"))); return
+    if action in {"install","update"}:
+        if len(sys.argv)!=4: fail(action+" requires REQUEST.json and exact confirmation")
+        path=pathlib.Path(sys.argv[2]); info=path.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_size>65536: fail("application request is unsafe")
+        try: request=json.loads(path.read_text())
+        except (OSError,ValueError,json.JSONDecodeError): fail("application request is invalid")
+        expected={"id","name","image","digest","network","ports","resources","update_policy"}
+        if not isinstance(request,dict) or set(request)!=expected: fail("application request is invalid")
+        item=request|{"created_unix":int(os.environ.get("BEDROCK_APPS_TEST_NOW",str(int(time.time()))))}; valid(item); canonical=json.dumps(request,sort_keys=True,separators=(",",":")); digest=hashlib.sha256(canonical.encode()).hexdigest()
+        if sys.argv[3]!=f"{action.upper()} APPLICATION {item['id']} {digest}": fail("application confirmation is invalid")
+        matches=[existing for existing in state["apps"] if existing["id"]==item["id"]]
+        if action=="install" and matches: fail("application already exists")
+        if action=="update" and (len(matches)!=1 or matches[0]["image"]!=item["image"]): fail("application update identity is invalid")
+        app_data=data/item["id"]
+        if action=="install":
+            app_data.mkdir(mode=0o700,exist_ok=True)
+            if app_data.is_symlink() or not app_data.is_dir(): fail("application data directory is unsafe")
+        run(podman,"pull",item["image"]+"@"+item["digest"])
+        if action=="update": run(podman,"stop","--time","30","bedrock-app-"+item["id"],ok=False); run(podman,"rm","bedrock-app-"+item["id"])
+        try: run(podman,*create_args(item,data)); run(podman,"start","bedrock-app-"+item["id"])
+        except SystemExit:
+            if action=="update":
+                old=matches[0]; run(podman,*create_args(old,data),ok=False); run(podman,"start","bedrock-app-"+old["id"],ok=False)
+            raise
+        state["apps"]=[existing for existing in state["apps"] if existing["id"]!=item["id"]]+[item]; atomic(state_path,state); print(json.dumps({"schema":1,"status":"installed" if action=="install" else "updated","id":item["id"]},sort_keys=True,separators=(",",":"))); return
+    if len(sys.argv)!=4 or not NAME.fullmatch(sys.argv[2]) or sys.argv[3]!=f"{action.upper()} APPLICATION {sys.argv[2]}": fail("application identity or confirmation is invalid")
+    matches=[item for item in state["apps"] if item["id"]==sys.argv[2]]
+    if len(matches)!=1: fail("application is unavailable")
+    name="bedrock-app-"+sys.argv[2]
+    if action=="start": run(podman,"start",name)
+    elif action=="stop": run(podman,"stop","--time","30",name)
+    else:
+        run(podman,"stop","--time","30",name,ok=False); run(podman,"rm",name); state["apps"]=[item for item in state["apps"] if item["id"]!=sys.argv[2]]; atomic(state_path,state)
+    print(json.dumps({"schema":1,"status":{"start":"started","stop":"stopped","remove":"removed"}[action],"id":sys.argv[2]},sort_keys=True,separators=(",",":")))
+if __name__=="__main__": main()
