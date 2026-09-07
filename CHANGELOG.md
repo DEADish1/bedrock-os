@@ -9,6 +9,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Added a dedicated authenticated hardware inventory route with strict validation and privacy filtering for device, network, bus, and passthrough identifiers.
 - Added the live Hardware interface with capacity, virtualization, graphics, and connection summaries plus explicit unauthenticated and unavailable states.
 - Added an authenticated, strictly validated managed-VM inventory route exposing lifecycle, allocation, snapshot, and logical attachment status without host paths, console sockets, MAC addresses, raw definitions, or passthrough topology.
+- Replaced the sample VM table and simulated create success path with authenticated live inventory, explicit disconnected/unavailable/empty states, and an honest read-only boundary until mutation routes exist.
 
 ### Release readiness 0.9
 
