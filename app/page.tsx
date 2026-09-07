@@ -12,7 +12,7 @@ export default function Home(){
   <section className="work"><header><div>home-server <span>/</span> <strong>{page}</strong></div><nav>⌕　◔　<b>DM</b></nav></header><div className="content">
    {page==='Overview'&&<Overview create={()=>setPage('Virtual machines')} download={()=>setPage('Get Bedrock')} token={token} setToken={setToken} connection={connection} connect={connect} dashboard={dashboard}/>}
    {page==='Virtual machines'&&<VMs data={vms} connected={connection==='connected'}/>}
-   {page==='Storage'&&<Storage data={storage} connected={connection==='connected'}/>} 
+   {page==='Storage'&&<Storage data={storage} connected={connection==='connected'}/>}
    {page==='Image library'&&<Images data={images} connected={connection==='connected'}/>}
    {page==='Apps'&&<Apps data={apps} connected={connection==='connected'}/>}
    {page==='Backup'&&<Backups data={backups} connected={connection==='connected'}/>}
