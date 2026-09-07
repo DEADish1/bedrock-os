@@ -115,9 +115,15 @@ def main() -> None:
             assert partial_body["components"]["alerts"] == {"status": "unavailable"}
             assert partial_body["components"]["hardware"]["status"] == "available"
             assert request(socket_path, "GET", "/api/v1/alerts") == (503, {"schema": 1, "error": "alerts-unavailable"})
+            alerts.unlink()
+            alerts.symlink_to(hardware)
+            assert request(socket_path, "GET", "/api/v1/alerts") == (503, {"schema": 1, "error": "alerts-unavailable"})
             tasks.write_text(json.dumps({"schema": 1, "generated_unix": 105, "tasks": [{"id": "task-2", "kind": "update", "state": "running", "created_unix": 100, "updated_unix": 105, "progress": {"current": 101, "total": 100, "unit": "percent"}}]}), encoding="utf-8")
             assert request(socket_path, "GET", "/api/v1/tasks") == (503, {"schema": 1, "error": "tasks-unavailable"})
             audit.write_text(json.dumps({"id": "event-2", "category": "auth", "action": "login", "outcome": "maybe", "occurred_unix": 105}) + "\n", encoding="utf-8")
+            assert request(socket_path, "GET", "/api/v1/audit") == (503, {"schema": 1, "error": "audit-unavailable"})
+            audit.unlink()
+            audit.symlink_to(tokens)
             assert request(socket_path, "GET", "/api/v1/audit") == (503, {"schema": 1, "error": "audit-unavailable"})
             assert request(socket_path, "GET", "/api/v2/health")[0] == 404
             assert request(socket_path, "POST", "/api/v1/health", None)[0] == 401

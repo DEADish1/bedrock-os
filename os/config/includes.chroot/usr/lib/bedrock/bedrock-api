@@ -27,10 +27,26 @@ TASK_UNITS = {"bytes", "items", "percent", "steps"}
 DEVICE_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
 def regular_json(path: pathlib.Path, limit: int) -> object:
-    info = path.lstat()
-    if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
-        raise ValueError("unsafe state file")
-    return json.loads(path.read_text(encoding="utf-8"))
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_size > limit:
+            raise ValueError("unsafe state file")
+        chunks = []
+        remaining = limit + 1
+        while remaining:
+            chunk = os.read(descriptor, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        after = os.fstat(descriptor)
+        if remaining == 0 or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+            raise ValueError("state changed while being read")
+        return json.loads(b"".join(chunks).decode("utf-8"))
+    finally:
+        os.close(descriptor)
 
 def authorized(value: str | None) -> bool:
     if not value or not value.startswith("Bearer "):
@@ -102,29 +118,37 @@ def alert_feed() -> dict:
     return {"schema": 1, "generated_unix": value["generated_unix"], "attention_required": bool(safe), "alerts": safe}
 
 def audit_feed() -> dict:
-    info = AUDIT.lstat()
-    if not stat.S_ISREG(info.st_mode) or info.st_size > 1048576:
-        raise ValueError("unsafe audit file")
     events = []
-    with AUDIT.open(encoding="utf-8") as source:
-        for line in source:
-            if not line.strip():
-                continue
-            item = json.loads(line)
-            if not isinstance(item, dict) or set(item) != {"id", "category", "action", "outcome", "occurred_unix"}:
-                raise ValueError("invalid audit event")
-            event = {
-                "id": bounded_string(item["id"], 128),
-                "category": bounded_string(item["category"], 64),
-                "action": bounded_string(item["action"], 64),
-                "outcome": bounded_string(item["outcome"], 16),
-                "occurred_unix": item["occurred_unix"],
-            }
-            if event["outcome"] not in {"succeeded", "failed", "denied"} or type(event["occurred_unix"]) is not int or event["occurred_unix"] < 0:
-                raise ValueError("invalid audit event")
-            events.append(event)
-            if len(events) > 1000:
-                raise ValueError("too many audit events")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(AUDIT, flags)
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_size > 1048576:
+            raise ValueError("unsafe audit file")
+        with os.fdopen(descriptor, encoding="utf-8", closefd=False) as source:
+            for line in source:
+                if not line.strip():
+                    continue
+                item = json.loads(line)
+                if not isinstance(item, dict) or set(item) != {"id", "category", "action", "outcome", "occurred_unix"}:
+                    raise ValueError("invalid audit event")
+                event = {
+                    "id": bounded_string(item["id"], 128),
+                    "category": bounded_string(item["category"], 64),
+                    "action": bounded_string(item["action"], 64),
+                    "outcome": bounded_string(item["outcome"], 16),
+                    "occurred_unix": item["occurred_unix"],
+                }
+                if event["outcome"] not in {"succeeded", "failed", "denied"} or type(event["occurred_unix"]) is not int or event["occurred_unix"] < 0:
+                    raise ValueError("invalid audit event")
+                events.append(event)
+                if len(events) > 1000:
+                    raise ValueError("too many audit events")
+        after = os.fstat(descriptor)
+        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+            raise ValueError("audit changed while being read")
+    finally:
+        os.close(descriptor)
     return {"schema": 1, "events": events[-100:]}
 
 def remote_feed() -> dict:
