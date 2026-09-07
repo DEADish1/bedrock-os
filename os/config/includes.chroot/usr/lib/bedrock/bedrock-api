@@ -26,10 +26,12 @@ BACKUPS = pathlib.Path(os.environ.get("BEDROCK_API_BACKUPS", "/var/lib/bedrock/a
 IMAGES = pathlib.Path(os.environ.get("BEDROCK_API_IMAGES", "/var/lib/bedrock/api/sources/images.json"))
 UPDATE_POLICY = pathlib.Path(os.environ.get("BEDROCK_API_UPDATE_POLICY", "/var/lib/bedrock/settings/update-policy.json"))
 DEFAULT_UPDATE_POLICY = pathlib.Path(os.environ.get("BEDROCK_API_DEFAULT_UPDATE_POLICY", "/usr/share/bedrock/default-update-policy.json"))
+NAS = pathlib.Path(os.environ.get("BEDROCK_API_NAS", "/var/lib/bedrock/storage/nas.json"))
 
 TASK_STATES = {"queued", "running", "succeeded", "failed", "cancelled"}
 TASK_UNITS = {"bytes", "items", "percent", "steps"}
 DEVICE_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+NAS_ID = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
 def regular_json(path: pathlib.Path, limit: int) -> object:
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
@@ -312,6 +314,35 @@ def settings_feed() -> dict:
         raise ValueError("invalid update policy")
     return {"schema": 1, "updates": {"automatic_checks": value["automatic_checks"], "setup_choice_recorded": value["setup_choice_recorded"], "channel": value["channel"], "automatic_install": False}, "telemetry_enabled": False}
 
+def user_feed() -> dict:
+    value = regular_json(NAS, 1048576)
+    expected = {"schema", "users", "groups", "datasets", "shares", "snapshots"}
+    if not isinstance(value, dict) or set(value) != expected or value["schema"] != 1 or any(not isinstance(value[key], list) for key in expected - {"schema"}) or len(value["users"]) > 256 or len(value["groups"]) > 256:
+        raise ValueError("invalid account state")
+    users = []
+    names = set()
+    for item in value["users"]:
+        required = {"name", "credential_generation", "created_unix"}
+        if not isinstance(item, dict) or set(item) not in (required, required | {"credential_rotated_unix"}) or not NAS_ID.fullmatch(item["name"] if isinstance(item.get("name"), str) else "") or type(item["credential_generation"]) is not int or not 0 <= item["credential_generation"] <= 1000000 or type(item["created_unix"]) is not int or item["created_unix"] < 0:
+            raise ValueError("invalid account")
+        rotated = item.get("credential_rotated_unix")
+        if rotated is not None and (type(rotated) is not int or rotated < item["created_unix"]):
+            raise ValueError("invalid credential timestamp")
+        if item["name"] in names:
+            raise ValueError("duplicate account")
+        names.add(item["name"])
+        users.append({"name": item["name"], "credential_generation": item["credential_generation"], "created_unix": item["created_unix"], "credential_rotated_unix": rotated})
+    groups = []
+    group_names = set()
+    for item in value["groups"]:
+        if not isinstance(item, dict) or set(item) != {"name", "members", "created_unix"} or not NAS_ID.fullmatch(item["name"] if isinstance(item.get("name"), str) else "") or not isinstance(item["members"], list) or len(item["members"]) > 256 or len(item["members"]) != len(set(item["members"])) or any(not isinstance(member, str) or member not in names for member in item["members"]) or type(item["created_unix"]) is not int or item["created_unix"] < 0:
+            raise ValueError("invalid group")
+        if item["name"] in names or item["name"] in group_names:
+            raise ValueError("duplicate group")
+        group_names.add(item["name"])
+        groups.append({"name": item["name"], "member_count": len(item["members"]), "created_unix": item["created_unix"]})
+    return {"schema": 1, "users": users, "groups": groups}
+
 def dashboard() -> dict:
     result = {"schema": 1, "components": {}}
     components = result["components"]
@@ -439,6 +470,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, settings_feed())
             except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
                 self.send_json(503, {"schema": 1, "error": "settings-unavailable"})
+        elif self.path == "/api/v1/users":
+            try:
+                self.send_json(200, user_feed())
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                self.send_json(503, {"schema": 1, "error": "users-unavailable"})
         else:
             self.send_json(404, {"schema": 1, "error": "not-found"})
 

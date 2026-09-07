@@ -27,8 +27,9 @@ Send the token as `Authorization: Bearer TOKEN`. Missing, malformed, unknown, or
 - `GET /api/v1/images` returns the verified image name, format, byte size, SHA-256, and conversion provenance flag from a root-generated path-free view. Managed filesystem locations remain inaccessible to the API service.
 - `GET /api/v1/storage` returns disk capacity and SMART summaries, Linux RAID and ZFS health and rebuild progress, and bounded hardware-RAID visibility counts. Device paths, serial numbers, member patterns, controller addresses, slot identifiers, and vendor descriptions remain inaccessible to clients.
 - `GET /api/v1/settings` returns the validated update-check choice and release channel plus the enforced no-automatic-install and telemetry-disabled states. Hostname, account, network, credential, and other first-run configuration remain inaccessible to clients.
+- `GET /api/v1/users` returns managed NAS account names, credential-rotation generation/timestamps, and group names with member counts. Passwords, hashes, member identities, datasets, ACLs, share paths, and snapshot names remain inaccessible to clients.
 
-Malformed, oversized, indirect, or unavailable task, alert, audit, remote-device, application, backup, hardware, VM, image, storage, and settings sources fail independently with `503`; the API never returns partially validated records.
+Malformed, oversized, indirect, or unavailable task, alert, audit, remote-device, application, backup, hardware, VM, image, storage, settings, and user sources fail independently with `503`; the API never returns partially validated records.
 
 Privileged operations publish state through `record-api-task`. The writer serializes updates, rejects identity, timestamp, or progress regression, caps retained tasks at 256, and emits one privacy-bounded audit event when a task reaches a terminal state. Operations may expose stable task identity and kind, counters, and timestamps only; paths, command arguments, user labels, and raw error messages are prohibited.
 
