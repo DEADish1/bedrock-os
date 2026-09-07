@@ -26,6 +26,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ### Management interface and API 0.6
 
+- Replaced the overview's fabricated health and capacity values with an explicit in-memory authentication flow and live `/api/v1/dashboard` rendering, including disconnected, loading, partial, unavailable, and connected states.
 - Hardened authenticated API state and audit reads against symlink substitution and concurrent file mutation while preserving independent partial-failure responses.
 - Corrected the prototype sidebar footer so it identifies sample data and the current development version instead of presenting a fabricated live-health and uptime claim.
 - Added a versioned, bearer-authenticated local management API on a permission-restricted Unix socket, with hash-only bounded token state, a hardened unprivileged service, and read-only health and virtualization-capability endpoints as the foundation for replacing prototype data.
