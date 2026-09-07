@@ -64,7 +64,7 @@ def main() -> None:
         storage.write_text(json.dumps({"schema": 1, "generated_unix": 100, "overall": "healthy", "read_only": True, "disks": [{}, {}]}), encoding="utf-8")
         alerts.write_text(json.dumps({"schema": 1, "generated_unix": 101, "attention_required": True, "active_count": 1,
             "active": [{"alert_id": "disk-smart:sda", "kind": "disk-smart", "resource": "/dev/sda", "severity": "critical", "first_seen_unix": 90, "last_seen_unix": 101}]}), encoding="utf-8")
-        vms.write_text(json.dumps({"schema": 1, "generated_unix": 102, "domains": [{"name": "private-name", "state": "running"}, {"name": "other", "state": "shut off"}]}), encoding="utf-8")
+        vms.write_text(json.dumps({"schema": 1, "generated_unix": 102, "domains": [{"name": "private-name", "state": "running", "autostart": True, "vcpus": 4, "memory_mib": 8192, "snapshot_count": 2, "image_attachments": ["windows"], "network_attachments": ["private-lan"]}, {"name": "other", "state": "shut off", "autostart": False, "vcpus": 2, "memory_mib": 2048, "snapshot_count": 0, "image_attachments": [], "network_attachments": []}]}), encoding="utf-8")
         updates.write_text(json.dumps({"schema": 1, "status": "available", "checked_unix": 103, "installed_generation": 1, "available_generation": 2, "available_version": "0.6.0", "available_channel": "stable"}), encoding="utf-8")
         tasks.write_text(json.dumps({"schema": 1, "generated_unix": 104, "tasks": [{"id": "task-1", "kind": "image-import", "state": "running", "created_unix": 100, "updated_unix": 104, "progress": {"current": 25, "total": 100, "unit": "percent"}}]}), encoding="utf-8")
         audit.write_text(json.dumps({"id": "event-1", "category": "storage", "action": "scrub", "outcome": "succeeded", "occurred_unix": 99}) + "\n", encoding="utf-8")
@@ -98,7 +98,7 @@ def main() -> None:
             assert request(socket_path, "GET", "/api/v1/health")[0] == 200
             schema_status, schema_body = request(socket_path, "GET", "/api/v1/openapi.json")
             assert schema_status == 200 and schema_body["openapi"] == "3.1.0"
-            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/backups", "/api/v1/hardware", "/api/v1/remote/devices", "/api/v1/virtualization/capabilities"}
+            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/backups", "/api/v1/hardware", "/api/v1/remote/devices", "/api/v1/virtualization/capabilities", "/api/v1/vms"}
             assert schema_body["security"] == [{"bearerAuth": []}]
             assert request(socket_path, "GET", "/api/v1/virtualization/capabilities") == (200, {"schema": 1, "data": {"schema": 1, "status": "ready"}})
             dashboard_status, dashboard_body = request(socket_path, "GET", "/api/v1/dashboard")
@@ -123,6 +123,8 @@ def main() -> None:
             hardware_status, hardware_body = request(socket_path, "GET", "/api/v1/hardware")
             assert hardware_status == 200 and hardware_body["cpu"]["model"] == "Bedrock CPU" and hardware_body["usb_device_count"] == 1
             assert not any(secret in json.dumps(hardware_body) for secret in ["must-not-leak", "/dev/sda", "00:11:22:33:44:55", "0000:01:00.0", "0x1002"])
+            vm_status, vm_body = request(socket_path, "GET", "/api/v1/vms")
+            assert vm_status == 200 and vm_body["domains"][0]["name"] == "private-name" and vm_body["domains"][0]["snapshot_count"] == 2
             alerts.write_text("not-json", encoding="utf-8")
             partial_status, partial_body = request(socket_path, "GET", "/api/v1/dashboard")
             assert partial_status == 200 and partial_body["partial"] is True
@@ -147,6 +149,8 @@ def main() -> None:
             assert request(socket_path, "GET", "/api/v1/backups") == (503, {"schema": 1, "error": "backups-unavailable"})
             hardware.write_text('{"schema":2,"cpu":{}}', encoding="utf-8")
             assert request(socket_path, "GET", "/api/v1/hardware") == (503, {"schema": 1, "error": "hardware-unavailable"})
+            vms.write_text('{"schema":1,"generated_unix":103,"domains":[{"name":"bad name"}]}', encoding="utf-8")
+            assert request(socket_path, "GET", "/api/v1/vms") == (503, {"schema": 1, "error": "vms-unavailable"})
             assert request(socket_path, "GET", "/api/v2/health")[0] == 404
             assert request(socket_path, "POST", "/api/v1/health", None)[0] == 401
             assert request(socket_path, "POST", "/api/v1/health")[0] == 405

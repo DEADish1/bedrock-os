@@ -26,7 +26,8 @@
       "/api/v1/openapi.json",
       "/api/v1/remote/devices",
       "/api/v1/tasks",
-      "/api/v1/virtualization/capabilities"
+      "/api/v1/virtualization/capabilities",
+      "/api/v1/vms"
     ]
   },
   "migration": {

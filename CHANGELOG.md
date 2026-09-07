@@ -8,6 +8,7 @@ This file records completed work, decisions, validation, and the next starting p
 - Replaced the Apps and Backup interface placeholders with authenticated live status views that preserve the in-memory-only token boundary and isolate partial service failures.
 - Added a dedicated authenticated hardware inventory route with strict validation and privacy filtering for device, network, bus, and passthrough identifiers.
 - Added the live Hardware interface with capacity, virtualization, graphics, and connection summaries plus explicit unauthenticated and unavailable states.
+- Added an authenticated, strictly validated managed-VM inventory route exposing lifecycle, allocation, snapshot, and logical attachment status without host paths, console sockets, MAC addresses, raw definitions, or passthrough topology.
 
 ### Release readiness 0.9
 

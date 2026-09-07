@@ -225,6 +225,22 @@ def hardware_feed() -> dict:
     result["usb_device_count"] = len(value["usb_devices"])
     return result
 
+def vm_feed() -> dict:
+    value = regular_json(VMS, 1048576)
+    if not isinstance(value, dict) or set(value) != {"schema", "generated_unix", "domains"} or value["schema"] != 1 or type(value["generated_unix"]) is not int or value["generated_unix"] < 0 or not isinstance(value["domains"], list) or len(value["domains"]) > 128:
+        raise ValueError("invalid virtual machine status")
+    fields = {"name", "state", "autostart", "vcpus", "memory_mib", "snapshot_count", "image_attachments", "network_attachments"}
+    states = {"running", "paused", "shut off", "crashed", "in shutdown", "pmsuspended"}
+    for item in value["domains"]:
+        if not isinstance(item, dict) or set(item) != fields or not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", bounded_string(item["name"], 32)) or item["state"] not in states or type(item["autostart"]) is not bool or type(item["vcpus"]) is not int or not 1 <= item["vcpus"] <= 256 or type(item["memory_mib"]) is not int or not 128 <= item["memory_mib"] <= 1048576 or type(item["snapshot_count"]) is not int or not 0 <= item["snapshot_count"] <= 4096:
+            raise ValueError("invalid virtual machine")
+        for attachments in (item["image_attachments"], item["network_attachments"]):
+            if not isinstance(attachments, list) or len(attachments) > 64 or any(not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", bounded_string(name, 32)) for name in attachments) or len(set(attachments)) != len(attachments):
+                raise ValueError("invalid virtual machine attachments")
+    if len({item["name"] for item in value["domains"]}) != len(value["domains"]):
+        raise ValueError("duplicate virtual machine")
+    return value
+
 def dashboard() -> dict:
     result = {"schema": 1, "components": {}}
     components = result["components"]
@@ -332,6 +348,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, hardware_feed())
             except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
                 self.send_json(503, {"schema": 1, "error": "hardware-unavailable"})
+        elif self.path == "/api/v1/vms":
+            try:
+                self.send_json(200, vm_feed())
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                self.send_json(503, {"schema": 1, "error": "vms-unavailable"})
         else:
             self.send_json(404, {"schema": 1, "error": "not-found"})
 
