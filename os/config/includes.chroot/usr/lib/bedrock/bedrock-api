@@ -203,6 +203,23 @@ def vm_attachment_action(request_id: str, name: str, body: object, kind: str) ->
     return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": f"vm-{kind}-attachment",
                          "name": name, kind: item, "operation": operation, "confirmation": confirmation})
 
+def vm_passthrough_action(request_id: str, name: str, body: object) -> dict:
+    fields = {"schema", "kind", "devices", "operation", "review_confirmation", "confirmation"}
+    if not re.fullmatch(r"[a-z][a-z0-9-]{0,30}[a-z0-9]", name) or not isinstance(body, dict) or set(body) != fields or body.get("schema") != 1:
+        raise ValueError("invalid VM passthrough request")
+    kind, devices, operation = body["kind"], body["devices"], body["operation"]
+    if kind not in {"gpu", "usb"} or operation not in {"assign", "remove"} or not isinstance(devices, list) or not 1 <= len(devices) <= 16 or not all(isinstance(item, str) and 1 <= len(item) <= 64 for item in devices) or len(devices) != len(set(devices)):
+        raise ValueError("invalid VM passthrough request")
+    ordered = sorted(devices)
+    label = kind.upper()
+    review = f"REVIEW {label} PASSTHROUGH VM {name} DEVICES {','.join(ordered)}"
+    confirmation = f"{operation.upper()} {label} PASSTHROUGH VM {name} DEVICES {','.join(ordered)}"
+    if not isinstance(body["review_confirmation"], str) or not hmac.compare_digest(body["review_confirmation"], review) or not isinstance(body["confirmation"], str) or not hmac.compare_digest(body["confirmation"], confirmation):
+        raise ValueError("invalid VM passthrough confirmations")
+    return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "vm-passthrough", "name": name,
+                         "kind": kind, "devices": ordered, "operation": operation,
+                         "review_confirmation": review, "confirmation": confirmation})
+
 def bounded_string(value: object, maximum: int) -> str:
     if not isinstance(value, str) or not value or len(value) > maximum or any(ord(char) < 32 for char in value):
         raise ValueError("invalid string")
@@ -627,7 +644,8 @@ class Handler(BaseHTTPRequestHandler):
         resources = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/resources", self.path)
         images = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/images", self.path)
         networks = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/networks", self.path)
-        if not create and not power and not snapshots and not clone and not resources and not images and not networks:
+        passthrough = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/passthrough", self.path)
+        if not create and not power and not snapshots and not clone and not resources and not images and not networks and not passthrough:
             self.send_json(405, {"schema": 1, "error": "method-not-allowed"})
             return
         if self.headers.get("Transfer-Encoding") is not None or self.headers.get("Content-Type") != "application/json":
@@ -643,6 +661,8 @@ class Handler(BaseHTTPRequestHandler):
             elif images or networks:
                 target = (images or networks).group(1)
                 result = vm_attachment_action(self.headers.get("Idempotency-Key", ""), target, body, "image" if images else "network")
+            elif passthrough:
+                result = vm_passthrough_action(self.headers.get("Idempotency-Key", ""), passthrough.group(1), body)
             else:
                 target = (power or snapshots or clone or resources).group(1)
                 action = vm_control_action if power else vm_snapshot_action if snapshots else vm_clone_action if clone else vm_resource_action

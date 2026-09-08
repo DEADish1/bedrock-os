@@ -36,6 +36,7 @@
       "/api/v1/vms/{name}/clone",
       "/api/v1/vms/{name}/images",
       "/api/v1/vms/{name}/networks",
+      "/api/v1/vms/{name}/passthrough",
       "/api/v1/vms/{name}/power",
       "/api/v1/vms/{name}/resources",
       "/api/v1/vms/{name}/snapshots"

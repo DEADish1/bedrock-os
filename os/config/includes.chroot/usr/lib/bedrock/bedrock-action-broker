@@ -39,6 +39,7 @@ def environment():
         "create_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_CREATE_HELPER", "/usr/lib/bedrock/create-vm")),
         "image_attachment_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_IMAGE_ATTACHMENT_HELPER", "/usr/lib/bedrock/manage-vm-image-attachment")),
         "network_attachment_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_NETWORK_ATTACHMENT_HELPER", "/usr/lib/bedrock/manage-vm-network-attachment")),
+        "passthrough_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_PASSTHROUGH_HELPER", "/usr/lib/bedrock/change-vm-passthrough")),
         "vm_requests": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_VM_REQUESTS", "/var/lib/bedrock/virtualization/requests")),
         "vm_definitions": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_VM_DEFINITIONS", "/var/lib/bedrock/virtualization/definitions")),
         "task_writer": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_TASK_WRITER", "/usr/lib/bedrock/record-api-task")),
@@ -146,6 +147,21 @@ def parse_request(raw):
         if not valid_name(name) or not valid_name(item) or operation not in {"attach", "detach"} or confirmation != expected:
             raise RequestError(f"invalid-vm-{kind}-attachment", f"VM, {kind}, operation, or exact confirmation is invalid")
         details = {"schema": 1, "vm": name, kind: item, "action": operation, "confirmation": confirmation}
+    elif request.get("action") == "vm-passthrough":
+        fields = {"schema", "request_id", "action", "name", "kind", "devices", "operation", "review_confirmation", "confirmation"}
+        if set(request) != fields:
+            raise RequestError("invalid-request", "request fields do not match the vm-passthrough schema")
+        name, kind, devices, operation = request["name"], request["kind"], request["devices"], request["operation"]
+        valid_name = isinstance(name, str) and re.fullmatch(r"[a-z][a-z0-9-]{0,30}[a-z0-9]", name)
+        valid_devices = isinstance(devices, list) and 1 <= len(devices) <= 16 and all(isinstance(item, str) and 1 <= len(item) <= 64 for item in devices) and len(devices) == len(set(devices))
+        ordered = sorted(devices) if valid_devices else []
+        label = kind.upper() if kind in {"gpu", "usb"} else ""
+        review = f"REVIEW {label} PASSTHROUGH VM {name} DEVICES {','.join(ordered)}"
+        mutate = f"{operation.upper()} {label} PASSTHROUGH VM {name} DEVICES {','.join(ordered)}" if operation in {"assign", "remove"} else ""
+        if not valid_name or not valid_devices or kind not in {"gpu", "usb"} or operation not in {"assign", "remove"} or request["review_confirmation"] != review or request["confirmation"] != mutate:
+            raise RequestError("invalid-vm-passthrough", "VM passthrough selection or exact confirmations are invalid")
+        details = {"schema": 1, "vm": name, "kind": kind, "devices": ordered, "action": operation,
+                   "review_confirmation": review, "confirmation": mutate}
     else:
         raise RequestError("unsupported-action", "action is not allowlisted")
     canonical = json.dumps(request, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -170,7 +186,7 @@ def load_state(path):
         if fields not in ({"request_id", "request_sha256", "action", "status"},
                           {"request_id", "request_sha256", "action", "status", "created_unix"}):
             raise RuntimeError("action result state contains an invalid result")
-        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment"} or item["status"] not in {"pending", "succeeded", "failed"}:
+        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough"} or item["status"] not in {"pending", "succeeded", "failed"}:
             raise RuntimeError("action result state contains an unsupported result")
         if item["status"] != "succeeded" and "created_unix" not in item:
             raise RuntimeError("incomplete action result lacks a creation time")
@@ -292,6 +308,9 @@ def execute_vm_admin(request, request_file, settings, helper_environment):
     elif request["action"] == "vm-network-attachment":
         path = request_directory / f"{request['name']}-network-{request['operation']}-{request['network']}.json"
         helper = settings["network_attachment_helper"]
+    elif request["action"] == "vm-passthrough":
+        path = request_directory / f"{request['name']}-{request['kind']}-{request['operation']}-passthrough.json"
+        helper = settings["passthrough_helper"]
     else:
         path = request_directory / f"{request['name']}-resources.json"
         helper = settings["resource_helper"]
@@ -362,7 +381,7 @@ def execute(raw, settings):
         if completed_code != 0:
             raise RequestError("action-failed", "guarded VM snapshot helper rejected the action")
         return response(request["request_id"], "succeeded", replayed=False)
-    if request["action"] in {"vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment"}:
+    if request["action"] in {"vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough"}:
         completed_code = execute_vm_admin(request, details, settings, helper_environment)
         result_entry["status"] = "succeeded" if completed_code == 0 else "failed"
         save_state(settings["state"], state)
