@@ -4,6 +4,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Added bounded task progress and exactly-once terminal audit publication to guarded VM clone and recoverable-delete operations ahead of authenticated API exposure.
 - Added guarded snapshot create, restore, and delete controls to the live VM interface, including shut-off-only availability, canonical-name validation, exact confirmation, server-confirmed refresh, and destructive restore guidance.
 - Added validated logical snapshot names to the privacy-bounded VM inventory and an authenticated idempotent endpoint for exact-confirmation offline snapshot creation, restoration, and deletion through the guarded helper.
 - Added three-step task progress and exactly-once terminal audit publication to guarded VM snapshot creation, restoration, deletion, and failure paths before exposing those operations through the management API.

@@ -6,6 +6,10 @@ set -eu
 [ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
 request=$1
 fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+task_writer=${BEDROCK_RECORD_API_TASK:-$(dirname "$0")/record-api-task}
+task_active=0
+task_done=0
+task_current=0
 [ -f "$request" ] && [ ! -L "$request" ] || fail "VM deletion request is missing or indirect"
 for tool in jq sha256sum; do command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"; done
 jq -e '
@@ -51,8 +55,11 @@ quarantine=$base/quarantine/$name
 undefined=0
 state_updated=0
 temporary=
+task_created=$(date +%s)
+task_id="vm-delete-$$"
 cleanup() {
   status=$?
+  if [ "$task_active" -eq 1 ] && [ "$task_done" -eq 0 ]; then "$task_writer" "$task_id" vm-delete failed "$task_created" "$task_current" 4 steps >/dev/null 2>&1 || true; fi
   if [ "$status" -ne 0 ] && [ -d "$quarantine" ]; then
     [ "$state_updated" -eq 0 ] || cp "$quarantine/domains.before.json" "$state" 2>/dev/null || true
     [ "$undefined" -eq 0 ] || "$virsh" --connect qemu:///system define "$quarantine/definition.xml" >/dev/null 2>&1 || true
@@ -69,9 +76,13 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
+"$task_writer" "$task_id" vm-delete queued "$task_created" 0 4 steps
+task_active=1
 "$virsh" --connect qemu:///system dominfo "$name" >/dev/null 2>&1 || fail "managed VM is missing from libvirt"
 runtime=$(LC_ALL=C "$virsh" --connect qemu:///system domstate "$name" | tr '[:upper:]' '[:lower:]' | tr -d '\r')
 [ "$runtime" = "shut off" ] || fail "VM must be shut off before deletion"
+task_current=1
+"$task_writer" "$task_id" vm-delete running "$task_created" "$task_current" 4 steps
 [ -e "$base/quarantine" ] || mkdir "$base/quarantine"
 [ -d "$base/quarantine" ] && [ ! -L "$base/quarantine" ] || fail "VM quarantine path is indirect"
 chmod 0700 "$base/quarantine"
@@ -84,14 +95,21 @@ mv "$definition" "$quarantine/definition.xml"
 mv "$plan" "$quarantine/plan.json"
 mv "$authorization" "$quarantine/authorization.json"
 mv "$disk" "$quarantine/disk.qcow2"
+task_current=2
+"$task_writer" "$task_id" vm-delete running "$task_created" "$task_current" 4 steps
 undefined=1
 "$virsh" --connect qemu:///system undefine "$name" --nvram --keep-tpm >/dev/null
+task_current=3
+"$task_writer" "$task_id" vm-delete running "$task_created" "$task_current" 4 steps
 temporary=$(mktemp "$base/.domains.XXXXXX")
 jq -S --arg name "$name" '.domains |= map(select(.name!=$name))' "$state" > "$temporary"
 chmod 0600 "$temporary"
 state_updated=1
 mv "$temporary" "$state"
 temporary=
+task_current=4
+"$task_writer" "$task_id" vm-delete succeeded "$task_created" "$task_current" 4 steps
+task_done=1
 trap - EXIT INT TERM
 rmdir "$lock"
 jq -S -n --arg name "$name" --arg quarantine "$quarantine" '{schema:1,status:"deleted-recoverable",name:$name,running:false,quarantine:$quarantine}'

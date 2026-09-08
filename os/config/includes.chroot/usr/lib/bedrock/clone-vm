@@ -6,6 +6,10 @@ set -eu
 [ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
 request=$1
 fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+task_writer=${BEDROCK_RECORD_API_TASK:-$(dirname "$0")/record-api-task}
+task_active=0
+task_done=0
+task_current=0
 [ -f "$request" ] && [ ! -L "$request" ] || fail "VM clone request is missing or indirect"
 command -v jq >/dev/null 2>&1 || fail "jq is required"
 jq -e '
@@ -66,8 +70,11 @@ temporary=
 state_before=
 mutated=0
 state_changed=0
+task_created=$(date +%s)
+task_id="vm-clone-$$"
 cleanup() {
   status=$?
+  if [ "$task_active" -eq 1 ] && [ "$task_done" -eq 0 ]; then "$task_writer" "$task_id" vm-clone failed "$task_created" "$task_current" 4 steps >/dev/null 2>&1 || true; fi
   [ -z "$temporary" ] || rm -f "$temporary"
   if [ "$status" -ne 0 ] && [ "$state_changed" -eq 1 ]; then cp "$state_before" "$state" 2>/dev/null || true; fi
   if [ "$status" -ne 0 ] && [ "$mutated" -eq 1 ]; then "$virsh" --connect qemu:///system undefine "$name" --nvram --tpm >/dev/null 2>&1 || true; rm -f "$disk" "$definition" "$plan" "$authorization"; fi
@@ -77,15 +84,21 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
+"$task_writer" "$task_id" vm-clone queued "$task_created" 0 4 steps
+task_active=1
 state_before=$(mktemp "$base/.domains-before.XXXXXX")
 cp "$state" "$state_before"
 "$virsh" --connect qemu:///system dominfo "$source" >/dev/null 2>&1 || fail "source VM is missing from libvirt"
 runtime=$(LC_ALL=C "$virsh" --connect qemu:///system domstate "$source" | tr '[:upper:]' '[:lower:]' | tr -d '\r')
 [ "$runtime" = "shut off" ] || fail "source VM must be shut off before cloning"
 if "$virsh" --connect qemu:///system dominfo "$name" >/dev/null 2>&1; then fail "clone name already exists in libvirt"; fi
+task_current=1
+"$task_writer" "$task_id" vm-clone running "$task_created" "$task_current" 4 steps
 mutated=1
 "$virt_clone" --connect qemu:///system --original "$source" --name "$name" --file "$disk" --nvram "$nvram" >/dev/null
 [ -f "$disk" ] && [ ! -L "$disk" ] || fail "clone disk was not created safely"
+task_current=2
+"$task_writer" "$task_id" vm-clone running "$task_created" "$task_current" 4 steps
 "$virsh" --connect qemu:///system dumpxml --inactive "$name" > "$definition"
 chmod 0600 "$disk" "$definition"
 jq -S -n --arg source "$source" --arg name "$name" --argjson vcpus "$vcpus" --argjson memory "$memory" \
@@ -93,6 +106,8 @@ jq -S -n --arg source "$source" --arg name "$name" --argjson vcpus "$vcpus" --ar
 jq -S -n --arg source "$source" --arg name "$name" --arg confirmation "CLONE VM $source AS $name" \
   '{schema:1,action:"clone",source:$source,name:$name,confirmation:$confirmation}' > "$authorization"
 chmod 0600 "$plan" "$authorization"
+task_current=3
+"$task_writer" "$task_id" vm-clone running "$task_created" "$task_current" 4 steps
 temporary=$(mktemp "$base/.domains.XXXXXX")
 jq -S --arg name "$name" --argjson vcpus "$vcpus" --argjson memory "$memory" \
   '.domains += [{name:$name,vcpus:$vcpus,memory_mib:$memory}] | .domains |= sort_by(.name)' "$state" > "$temporary"
@@ -102,6 +117,9 @@ mv "$temporary" "$state"
 temporary=
 mutated=0
 state_changed=0
+task_current=4
+"$task_writer" "$task_id" vm-clone succeeded "$task_created" "$task_current" 4 steps
+task_done=1
 trap - EXIT INT TERM
 rm -f "$state_before"
 rmdir "$lock"

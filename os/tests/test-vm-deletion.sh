@@ -3,6 +3,7 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 deleter="$ROOT/os/config/includes.chroot/usr/lib/bedrock/delete-vm"
+task_writer="$ROOT/os/config/includes.chroot/usr/lib/bedrock/record-api-task"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
 mkdir -p "$work/bin"
@@ -32,7 +33,7 @@ case " $* " in
 esac
 EOF
 chmod +x "$work/bin/virsh"
-run() { BEDROCK_VM_TEST_MODE=1 BEDROCK_VM_STATE_ROOT="$work/state" BEDROCK_VM_DOMAINS="$work/state/domains.json" BEDROCK_VM_VIRSH="$work/bin/virsh" BEDROCK_VM_TEST_LOG="$work/virsh.log" BEDROCK_VM_RUNTIME_STATE="$work/runtime-state" "$deleter" "$work/request.json"; }
+run() { BEDROCK_VM_TEST_MODE=1 BEDROCK_VM_STATE_ROOT="$work/state" BEDROCK_VM_DOMAINS="$work/state/domains.json" BEDROCK_VM_VIRSH="$work/bin/virsh" BEDROCK_VM_TEST_LOG="$work/virsh.log" BEDROCK_VM_RUNTIME_STATE="$work/runtime-state" BEDROCK_RECORD_API_TASK="$task_writer" BEDROCK_API_TASK_TEST_MODE=1 BEDROCK_API_TASK_STATE_DIR="$work/api" "$deleter" "$work/request.json"; }
 setup
 run | jq -e '.status=="deleted-recoverable" and .running==false' >/dev/null
 jq -e '.domains==[]' "$work/state/domains.json" >/dev/null
@@ -40,6 +41,8 @@ jq -e '.domains==[]' "$work/state/domains.json" >/dev/null
 [ -f "$work/state/quarantine/test-vm/disk.qcow2" ]
 [ -f "$work/state/quarantine/test-vm/domains.before.json" ]
 grep -q 'undefine test-vm --nvram --keep-tpm' "$work/virsh.log"
+jq -e '.tasks|length==1 and .[0].kind=="vm-delete" and .[0].state=="succeeded" and .[0].progress.current==4' "$work/api/tasks.json" >/dev/null
+[ "$(wc -l < "$work/api/audit.jsonl")" -eq 1 ]
 must_fail() { if "$@" >/dev/null 2>&1; then printf 'error: command unexpectedly succeeded\n' >&2; exit 1; fi; }
 setup
 printf 'running\n' > "$work/runtime-state"

@@ -3,6 +3,7 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 cloner="$ROOT/os/config/includes.chroot/usr/lib/bedrock/clone-vm"
+task_writer="$ROOT/os/config/includes.chroot/usr/lib/bedrock/record-api-task"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
 mkdir -p "$work/bin" "$work/state"
@@ -29,11 +30,13 @@ while [ "$#" -gt 0 ]; do case "$1" in --name) name=$2; shift 2;; --file) file=$2
 EOF
 chmod +x "$work/bin/virsh" "$work/bin/virt-clone"
 jq -n '{schema:1,source:"source-vm",name:"clone-vm",confirmation:"CLONE VM source-vm AS clone-vm"}' > "$work/request.json"
-run() { BEDROCK_VM_TEST_MODE=1 BEDROCK_VM_STATE_ROOT="$work/state" BEDROCK_VM_DOMAINS="$work/domains.json" BEDROCK_VM_HARDWARE="$work/hardware.json" BEDROCK_VM_ATTACHMENTS="$work/images.json" BEDROCK_VM_NETWORK_ATTACHMENTS="$work/networks.json" BEDROCK_VM_VIRSH="$work/bin/virsh" BEDROCK_VM_VIRT_CLONE="$work/bin/virt-clone" BEDROCK_VM_RUNTIME_STATE="$work/runtime-state" BEDROCK_VM_DEFINED="$work/defined" "$cloner" "$work/request.json"; }
+run() { BEDROCK_VM_TEST_MODE=1 BEDROCK_VM_STATE_ROOT="$work/state" BEDROCK_VM_DOMAINS="$work/domains.json" BEDROCK_VM_HARDWARE="$work/hardware.json" BEDROCK_VM_ATTACHMENTS="$work/images.json" BEDROCK_VM_NETWORK_ATTACHMENTS="$work/networks.json" BEDROCK_VM_VIRSH="$work/bin/virsh" BEDROCK_VM_VIRT_CLONE="$work/bin/virt-clone" BEDROCK_VM_RUNTIME_STATE="$work/runtime-state" BEDROCK_VM_DEFINED="$work/defined" BEDROCK_RECORD_API_TASK="$task_writer" BEDROCK_API_TASK_TEST_MODE=1 BEDROCK_API_TASK_STATE_DIR="$work/api" "$cloner" "$work/request.json"; }
 run | jq -e '.status=="cloned" and .running==false and .name=="clone-vm"' >/dev/null
 jq -e '(.domains|length)==2 and any(.domains[];.name=="clone-vm")' "$work/domains.json" >/dev/null
 [ -f "$work/state/disks/clone-vm.qcow2" ]
 grep -q '<name>clone-vm</name>' "$work/state/definitions/clone-vm.xml"
+jq -e '.tasks|length==1 and .[0].kind=="vm-clone" and .[0].state=="succeeded" and .[0].progress.current==4' "$work/api/tasks.json" >/dev/null
+[ "$(wc -l < "$work/api/audit.jsonl")" -eq 1 ]
 must_fail() { if "$@" >/dev/null 2>&1; then printf 'error: command unexpectedly succeeded\n' >&2; exit 1; fi; }
 must_fail run
 printf 'VM clone tests passed.\n'
