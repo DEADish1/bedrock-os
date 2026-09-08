@@ -178,6 +178,21 @@ def vm_resource_action(request_id: str, name: str, body: object) -> dict:
     return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "vm-resources",
                          "name": name, "vcpus": vcpus, "memory_mib": memory, "boot_order": boot, "confirmation": confirmation})
 
+def vm_attachment_action(request_id: str, name: str, body: object, kind: str) -> dict:
+    pattern = r"[a-z][a-z0-9-]{0,30}[a-z0-9]"
+    fields = {"schema", kind, "operation", "confirmation"}
+    if not re.fullmatch(pattern, name) or not isinstance(body, dict) or set(body) != fields or body.get("schema") != 1:
+        raise ValueError("invalid VM attachment request")
+    item, operation, confirmation = body[kind], body["operation"], body["confirmation"]
+    if not isinstance(item, str) or not re.fullmatch(pattern, item) or operation not in {"attach", "detach"}:
+        raise ValueError("invalid VM attachment request")
+    label = kind.upper()
+    expected = f"ATTACH {label} {item} TO VM {name}" if operation == "attach" else f"DETACH {label} {item} FROM VM {name}"
+    if not isinstance(confirmation, str) or not hmac.compare_digest(confirmation, expected):
+        raise ValueError("invalid VM attachment confirmation")
+    return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": f"vm-{kind}-attachment",
+                         "name": name, kind: item, "operation": operation, "confirmation": confirmation})
+
 def bounded_string(value: object, maximum: int) -> str:
     if not isinstance(value, str) or not value or len(value) > maximum or any(ord(char) < 32 for char in value):
         raise ValueError("invalid string")
@@ -599,7 +614,9 @@ class Handler(BaseHTTPRequestHandler):
         snapshots = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/snapshots", self.path)
         clone = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/clone", self.path)
         resources = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/resources", self.path)
-        if not power and not snapshots and not clone and not resources:
+        images = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/images", self.path)
+        networks = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/networks", self.path)
+        if not power and not snapshots and not clone and not resources and not images and not networks:
             self.send_json(405, {"schema": 1, "error": "method-not-allowed"})
             return
         if self.headers.get("Transfer-Encoding") is not None or self.headers.get("Content-Type") != "application/json":
@@ -610,8 +627,12 @@ class Handler(BaseHTTPRequestHandler):
             if not 1 <= length <= 4096:
                 raise ValueError("invalid body length")
             body = json.loads(self.rfile.read(length).decode("utf-8"))
-            action = vm_control_action if power else vm_snapshot_action if snapshots else vm_clone_action if clone else vm_resource_action
-            result = action(self.headers.get("Idempotency-Key", ""), (power or snapshots or clone or resources).group(1), body)
+            target = (power or snapshots or clone or resources or images or networks).group(1)
+            if images or networks:
+                result = vm_attachment_action(self.headers.get("Idempotency-Key", ""), target, body, "image" if images else "network")
+            else:
+                action = vm_control_action if power else vm_snapshot_action if snapshots else vm_clone_action if clone else vm_resource_action
+                result = action(self.headers.get("Idempotency-Key", ""), target, body)
         except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
             self.send_json(400, {"schema": 1, "error": "invalid-request"})
             return

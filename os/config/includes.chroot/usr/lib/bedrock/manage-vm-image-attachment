@@ -6,6 +6,10 @@ set -eu
 [ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
 request=$1
 fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+task_writer=${BEDROCK_RECORD_API_TASK:-$(dirname "$0")/record-api-task}
+task_active=0
+task_done=0
+task_current=0
 [ -f "$request" ] && [ ! -L "$request" ] || fail "image attachment request is missing or indirect"
 for tool in jq sha256sum; do command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"; done
 jq -e '
@@ -58,8 +62,11 @@ mkdir "$lock" 2>/dev/null || fail "another VM lifecycle operation is running"
 xml=
 temporary=
 mutated=0
+task_created=$(date +%s)
+task_id="vm-image-attachment-$$"
 cleanup() {
   status=$?
+  if [ "$task_active" -eq 1 ] && [ "$task_done" -eq 0 ]; then "$task_writer" "$task_id" vm-image-attachment failed "$task_created" "$task_current" 3 steps >/dev/null 2>&1 || true; fi
   if [ "$status" -ne 0 ] && [ "$mutated" -eq 1 ]; then
     if [ "$action" = attach ]; then "$virsh" --connect qemu:///system detach-device "$vm" "$xml" --config >/dev/null 2>&1 || true; else "$virsh" --connect qemu:///system attach-device "$vm" "$xml" --config >/dev/null 2>&1 || true; fi
   fi
@@ -70,9 +77,13 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
+"$task_writer" "$task_id" vm-image-attachment queued "$task_created" 0 3 steps
+task_active=1
 "$virsh" --connect qemu:///system dominfo "$vm" >/dev/null 2>&1 || fail "managed VM is missing from libvirt"
 runtime=$(LC_ALL=C "$virsh" --connect qemu:///system domstate "$vm" | tr '[:upper:]' '[:lower:]' | tr -d '\r')
 [ "$runtime" = "shut off" ] || fail "VM must be shut off before persistent image changes"
+task_current=1
+"$task_writer" "$task_id" vm-image-attachment running "$task_created" "$task_current" 3 steps
 block_list=$("$virsh" --connect qemu:///system domblklist "$vm" --inactive --details) || fail "persistent VM block inventory is unavailable"
 target_present() { printf '%s\n' "$block_list" | awk -v target="$target" 'NR>2 && $3==target {found=1} END {exit !found}'; }
 record_present() { jq -e --arg vm "$vm" --arg image "$image" --arg target "$target" 'any(.attachments[]; .vm==$vm and .image==$image and .target==$target)' "$attachments" >/dev/null; }
@@ -89,6 +100,8 @@ mutated=1
 if [ "$action" = attach ]; then "$virsh" --connect qemu:///system attach-device "$vm" "$xml" --config >/dev/null; else "$virsh" --connect qemu:///system detach-device "$vm" "$xml" --config >/dev/null; fi
 block_list=$("$virsh" --connect qemu:///system domblklist "$vm" --inactive --details) || fail "persistent VM block inventory cannot be verified"
 if [ "$action" = attach ]; then target_present || fail "libvirt did not persist the attachment"; else if target_present; then fail "libvirt still reports the detached target"; fi; fi
+task_current=2
+"$task_writer" "$task_id" vm-image-attachment running "$task_created" "$task_current" 3 steps
 temporary=$(mktemp "$base/.attachments.XXXXXX")
 if [ "$action" = attach ]; then
   jq -S --arg vm "$vm" --arg image "$image" --arg type "$type" --arg device "$device" --arg target "$target" --arg path "$path" \
@@ -100,6 +113,9 @@ chmod 0600 "$temporary"
 mv "$temporary" "$attachments"
 temporary=
 mutated=0
+task_current=3
+"$task_writer" "$task_id" vm-image-attachment succeeded "$task_created" "$task_current" 3 steps
+task_done=1
 trap - EXIT INT TERM
 rm -f "$xml"
 rmdir "$lock"

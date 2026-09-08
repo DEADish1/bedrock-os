@@ -6,6 +6,10 @@ manager="$ROOT/os/config/includes.chroot/usr/lib/bedrock/manage-vm-network-attac
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
 mkdir -p "$work/bin" "$work/state"
+task_writer=$work/bin/record-task
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$BEDROCK_VM_TASK_LOG"\n' > "$task_writer"
+chmod +x "$task_writer"
+: > "$work/tasks.log"
 jq -n '{schema:1,domains:[{name:"test-vm",vcpus:4,memory_mib:8192}]}' > "$work/domains.json"
 jq -n '{schema:1,networks:[{name:"lab",libvirt_name:"bedrock-lab",bridge:"br-bedrock-42",cidr:"10.240.42.0/24",subnet_octet:42}]}' > "$work/networks.json"
 jq -n '{schema:1,attachments:[]}' > "$work/attachments.json"
@@ -26,11 +30,13 @@ esac
 EOF
 chmod +x "$work/bin/virsh"
 request() { jq -n --arg action "$1" --arg confirmation "$2" '{schema:1,vm:"test-vm",network:"lab",action:$action,confirmation:$confirmation}' > "$work/request.json"; }
-run() { BEDROCK_VM_TEST_MODE=1 BEDROCK_VM_STATE_ROOT="$work/state" BEDROCK_VM_DOMAINS="$work/domains.json" BEDROCK_VM_NETWORKS="$work/networks.json" BEDROCK_VM_NETWORK_ATTACHMENTS="$work/attachments.json" BEDROCK_VM_VIRSH="$work/bin/virsh" BEDROCK_VM_TEST_LOG="$work/virsh.log" BEDROCK_VM_RUNTIME_STATE="$work/runtime-state" BEDROCK_VM_INTERFACES="$work/interfaces" "$manager" "$work/request.json"; }
+run() { BEDROCK_VM_TEST_MODE=1 BEDROCK_VM_STATE_ROOT="$work/state" BEDROCK_VM_DOMAINS="$work/domains.json" BEDROCK_VM_NETWORKS="$work/networks.json" BEDROCK_VM_NETWORK_ATTACHMENTS="$work/attachments.json" BEDROCK_VM_VIRSH="$work/bin/virsh" BEDROCK_VM_TEST_LOG="$work/virsh.log" BEDROCK_VM_RUNTIME_STATE="$work/runtime-state" BEDROCK_VM_INTERFACES="$work/interfaces" BEDROCK_RECORD_API_TASK="$task_writer" BEDROCK_VM_TASK_LOG="$work/tasks.log" "$manager" "$work/request.json"; }
 request attach 'ATTACH NETWORK lab TO VM test-vm'; run | jq -e '.model=="virtio" and (.mac|startswith("52:54:00:"))' >/dev/null
 jq -e '.attachments|length==1 and .[0].network=="lab"' "$work/attachments.json" >/dev/null
+grep -Eq '^vm-network-attachment-[0-9]+ vm-network-attachment succeeded [0-9]+ 3 3 steps$' "$work/tasks.log"
 request detach 'DETACH NETWORK lab FROM VM test-vm'; run | jq -e '.action=="detach"' >/dev/null
 jq -e '.attachments==[]' "$work/attachments.json" >/dev/null
+[ "$(grep -Ec ' vm-network-attachment succeeded ' "$work/tasks.log")" -eq 2 ]
 must_fail() { if "$@" >/dev/null 2>&1; then printf 'error: command unexpectedly succeeded\n' >&2; exit 1; fi; }
 must_fail run
 request attach 'ATTACH NETWORK wrong TO VM test-vm'; must_fail run

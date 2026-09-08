@@ -6,6 +6,10 @@ manager="$ROOT/os/config/includes.chroot/usr/lib/bedrock/manage-vm-image-attachm
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
 mkdir -p "$work/bin" "$work/state/images"
+task_writer=$work/bin/record-task
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$BEDROCK_VM_TASK_LOG"\n' > "$task_writer"
+chmod +x "$task_writer"
+: > "$work/tasks.log"
 state_root=$work/state
 [ -z "${MSYSTEM:-}" ] || state_root=$(cygpath -m "$work/state")
 printf 'iso-data\n' > "$work/state/images/installer.iso"
@@ -30,11 +34,13 @@ esac
 EOF
 chmod +x "$work/bin/virsh"
 request() { jq -n --arg action "$1" --arg confirmation "$2" '{schema:1,vm:"test-vm",image:"installer",action:$action,confirmation:$confirmation}' > "$work/request.json"; }
-run() { BEDROCK_VM_TEST_MODE=1 BEDROCK_VM_STATE_ROOT="$state_root" BEDROCK_VM_DOMAINS="$work/domains.json" BEDROCK_VM_IMAGES="$work/images.json" BEDROCK_VM_ATTACHMENTS="$work/attachments.json" BEDROCK_VM_VIRSH="$work/bin/virsh" BEDROCK_VM_TEST_LOG="$work/virsh.log" BEDROCK_VM_RUNTIME_STATE="$work/runtime-state" BEDROCK_VM_BLOCKS="$work/blocks" "$manager" "$work/request.json"; }
+run() { BEDROCK_VM_TEST_MODE=1 BEDROCK_VM_STATE_ROOT="$state_root" BEDROCK_VM_DOMAINS="$work/domains.json" BEDROCK_VM_IMAGES="$work/images.json" BEDROCK_VM_ATTACHMENTS="$work/attachments.json" BEDROCK_VM_VIRSH="$work/bin/virsh" BEDROCK_VM_TEST_LOG="$work/virsh.log" BEDROCK_VM_RUNTIME_STATE="$work/runtime-state" BEDROCK_VM_BLOCKS="$work/blocks" BEDROCK_RECORD_API_TASK="$task_writer" BEDROCK_VM_TASK_LOG="$work/tasks.log" "$manager" "$work/request.json"; }
 request attach 'ATTACH IMAGE installer TO VM test-vm'; run | jq -e '.device=="cdrom" and .target=="sda" and .read_only==true' >/dev/null
 jq -e '.attachments|length==1 and .[0].image=="installer"' "$work/attachments.json" >/dev/null
+grep -Eq '^vm-image-attachment-[0-9]+ vm-image-attachment succeeded [0-9]+ 3 3 steps$' "$work/tasks.log"
 request detach 'DETACH IMAGE installer FROM VM test-vm'; run | jq -e '.action=="detach"' >/dev/null
 jq -e '.attachments==[]' "$work/attachments.json" >/dev/null
+[ "$(grep -Ec ' vm-image-attachment succeeded ' "$work/tasks.log")" -eq 2 ]
 must_fail() { if "$@" >/dev/null 2>&1; then printf 'error: command unexpectedly succeeded\n' >&2; exit 1; fi; }
 must_fail run
 request attach 'ATTACH IMAGE wrong TO VM test-vm'; must_fail run

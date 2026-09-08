@@ -36,6 +36,8 @@ def environment():
         "clone_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_CLONE_HELPER", "/usr/lib/bedrock/clone-vm")),
         "delete_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_DELETE_HELPER", "/usr/lib/bedrock/delete-vm")),
         "resource_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_RESOURCE_HELPER", "/usr/lib/bedrock/update-vm-resources")),
+        "image_attachment_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_IMAGE_ATTACHMENT_HELPER", "/usr/lib/bedrock/manage-vm-image-attachment")),
+        "network_attachment_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_NETWORK_ATTACHMENT_HELPER", "/usr/lib/bedrock/manage-vm-network-attachment")),
         "vm_requests": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_VM_REQUESTS", "/var/lib/bedrock/virtualization/requests")),
         "vm_definitions": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_VM_DEFINITIONS", "/var/lib/bedrock/virtualization/definitions")),
         "task_writer": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_TASK_WRITER", "/usr/lib/bedrock/record-api-task")),
@@ -123,6 +125,18 @@ def parse_request(raw):
         if not valid_name or not valid_vcpus or not valid_memory or not valid_boot or confirmation != expected:
             raise RequestError("invalid-vm-resources", "VM resources or exact confirmation are invalid")
         details = {"schema": 1, "name": name, "vcpus": vcpus, "memory_mib": memory, "boot_order": boot, "confirmation": confirmation}
+    elif request.get("action") in {"vm-image-attachment", "vm-network-attachment"}:
+        kind = "image" if request["action"] == "vm-image-attachment" else "network"
+        expected_fields = {"schema", "request_id", "action", "name", kind, "operation", "confirmation"}
+        if set(request) != expected_fields:
+            raise RequestError("invalid-request", f"request fields do not match the vm-{kind}-attachment schema")
+        name, item, operation, confirmation = request["name"], request[kind], request["operation"], request["confirmation"]
+        valid_name = lambda value: isinstance(value, str) and re.fullmatch(r"[a-z][a-z0-9-]{0,30}[a-z0-9]", value)
+        prefix = "IMAGE" if kind == "image" else "NETWORK"
+        expected = f"{operation.upper()} {prefix} {item} TO VM {name}" if operation == "attach" else f"DETACH {prefix} {item} FROM VM {name}"
+        if not valid_name(name) or not valid_name(item) or operation not in {"attach", "detach"} or confirmation != expected:
+            raise RequestError(f"invalid-vm-{kind}-attachment", f"VM, {kind}, operation, or exact confirmation is invalid")
+        details = {"schema": 1, "vm": name, kind: item, "action": operation, "confirmation": confirmation}
     else:
         raise RequestError("unsupported-action", "action is not allowlisted")
     canonical = json.dumps(request, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -147,7 +161,7 @@ def load_state(path):
         if fields not in ({"request_id", "request_sha256", "action", "status"},
                           {"request_id", "request_sha256", "action", "status", "created_unix"}):
             raise RuntimeError("action result state contains an invalid result")
-        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-clone", "vm-delete", "vm-resources"} or item["status"] not in {"pending", "succeeded", "failed"}:
+        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-clone", "vm-delete", "vm-resources", "vm-image-attachment", "vm-network-attachment"} or item["status"] not in {"pending", "succeeded", "failed"}:
             raise RuntimeError("action result state contains an unsupported result")
         if item["status"] != "succeeded" and "created_unix" not in item:
             raise RuntimeError("incomplete action result lacks a creation time")
@@ -260,6 +274,12 @@ def execute_vm_admin(request, request_file, settings, helper_environment):
                 os.close(descriptor)
         path = request_directory / f"{request['name']}-delete.json"
         helper = settings["delete_helper"]
+    elif request["action"] == "vm-image-attachment":
+        path = request_directory / f"{request['name']}-image-{request['operation']}-{request['image']}.json"
+        helper = settings["image_attachment_helper"]
+    elif request["action"] == "vm-network-attachment":
+        path = request_directory / f"{request['name']}-network-{request['operation']}-{request['network']}.json"
+        helper = settings["network_attachment_helper"]
     else:
         path = request_directory / f"{request['name']}-resources.json"
         helper = settings["resource_helper"]
@@ -330,7 +350,7 @@ def execute(raw, settings):
         if completed_code != 0:
             raise RequestError("action-failed", "guarded VM snapshot helper rejected the action")
         return response(request["request_id"], "succeeded", replayed=False)
-    if request["action"] in {"vm-clone", "vm-delete", "vm-resources"}:
+    if request["action"] in {"vm-clone", "vm-delete", "vm-resources", "vm-image-attachment", "vm-network-attachment"}:
         completed_code = execute_vm_admin(request, details, settings, helper_environment)
         result_entry["status"] = "succeeded" if completed_code == 0 else "failed"
         save_state(settings["state"], state)
