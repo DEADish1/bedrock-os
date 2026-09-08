@@ -4,6 +4,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Added three-step task progress and exactly-once terminal audit publication to guarded VM snapshot creation, restoration, deletion, and failure paths before exposing those operations through the management API.
 - Enabled state-aware VM power controls in the management interface with exact name/action confirmation, force-stop data-loss guidance, server-confirmed refresh, and explicit failure feedback.
 - Added authenticated idempotent VM start, graceful-stop, restart, and force-stop through a strict API contract and kernel-peer-authenticated broker delegation to the existing guarded lifecycle helper, preserving exact confirmations, name-bound requests, final-state checks, and task/audit publication.
 - Published update-policy changes into the bounded task and audit feeds, with a durable pending broker phase that preserves task identity across interrupted retries and emits exactly one terminal event.

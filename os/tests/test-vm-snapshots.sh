@@ -3,6 +3,7 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 manager="$ROOT/os/config/includes.chroot/usr/lib/bedrock/manage-vm-snapshot"
+task_writer="$ROOT/os/config/includes.chroot/usr/lib/bedrock/record-api-task"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
 mkdir -p "$work/bin" "$work/state/disks"
@@ -28,7 +29,7 @@ esac
 EOF
 chmod +x "$work/bin/virsh"
 request() { jq -n --arg action "$1" --arg confirmation "$2" '{schema:1,name:"test-vm",snapshot:"before-upgrade",action:$action,confirmation:$confirmation}' > "$work/request.json"; }
-run() { BEDROCK_VM_TEST_MODE=1 BEDROCK_VM_STATE_ROOT="$work/state" BEDROCK_VM_DOMAINS="$work/domains.json" BEDROCK_VM_VIRSH="$work/bin/virsh" BEDROCK_VM_TEST_LOG="$work/virsh.log" BEDROCK_VM_RUNTIME_STATE="$work/runtime-state" BEDROCK_VM_SNAPSHOTS="$work/snapshots" "$manager" "$work/request.json"; }
+run() { BEDROCK_VM_TEST_MODE=1 BEDROCK_VM_STATE_ROOT="$work/state" BEDROCK_VM_DOMAINS="$work/domains.json" BEDROCK_VM_VIRSH="$work/bin/virsh" BEDROCK_VM_TEST_LOG="$work/virsh.log" BEDROCK_VM_RUNTIME_STATE="$work/runtime-state" BEDROCK_VM_SNAPSHOTS="$work/snapshots" BEDROCK_RECORD_API_TASK="$task_writer" BEDROCK_API_TASK_TEST_MODE=1 BEDROCK_API_TASK_STATE_DIR="$work/api" "$manager" "$work/request.json"; }
 request create 'CREATE SNAPSHOT before-upgrade FOR VM test-vm'; run | jq -e '.action=="create" and .state=="shut off"' >/dev/null
 grep -Fxq before-upgrade "$work/snapshots"
 request restore 'RESTORE SNAPSHOT before-upgrade FOR VM test-vm'; run | jq -e '.action=="restore" and .snapshot=="before-upgrade"' >/dev/null
@@ -42,4 +43,7 @@ request create 'CREATE SNAPSHOT before-upgrade FOR VM test-vm'; must_fail run
 grep -q 'snapshot-create-as test-vm before-upgrade' "$work/virsh.log"
 grep -q 'snapshot-revert test-vm before-upgrade' "$work/virsh.log"
 grep -q 'snapshot-delete test-vm before-upgrade' "$work/virsh.log"
+jq -e '[.tasks[] | select(.kind|startswith("vm-snapshot-")) | select(.state=="succeeded" and .progress=={current:3,total:3,unit:"steps"})] | length==3' "$work/api/tasks.json" >/dev/null
+jq -e '[inputs] as $rest | [., $rest[]] | map(select(.category=="task" and (.action|startswith("vm-snapshot-")) and .outcome=="succeeded")) | length==3' "$work/api/audit.jsonl" >/dev/null
+jq -e '[.tasks[] | select(.kind|startswith("vm-snapshot-")) | select(.state=="failed")] | length>=1' "$work/api/tasks.json" >/dev/null
 printf 'VM snapshot tests passed.\n'
