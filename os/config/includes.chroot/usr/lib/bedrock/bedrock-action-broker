@@ -4,6 +4,7 @@ import json
 import os
 import pathlib
 import pwd
+import re
 import socket
 import struct
 import subprocess
@@ -28,7 +29,9 @@ def environment():
         "test_mode": test_mode,
         "socket": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_SOCKET", "/run/bedrock-action-broker/action.sock")),
         "state": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_STATE", "/var/lib/bedrock/api/action-results.json")),
-        "helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_UPDATE_HELPER", "/usr/sbin/bedrock-update-settings")),
+        "update_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_UPDATE_HELPER", "/usr/sbin/bedrock-update-settings")),
+        "vm_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_VM_HELPER", "/usr/lib/bedrock/control-vm")),
+        "vm_requests": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_VM_REQUESTS", "/var/lib/bedrock/virtualization/requests")),
         "task_writer": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_TASK_WRITER", "/usr/lib/bedrock/record-api-task")),
         "expected_uid": int(os.environ["BEDROCK_ACTION_BROKER_EXPECTED_UID"]) if test_mode else pwd.getpwnam("bedrock-api").pw_uid,
     }
@@ -45,33 +48,41 @@ def parse_request(raw):
         request = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         raise RequestError("invalid-json", "request must be one UTF-8 JSON object")
-    if not isinstance(request, dict) or set(request) != {
-        "schema", "request_id", "action", "setting", "value", "beta_risk_acknowledged"
-    }:
-        raise RequestError("invalid-request", "request fields do not match the action schema")
-    if request["schema"] != 1 or request["action"] != "update-policy":
-        raise RequestError("unsupported-action", "only schema-1 update-policy is supported")
-    request_id = request["request_id"]
+    if not isinstance(request, dict) or request.get("schema") != 1:
+        raise RequestError("invalid-request", "request fields do not match an action schema")
+    request_id = request.get("request_id")
     try:
         parsed_id = uuid.UUID(request_id)
     except (AttributeError, TypeError, ValueError):
         raise RequestError("invalid-request-id", "request_id must be a canonical UUID v4")
     if parsed_id.version != 4 or str(parsed_id) != request_id:
         raise RequestError("invalid-request-id", "request_id must be a canonical UUID v4")
-    if type(request["beta_risk_acknowledged"]) is not bool:
-        raise RequestError("invalid-request", "beta_risk_acknowledged must be boolean")
-
-    setting, value, acknowledged = request["setting"], request["value"], request["beta_risk_acknowledged"]
-    if setting == "automatic_checks" and type(value) is bool and not acknowledged:
-        arguments = ["automatic-checks", "on" if value else "off"]
-    elif setting == "channel" and value == "stable" and not acknowledged:
-        arguments = ["channel", "stable"]
-    elif setting == "channel" and value == "beta" and acknowledged:
-        arguments = ["channel", "beta", "I_ACCEPT_PRERELEASE_UPDATE_RISK"]
+    if request.get("action") == "update-policy":
+        if set(request) != {"schema", "request_id", "action", "setting", "value", "beta_risk_acknowledged"} or type(request["beta_risk_acknowledged"]) is not bool:
+            raise RequestError("invalid-request", "request fields do not match the update-policy schema")
+        setting, value, acknowledged = request["setting"], request["value"], request["beta_risk_acknowledged"]
+        if setting == "automatic_checks" and type(value) is bool and not acknowledged:
+            details = ["automatic-checks", "on" if value else "off"]
+        elif setting == "channel" and value == "stable" and not acknowledged:
+            details = ["channel", "stable"]
+        elif setting == "channel" and value == "beta" and acknowledged:
+            details = ["channel", "beta", "I_ACCEPT_PRERELEASE_UPDATE_RISK"]
+        else:
+            raise RequestError("invalid-update-policy", "setting, value, and beta acknowledgement are inconsistent")
+    elif request.get("action") == "vm-control":
+        if set(request) != {"schema", "request_id", "action", "name", "operation", "confirmation"}:
+            raise RequestError("invalid-request", "request fields do not match the vm-control schema")
+        name, operation, confirmation = request["name"], request["operation"], request["confirmation"]
+        if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,30}[a-z0-9]", name) or operation not in {"start", "stop", "restart", "force-stop"}:
+            raise RequestError("invalid-vm-control", "VM name or operation is invalid")
+        expected = {"start": "START VM ", "stop": "STOP VM ", "restart": "RESTART VM ", "force-stop": "FORCE STOP VM "}[operation] + name
+        if confirmation != expected:
+            raise RequestError("invalid-vm-control", "exact VM confirmation is required")
+        details = {"schema": 1, "name": name, "action": operation, "confirmation": confirmation}
     else:
-        raise RequestError("invalid-update-policy", "setting, value, and beta acknowledgement are inconsistent")
+        raise RequestError("unsupported-action", "action is not allowlisted")
     canonical = json.dumps(request, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return request, hashlib.sha256(canonical).hexdigest(), arguments
+    return request, hashlib.sha256(canonical).hexdigest(), details
 
 
 def load_state(path):
@@ -92,7 +103,7 @@ def load_state(path):
         if fields not in ({"request_id", "request_sha256", "action", "status"},
                           {"request_id", "request_sha256", "action", "status", "created_unix"}):
             raise RuntimeError("action result state contains an invalid result")
-        if item["action"] != "update-policy" or item["status"] not in {"pending", "succeeded", "failed"}:
+        if item["action"] not in {"update-policy", "vm-control"} or item["status"] not in {"pending", "succeeded", "failed"}:
             raise RuntimeError("action result state contains an unsupported result")
         if item["status"] != "succeeded" and "created_unix" not in item:
             raise RuntimeError("incomplete action result lacks a creation time")
@@ -122,8 +133,38 @@ def save_state(path, state):
             os.unlink(temporary)
 
 
+def execute_vm(request, request_file, settings, helper_environment):
+    request_directory = settings["vm_requests"]
+    request_directory.mkdir(parents=True, exist_ok=True, mode=0o750)
+    if request_directory.is_symlink() or not request_directory.is_dir():
+        raise RuntimeError("VM request directory is unsafe")
+    path = request_directory / f"{request['name']}-{request['operation']}.json"
+    if path.exists() or path.is_symlink():
+        raise RuntimeError("VM request path already exists")
+    descriptor, temporary = tempfile.mkstemp(prefix=".vm-control.", dir=request_directory)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(request_file, stream, sort_keys=True, separators=(",", ":"))
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        completed = subprocess.run(
+            [str(settings["vm_helper"]), str(path)], stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120,
+            env=helper_environment, close_fds=True,
+        )
+        return completed.returncode
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+        if path.exists() and not path.is_symlink():
+            path.unlink()
+
+
 def execute(raw, settings):
-    request, digest, arguments = parse_request(raw)
+    request, digest, details = parse_request(raw)
     state = load_state(settings["state"])
     existing = next((item for item in state["results"] if item["request_id"] == request["request_id"]), None)
     if existing:
@@ -132,19 +173,28 @@ def execute(raw, settings):
         if existing["status"] == "succeeded":
             return response(request["request_id"], "succeeded", replayed=True)
         if existing["status"] == "failed":
-            raise RequestError("action-failed", "guarded update-policy helper rejected the action")
+            raise RequestError("action-failed", "guarded helper previously rejected the action")
         result_entry = existing
     else:
         result_entry = {"request_id": request["request_id"], "request_sha256": digest,
-                        "action": "update-policy", "status": "pending", "created_unix": int(time.time())}
+                        "action": request["action"], "status": "pending", "created_unix": int(time.time())}
         state["results"].append(result_entry)
         state["results"] = state["results"][-MAX_RESULTS:]
         save_state(settings["state"], state)
     helper_environment = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"}
     if settings["test_mode"]:
         helper_environment["BEDROCK_TEST_CALLS"] = os.environ["BEDROCK_TEST_CALLS"]
+        if "BEDROCK_VM_ACTION_CALLS" in os.environ:
+            helper_environment["BEDROCK_VM_ACTION_CALLS"] = os.environ["BEDROCK_VM_ACTION_CALLS"]
         helper_environment["BEDROCK_API_TASK_TEST_MODE"] = "1"
         helper_environment["BEDROCK_API_TASK_STATE_DIR"] = os.environ["BEDROCK_API_TASK_STATE_DIR"]
+    if request["action"] == "vm-control":
+        completed_code = execute_vm(request, details, settings, helper_environment)
+        result_entry["status"] = "succeeded" if completed_code == 0 else "failed"
+        save_state(settings["state"], state)
+        if completed_code != 0:
+            raise RequestError("action-failed", "guarded VM control helper rejected the action")
+        return response(request["request_id"], "succeeded", replayed=False)
     task_id = f"settings-{request['request_id']}"
     queued = subprocess.run(
         [str(settings["task_writer"]), task_id, "update-policy", "queued",
@@ -155,7 +205,7 @@ def execute(raw, settings):
     if queued.returncode != 0:
         raise RuntimeError("could not record queued action")
     completed = subprocess.run(
-        [str(settings["helper"]), *arguments], stdin=subprocess.DEVNULL,
+        [str(settings["update_helper"]), *details], stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30,
         env=helper_environment, close_fds=True,
     )

@@ -71,6 +71,11 @@ def main() -> None:
         action_helper = work / "update-helper"
         action_helper.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$BEDROCK_TEST_CALLS\"\n", encoding="utf-8")
         action_helper.chmod(0o755)
+        vm_action_helper = work / "vm-helper"
+        vm_action_calls = work / "vm-action-calls"
+        vm_action_requests = work / "vm-action-requests"
+        vm_action_helper.write_text("#!/bin/sh\ncat \"$1\" >> \"$BEDROCK_VM_ACTION_CALLS\"\n", encoding="utf-8")
+        vm_action_helper.chmod(0o755)
         tokens.write_text(json.dumps({"schema": 1, "tokens": [{
             "name": "test-client", "sha256": hashlib.sha256(TOKEN.encode()).hexdigest(),
             "created_at": "2026-08-31T00:00:00Z", "revoked": False,
@@ -117,6 +122,9 @@ def main() -> None:
             "BEDROCK_ACTION_BROKER_TASK_WRITER": str(ROOT / "config/includes.chroot/usr/lib/bedrock/record-api-task"),
             "BEDROCK_TEST_CALLS": str(action_calls),
             "BEDROCK_API_TASK_STATE_DIR": str(action_task_state),
+            "BEDROCK_ACTION_BROKER_VM_HELPER": str(vm_action_helper),
+            "BEDROCK_ACTION_BROKER_VM_REQUESTS": str(vm_action_requests),
+            "BEDROCK_VM_ACTION_CALLS": str(vm_action_calls),
         }
         broker = subprocess.Popen([sys.executable, str(BROKER)], env=broker_environment)
         for _ in range(50):
@@ -142,7 +150,7 @@ def main() -> None:
             assert request(socket_path, "GET", "/api/v1/health")[0] == 200
             schema_status, schema_body = request(socket_path, "GET", "/api/v1/openapi.json")
             assert schema_status == 200 and schema_body["openapi"] == "3.1.0"
-            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/backups", "/api/v1/hardware", "/api/v1/images", "/api/v1/remote/devices", "/api/v1/settings", "/api/v1/storage", "/api/v1/users", "/api/v1/virtualization/capabilities", "/api/v1/vms"}
+            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/backups", "/api/v1/hardware", "/api/v1/images", "/api/v1/remote/devices", "/api/v1/settings", "/api/v1/storage", "/api/v1/users", "/api/v1/virtualization/capabilities", "/api/v1/vms", "/api/v1/vms/{name}/power"}
             assert schema_body["security"] == [{"bearerAuth": []}]
             assert set(schema_body["paths"]["/api/v1/settings"]) == {"get", "put"}
             assert request(socket_path, "GET", "/api/v1/virtualization/capabilities") == (200, {"schema": 1, "data": {"schema": 1, "status": "ready"}})
@@ -170,6 +178,13 @@ def main() -> None:
             assert not any(secret in json.dumps(hardware_body) for secret in ["must-not-leak", "/dev/sda", "00:11:22:33:44:55", "0000:01:00.0", "0x1002"])
             vm_status, vm_body = request(socket_path, "GET", "/api/v1/vms")
             assert vm_status == 200 and vm_body["domains"][0]["name"] == "private-name" and vm_body["domains"][0]["snapshot_count"] == 2
+            vm_action_id = str(uuid.uuid4())
+            vm_action_body = {"schema": 1, "operation": "start", "confirmation": "START VM test-vm"}
+            vm_action_headers = {"Content-Type": "application/json", "Idempotency-Key": vm_action_id}
+            assert request(socket_path, "POST", "/api/v1/vms/test-vm/power", body=vm_action_body, extra_headers=vm_action_headers) == (200, {"schema": 1, "request_id": vm_action_id, "status": "succeeded", "replayed": False})
+            assert request(socket_path, "POST", "/api/v1/vms/test-vm/power", body=vm_action_body, extra_headers=vm_action_headers)[1]["replayed"] is True
+            assert request(socket_path, "POST", "/api/v1/vms/test-vm/power", body=vm_action_body | {"confirmation": "START VM other"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            assert json.loads(vm_action_calls.read_text(encoding="utf-8")) == {"schema": 1, "name": "test-vm", "action": "start", "confirmation": "START VM test-vm"}
             image_status, image_body = request(socket_path, "GET", "/api/v1/images")
             assert image_status == 200 and image_body["images"][0]["sha256"] == "c" * 64 and "path" not in json.dumps(image_body)
             storage_status, storage_body = request(socket_path, "GET", "/api/v1/storage")

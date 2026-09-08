@@ -4,6 +4,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Added authenticated idempotent VM start, graceful-stop, restart, and force-stop through a strict API contract and kernel-peer-authenticated broker delegation to the existing guarded lifecycle helper, preserving exact confirmations, name-bound requests, final-state checks, and task/audit publication.
 - Published update-policy changes into the bounded task and audit feeds, with a durable pending broker phase that preserves task identity across interrupted retries and emits exactly one terminal event.
 - Added authenticated idempotent update-policy mutation through `PUT /api/v1/settings`, including strict request/header validation, explicit beta-risk acknowledgement, broker failure/conflict mapping, and OpenAPI plus end-to-end API coverage.
 - Added a separately hardened root action broker with kernel Unix-peer authentication, strict bounded update-policy requests, shell-free guarded-helper delegation, output suppression, and a persistent bounded idempotency ledger that rejects conflicting request reuse.
