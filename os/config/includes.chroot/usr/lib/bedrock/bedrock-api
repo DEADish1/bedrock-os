@@ -14,6 +14,7 @@ SOCKET = pathlib.Path(os.environ.get("BEDROCK_API_SOCKET", "/run/bedrock-api/api
 TOKENS = pathlib.Path(os.environ.get("BEDROCK_API_TOKENS", "/var/lib/bedrock/api/tokens.json"))
 CAPABILITIES = pathlib.Path(os.environ.get("BEDROCK_API_CAPABILITIES", "/var/lib/bedrock/virtualization/capabilities.json"))
 HARDWARE = pathlib.Path(os.environ.get("BEDROCK_API_HARDWARE", "/var/lib/bedrock/hardware/inventory.json"))
+PASSTHROUGH = pathlib.Path(os.environ.get("BEDROCK_API_PASSTHROUGH", "/var/lib/bedrock/virtualization/passthrough.json"))
 STORAGE = pathlib.Path(os.environ.get("BEDROCK_API_STORAGE", "/var/lib/bedrock/storage/health.json"))
 ALERTS = pathlib.Path(os.environ.get("BEDROCK_API_ALERTS", "/var/lib/bedrock/storage/alerts.json"))
 VMS = pathlib.Path(os.environ.get("BEDROCK_API_VMS", "/var/lib/bedrock/virtualization/status.json"))
@@ -380,6 +381,39 @@ def hardware_feed() -> dict:
     result["usb_device_count"] = len(value["usb_devices"])
     return result
 
+def passthrough_candidate_feed() -> dict:
+    hardware = regular_json(HARDWARE, 1048576)
+    state = regular_json(PASSTHROUGH, 262144)
+    if not isinstance(hardware, dict) or hardware.get("schema") != 2 or not isinstance(hardware.get("gpus"), list) or not isinstance(hardware.get("usb_devices"), list):
+        raise ValueError("invalid passthrough hardware inventory")
+    if not isinstance(state, dict) or set(state) != {"schema", "assignments"} or state["schema"] != 1 or not isinstance(state["assignments"], list) or len(state["assignments"]) > 256:
+        raise ValueError("invalid passthrough assignment state")
+    gpus = []
+    for item in hardware["gpus"]:
+        fields = {"name", "pci_address", "vendor", "vendor_id", "device_id", "driver", "iommu_group", "iommu_group_devices", "boot_vga", "recognized_vendor"}
+        if not isinstance(item, dict) or set(item) != fields:
+            raise ValueError("invalid GPU passthrough inventory")
+        devices = item["iommu_group_devices"]
+        safe = item["recognized_vendor"] is True and item["boot_vga"] is False and isinstance(item["iommu_group"], str) and isinstance(devices, list) and 1 <= len(devices) <= 16 and len(devices) == len(set(devices)) and all(isinstance(device, str) and re.fullmatch(r"[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]", device) for device in devices)
+        if safe:
+            gpus.append({"id": bounded_string(item["pci_address"], 12), "vendor": bounded_string(item["vendor"], 32), "device_id": bounded_string(item["device_id"], 16), "devices": sorted(devices)})
+    usb_devices = []
+    required_usb = {"id", "vendor_id", "product_id", "device_class", "driver", "busnum", "devnum", "authorized", "host_critical"}
+    for item in hardware["usb_devices"]:
+        if not isinstance(item, dict) or set(item) != required_usb:
+            raise ValueError("invalid USB passthrough inventory")
+        if item["authorized"] is True and item["host_critical"] is False and item["device_class"] != "09" and type(item["busnum"]) is int and type(item["devnum"]) is int:
+            usb_devices.append({"id": bounded_string(item["id"], 64), "vendor_id": bounded_string(item["vendor_id"], 16), "product_id": bounded_string(item["product_id"], 16)})
+    assignments = []
+    for item in state["assignments"]:
+        if not isinstance(item, dict) or set(item) != {"vm", "kind", "devices", "plan_sha256"} or item["kind"] not in {"gpu", "usb"} or not re.fullmatch(r"[a-z][a-z0-9-]{0,30}[a-z0-9]", bounded_string(item["vm"], 32)) or not re.fullmatch(r"[0-9a-f]{64}", bounded_string(item["plan_sha256"], 64)):
+            raise ValueError("invalid passthrough assignment")
+        devices = item["devices"]
+        if not isinstance(devices, list) or not 1 <= len(devices) <= 16 or devices != sorted(devices) or len(devices) != len(set(devices)) or not all(isinstance(device, str) and 1 <= len(device) <= 64 for device in devices):
+            raise ValueError("invalid passthrough assignment devices")
+        assignments.append({"vm": item["vm"], "kind": item["kind"], "devices": devices})
+    return {"schema": 1, "gpus": sorted(gpus, key=lambda item: item["id"]), "usb_devices": sorted(usb_devices, key=lambda item: item["id"]), "assignments": sorted(assignments, key=lambda item: (item["vm"], item["kind"]))}
+
 def vm_feed() -> dict:
     value = regular_json(VMS, 1048576)
     if not isinstance(value, dict) or set(value) != {"schema", "generated_unix", "domains"} or value["schema"] != 1 or type(value["generated_unix"]) is not int or value["generated_unix"] < 0 or not isinstance(value["domains"], list) or len(value["domains"]) > 128:
@@ -605,6 +639,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, hardware_feed())
             except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
                 self.send_json(503, {"schema": 1, "error": "hardware-unavailable"})
+        elif self.path == "/api/v1/virtualization/passthrough-candidates":
+            try:
+                self.send_json(200, passthrough_candidate_feed())
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                self.send_json(503, {"schema": 1, "error": "passthrough-candidates-unavailable"})
         elif self.path == "/api/v1/vms":
             try:
                 self.send_json(200, vm_feed())

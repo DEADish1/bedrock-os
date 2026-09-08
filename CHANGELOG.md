@@ -4,7 +4,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
-- Added an authenticated idempotent VM passthrough mutation API and guarded orchestrator that require separate review and mutation confirmations, bind authorization to the generated plan hash, revalidate hardware at execution, and remove transient authorization material.
+- Added a purpose-specific passthrough candidate feed plus authenticated idempotent VM passthrough mutation API and guarded orchestrator. The feed exposes only safe selectable identifiers and active assignments, while mutations require separate review and execution confirmations, bind authorization to the generated plan hash, revalidate hardware, and remove transient authorization material.
 - Added a bounded live VM creation form for unique names, vCPU, memory, disk capacity, and optional autostart, with exact confirmation and server-confirmed inventory refresh.
 - Added a guarded VM creation orchestrator and authenticated idempotent API route that revalidate capacity, render and hash-bind deterministic Q35/UEFI/TPM definitions, register stopped guests, and publish task/audit state.
 - Added a USB/ISO live hardware-test boot option that suppresses installation, performs the 1.0 baseline compatibility checks, stores its report only in RAM, and never selects or writes a disk.
