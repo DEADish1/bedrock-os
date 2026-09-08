@@ -4,6 +4,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Added a live shut-off-only VM resource editor for CPU, memory, and disk/CD boot order with bounded inputs, exact confirmation, capacity-aware failure feedback, and server-confirmed refresh.
 - Added validated VM boot-order inventory and an authenticated idempotent offline resource-update endpoint for CPU, memory, and boot order through the privileged broker and guarded capacity-aware helper.
 - Added four-step task progress and exactly-once terminal audit publication to guarded offline VM CPU, memory, and boot-order updates ahead of authenticated API exposure.
 - Added shut-off-only VM clone and recoverable-delete controls to the live interface, with validated destination names, exact confirmations, explicit storage impact, and server-confirmed refresh.
