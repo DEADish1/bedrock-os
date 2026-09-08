@@ -21,8 +21,8 @@ case "$3" in
 esac
 EOF
 chmod +x "$work/bin/virsh"
-run() { BEDROCK_VM_TEST_MODE=1 BEDROCK_VM_STATE_ROOT="$work/state" BEDROCK_VM_DOMAINS="$work/domains.json" BEDROCK_VM_ATTACHMENTS="$work/images.json" BEDROCK_VM_NETWORK_ATTACHMENTS="$work/networks.json" BEDROCK_VM_STATUS="$work/state/status.json" BEDROCK_VM_AUDIT="$work/state/audit.jsonl" BEDROCK_VM_VIRSH="$work/bin/virsh" BEDROCK_VM_RUNTIME_STATE="$work/runtime-state" BEDROCK_VM_NOW="$1" "$collector"; }
-run 100 | jq -e '.domains==[{autostart:true,image_attachments:["installer"],memory_mib:8192,name:"test-vm",network_attachments:["lab"],snapshot_count:1,state:"shut off",vcpus:4}]' >/dev/null
+run() { BEDROCK_VM_TEST_MODE=1 BEDROCK_VM_STATE_ROOT="$work/state" BEDROCK_VM_DOMAINS="$work/domains.json" BEDROCK_VM_ATTACHMENTS="$work/images.json" BEDROCK_VM_NETWORK_ATTACHMENTS="$work/networks.json" BEDROCK_VM_STATUS="$work/state/status.json" BEDROCK_VM_AUDIT="$work/state/audit.jsonl" BEDROCK_VM_VIRSH="${BEDROCK_VM_VIRSH_OVERRIDE:-$work/bin/virsh}" BEDROCK_VM_RUNTIME_STATE="$work/runtime-state" BEDROCK_VM_NOW="$1" "$collector"; }
+run 100 | jq -e '.domains==[{autostart:true,image_attachments:["installer"],memory_mib:8192,name:"test-vm",network_attachments:["lab"],snapshot_count:1,snapshots:["clean-install"],state:"shut off",vcpus:4}]' >/dev/null
 jq -e '.event=="observed" and .timestamp_unix==100' "$work/state/audit.jsonl" >/dev/null
 run 101 >/dev/null
 [ "$(wc -l < "$work/state/audit.jsonl")" -eq 1 ]
@@ -30,4 +30,7 @@ printf 'running\n' > "$work/runtime-state"
 run 102 | jq -e '.domains[0].state=="running"' >/dev/null
 [ "$(wc -l < "$work/state/audit.jsonl")" -eq 2 ]
 tail -n 1 "$work/state/audit.jsonl" | jq -e '.event=="lifecycle-changed" and .previous_state=="shut off" and .state=="running"' >/dev/null
+sed 's/clean-install/Bad Snapshot/' "$work/bin/virsh" > "$work/bin/virsh-unsafe"
+chmod +x "$work/bin/virsh-unsafe"
+BEDROCK_VM_VIRSH_OVERRIDE="$work/bin/virsh-unsafe" run 103 >/dev/null 2>&1 && { printf 'error: unsafe snapshot name accepted\n' >&2; exit 1; }
 printf 'VM status tests passed.\n'

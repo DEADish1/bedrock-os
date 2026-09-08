@@ -4,6 +4,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Added validated logical snapshot names to the privacy-bounded VM inventory and an authenticated idempotent endpoint for exact-confirmation offline snapshot creation, restoration, and deletion through the guarded helper.
 - Added three-step task progress and exactly-once terminal audit publication to guarded VM snapshot creation, restoration, deletion, and failure paths before exposing those operations through the management API.
 - Enabled state-aware VM power controls in the management interface with exact name/action confirmation, force-stop data-loss guidance, server-confirmed refresh, and explicit failure feedback.
 - Added authenticated idempotent VM start, graceful-stop, restart, and force-stop through a strict API contract and kernel-peer-authenticated broker delegation to the existing guarded lifecycle helper, preserving exact confirmations, name-bound requests, final-state checks, and task/audit publication.

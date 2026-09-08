@@ -36,6 +36,11 @@ def vm_request(request_id, operation="start", confirmation="START VM test-vm"):
             "operation": operation, "confirmation": confirmation}
 
 
+def snapshot_request(request_id, operation="create", confirmation="CREATE SNAPSHOT clean-install FOR VM test-vm"):
+    return {"schema": 1, "request_id": request_id, "action": "vm-snapshot", "name": "test-vm",
+            "snapshot": "clean-install", "operation": operation, "confirmation": confirmation}
+
+
 def main():
     if not hasattr(socket, "SO_PEERCRED"):
         raise SystemExit("SO_PEERCRED support is required")
@@ -44,12 +49,16 @@ def main():
         socket_path, state, calls = work / "action.sock", work / "results.json", work / "calls"
         task_state = work / "task-state"
         vm_requests, vm_calls = work / "vm-requests", work / "vm-calls"
+        snapshot_calls = work / "snapshot-calls"
         helper = work / "helper"
         helper.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$BEDROCK_TEST_CALLS\"\n[ \"$*\" != 'automatic-checks on' ]\n", encoding="utf-8")
         helper.chmod(0o755)
         vm_helper = work / "vm-helper"
         vm_helper.write_text("#!/bin/sh\ncat \"$1\" >> \"$BEDROCK_TEST_CALLS\"\n", encoding="utf-8")
         vm_helper.chmod(0o755)
+        snapshot_helper = work / "snapshot-helper"
+        snapshot_helper.write_text("#!/bin/sh\ncat \"$1\" >> \"$BEDROCK_SNAPSHOT_ACTION_CALLS\"\n", encoding="utf-8")
+        snapshot_helper.chmod(0o755)
         environment = os.environ | {
             "BEDROCK_ACTION_BROKER_TEST_MODE": "1", "BEDROCK_ACTION_BROKER_EXPECTED_UID": str(os.getuid()),
             "BEDROCK_ACTION_BROKER_SOCKET": str(socket_path), "BEDROCK_ACTION_BROKER_STATE": str(state),
@@ -58,6 +67,8 @@ def main():
             "BEDROCK_API_TASK_STATE_DIR": str(task_state),
             "BEDROCK_ACTION_BROKER_VM_HELPER": str(vm_helper),
             "BEDROCK_ACTION_BROKER_VM_REQUESTS": str(vm_requests),
+            "BEDROCK_ACTION_BROKER_SNAPSHOT_HELPER": str(snapshot_helper),
+            "BEDROCK_SNAPSHOT_ACTION_CALLS": str(snapshot_calls),
         }
         process = subprocess.Popen([sys.executable, str(BROKER)], env=environment)
         try:
@@ -107,9 +118,15 @@ def main():
             assert exchange(socket_path, vm_request(str(uuid.uuid4()), "start", "START VM other"))["error"]["code"] == "invalid-vm-control"
             assert json.loads(vm_calls.read_text(encoding="utf-8")) == {"schema": 1, "name": "test-vm", "action": "start", "confirmation": "START VM test-vm"}
             assert not any(vm_requests.iterdir())
+            snapshot_id = str(uuid.uuid4())
+            assert exchange(socket_path, snapshot_request(snapshot_id))["status"] == "succeeded"
+            assert exchange(socket_path, snapshot_request(snapshot_id))["replayed"] is True
+            assert exchange(socket_path, snapshot_request(str(uuid.uuid4()), confirmation="CREATE SNAPSHOT wrong FOR VM test-vm"))["error"]["code"] == "invalid-vm-snapshot"
+            assert json.loads(snapshot_calls.read_text(encoding="utf-8")) == {"schema": 1, "name": "test-vm", "snapshot": "clean-install", "action": "create", "confirmation": "CREATE SNAPSHOT clean-install FOR VM test-vm"}
+            assert not any(vm_requests.iterdir())
 
             ledger = json.loads(state.read_text(encoding="utf-8"))
-            assert ledger["schema"] == 1 and len(ledger["results"]) == 5
+            assert ledger["schema"] == 1 and len(ledger["results"]) == 6
             serialized = state.read_text(encoding="utf-8")
             assert "I_ACCEPT" not in serialized and "automatic_checks" not in serialized
             assert state.stat().st_mode & 0o777 == 0o600
