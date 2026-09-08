@@ -1,0 +1,43 @@
+#!/bin/sh
+set -eu
+
+[ ! -x /usr/lib/bedrock/require-normal-mode ] || /usr/lib/bedrock/require-normal-mode
+[ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
+request=$1
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+[ -f "$request" ] && [ ! -L "$request" ] || fail "remote device request is missing or indirect"
+command -v jq >/dev/null 2>&1 || fail "jq is required"
+jq -e '
+  .schema==1 and (.id|type=="string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")) and
+  if .operation=="rename" then
+    (keys|sort)==(["id","name","operation","schema"]|sort) and (.name|type=="string" and length>=1 and length<=64 and test("^[^[:cntrl:]]+$"))
+  elif .operation=="expire" then
+    (keys|sort)==(["confirmation","expires_unix","id","operation","schema"]|sort) and (.expires_unix|type=="number" and floor==.) and .confirmation==("EXPIRE REMOTE DEVICE "+.id+" AT "+(.expires_unix|tostring))
+  elif .operation=="revoke" then
+    (keys|sort)==(["confirmation","id","operation","schema"]|sort) and .confirmation==("REVOKE REMOTE DEVICE "+.id)
+  else false end
+' "$request" >/dev/null || fail "remote device request or confirmation is invalid"
+id=$(jq -r .id "$request" | tr -d '\r'); operation=$(jq -r .operation "$request" | tr -d '\r')
+if [ "${BEDROCK_PAIRING_TEST_MODE:-0}" = 1 ]; then
+  manager=${BEDROCK_REMOTE_DEVICE_MANAGER:?test mode requires BEDROCK_REMOTE_DEVICE_MANAGER}
+else
+  [ "$(id -u)" -eq 0 ] || fail "remote device changes require root"
+  [ "$request" = "/var/lib/bedrock/remote/requests/$id-$operation.json" ] || fail "remote device request path is not identity-bound"
+  manager=/usr/lib/bedrock/manage-remote-devices
+fi
+[ -x "$manager" ] && [ ! -L "$manager" ] || fail "remote device manager is unavailable or indirect"
+task_writer=${BEDROCK_RECORD_API_TASK:-$(dirname "$0")/record-api-task}
+[ -x "$task_writer" ] && [ ! -L "$task_writer" ] || fail "task recorder is unavailable or indirect"
+created=$(date +%s); task_id="remote-device-$operation-$$"; active=0; done=0
+cleanup() { status=$?; if [ "$active" -eq 1 ] && [ "$done" -eq 0 ]; then "$task_writer" "$task_id" "remote-device-$operation" failed "$created" 0 1 steps >/dev/null 2>&1 || true; fi; exit "$status"; }
+trap cleanup EXIT INT TERM
+"$task_writer" "$task_id" "remote-device-$operation" queued "$created" 0 1 steps
+active=1
+case "$operation" in
+  rename) "$manager" rename "$id" "$(jq -r .name "$request" | tr -d '\r')" ;;
+  expire) expiry=$(jq -r .expires_unix "$request" | tr -d '\r'); "$manager" expire "$id" "$expiry" "$(jq -r .confirmation "$request" | tr -d '\r')" ;;
+  revoke) "$manager" revoke "$id" "$(jq -r .confirmation "$request" | tr -d '\r')" ;;
+esac
+"$task_writer" "$task_id" "remote-device-$operation" succeeded "$created" 1 1 steps
+done=1
+trap - EXIT INT TERM

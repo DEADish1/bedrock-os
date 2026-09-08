@@ -147,6 +147,8 @@ def main() -> None:
             "BEDROCK_ACTION_BROKER_IMAGE_ATTACHMENT_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_NETWORK_ATTACHMENT_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_PASSTHROUGH_HELPER": str(admin_action_helper),
+            "BEDROCK_ACTION_BROKER_REMOTE_DEVICE_HELPER": str(admin_action_helper),
+            "BEDROCK_ACTION_BROKER_REMOTE_REQUESTS": str(vm_action_requests),
             "BEDROCK_ACTION_BROKER_VM_DEFINITIONS": str(vm_definitions),
             "BEDROCK_VM_ADMIN_CALLS": str(admin_action_calls),
         }
@@ -174,7 +176,7 @@ def main() -> None:
             assert request(socket_path, "GET", "/api/v1/health")[0] == 200
             schema_status, schema_body = request(socket_path, "GET", "/api/v1/openapi.json")
             assert schema_status == 200 and schema_body["openapi"] == "3.1.0"
-            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/backups", "/api/v1/hardware", "/api/v1/images", "/api/v1/remote/devices", "/api/v1/settings", "/api/v1/storage", "/api/v1/users", "/api/v1/virtualization/capabilities", "/api/v1/virtualization/passthrough-candidates", "/api/v1/vms", "/api/v1/vms/{name}", "/api/v1/vms/{name}/clone", "/api/v1/vms/{name}/images", "/api/v1/vms/{name}/networks", "/api/v1/vms/{name}/passthrough", "/api/v1/vms/{name}/power", "/api/v1/vms/{name}/resources", "/api/v1/vms/{name}/snapshots"}
+            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/backups", "/api/v1/hardware", "/api/v1/images", "/api/v1/remote/devices", "/api/v1/remote/devices/{id}", "/api/v1/settings", "/api/v1/storage", "/api/v1/users", "/api/v1/virtualization/capabilities", "/api/v1/virtualization/passthrough-candidates", "/api/v1/vms", "/api/v1/vms/{name}", "/api/v1/vms/{name}/clone", "/api/v1/vms/{name}/images", "/api/v1/vms/{name}/networks", "/api/v1/vms/{name}/passthrough", "/api/v1/vms/{name}/power", "/api/v1/vms/{name}/resources", "/api/v1/vms/{name}/snapshots"}
             assert schema_body["security"] == [{"bearerAuth": []}]
             assert set(schema_body["paths"]["/api/v1/settings"]) == {"get", "put"}
             assert request(socket_path, "GET", "/api/v1/virtualization/capabilities") == (200, {"schema": 1, "data": {"schema": 1, "status": "ready"}})
@@ -265,6 +267,15 @@ def main() -> None:
             assert admin_requests[4] == {"schema": 1, "vm": "test-vm", "image": "installer", "action": "attach", "confirmation": "ATTACH IMAGE installer TO VM test-vm"}
             assert admin_requests[5] == {"schema": 1, "vm": "test-vm", "network": "lab", "action": "detach", "confirmation": "DETACH NETWORK lab FROM VM test-vm"}
             assert admin_requests[6] == {"schema": 1, "vm": "test-vm", "kind": "usb", "devices": ["1-2"], "action": "assign", "review_confirmation": "REVIEW USB PASSTHROUGH VM test-vm DEVICES 1-2", "confirmation": "ASSIGN USB PASSTHROUGH VM test-vm DEVICES 1-2"}
+            remote_device_id = "42345678-1234-4123-8123-123456789abc"
+            remote_revoke_id = str(uuid.uuid4())
+            remote_revoke_body = {"schema": 1, "operation": "revoke", "confirmation": f"REVOKE REMOTE DEVICE {remote_device_id}"}
+            remote_revoke_headers = {"Content-Type": "application/json", "Idempotency-Key": remote_revoke_id}
+            assert request(socket_path, "POST", f"/api/v1/remote/devices/{remote_device_id}", body=remote_revoke_body, extra_headers=remote_revoke_headers)[0] == 200
+            assert request(socket_path, "POST", f"/api/v1/remote/devices/{remote_device_id}", body=remote_revoke_body, extra_headers=remote_revoke_headers)[1]["replayed"] is True
+            assert request(socket_path, "POST", f"/api/v1/remote/devices/{remote_device_id}", body=remote_revoke_body | {"confirmation": "REVOKE REMOTE DEVICE wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
+            assert admin_requests[7] == {"schema": 1, "operation": "revoke", "id": remote_device_id, "confirmation": f"REVOKE REMOTE DEVICE {remote_device_id}"}
             image_status, image_body = request(socket_path, "GET", "/api/v1/images")
             assert image_status == 200 and image_body["images"][0]["sha256"] == "c" * 64 and "path" not in json.dumps(image_body)
             storage_status, storage_body = request(socket_path, "GET", "/api/v1/storage")

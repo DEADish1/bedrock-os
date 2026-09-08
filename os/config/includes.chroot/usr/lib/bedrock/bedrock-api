@@ -221,6 +221,21 @@ def vm_passthrough_action(request_id: str, name: str, body: object) -> dict:
                          "kind": kind, "devices": ordered, "operation": operation,
                          "review_confirmation": review, "confirmation": confirmation})
 
+def remote_device_action(request_id: str, device_id: str, body: object) -> dict:
+    if not DEVICE_ID.fullmatch(device_id) or not isinstance(body, dict) or body.get("schema") != 1:
+        raise ValueError("invalid remote device request")
+    operation = body.get("operation")
+    request = {"schema": 1, "request_id": request_id, "action": "remote-device", "operation": operation, "id": device_id}
+    if operation == "rename" and set(body) == {"schema", "operation", "name"} and isinstance(body["name"], str) and 1 <= len(body["name"]) <= 64 and not any(ord(char) < 32 for char in body["name"]):
+        request["name"] = body["name"]
+    elif operation == "expire" and set(body) == {"schema", "operation", "expires_unix", "confirmation"} and type(body["expires_unix"]) is int and isinstance(body["confirmation"], str) and hmac.compare_digest(body["confirmation"], f"EXPIRE REMOTE DEVICE {device_id} AT {body['expires_unix']}"):
+        request.update(expires_unix=body["expires_unix"], confirmation=body["confirmation"])
+    elif operation == "revoke" and set(body) == {"schema", "operation", "confirmation"} and isinstance(body["confirmation"], str) and hmac.compare_digest(body["confirmation"], f"REVOKE REMOTE DEVICE {device_id}"):
+        request["confirmation"] = body["confirmation"]
+    else:
+        raise ValueError("invalid remote device change or confirmation")
+    return broker_action(request_id, request)
+
 def bounded_string(value: object, maximum: int) -> str:
     if not isinstance(value, str) or not value or len(value) > maximum or any(ord(char) < 32 for char in value):
         raise ValueError("invalid string")
@@ -684,7 +699,8 @@ class Handler(BaseHTTPRequestHandler):
         images = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/images", self.path)
         networks = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/networks", self.path)
         passthrough = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/passthrough", self.path)
-        if not create and not power and not snapshots and not clone and not resources and not images and not networks and not passthrough:
+        remote_device = re.fullmatch(r"/api/v1/remote/devices/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})", self.path)
+        if not create and not power and not snapshots and not clone and not resources and not images and not networks and not passthrough and not remote_device:
             self.send_json(405, {"schema": 1, "error": "method-not-allowed"})
             return
         if self.headers.get("Transfer-Encoding") is not None or self.headers.get("Content-Type") != "application/json":
@@ -702,6 +718,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = vm_attachment_action(self.headers.get("Idempotency-Key", ""), target, body, "image" if images else "network")
             elif passthrough:
                 result = vm_passthrough_action(self.headers.get("Idempotency-Key", ""), passthrough.group(1), body)
+            elif remote_device:
+                result = remote_device_action(self.headers.get("Idempotency-Key", ""), remote_device.group(1), body)
             else:
                 target = (power or snapshots or clone or resources).group(1)
                 action = vm_control_action if power else vm_snapshot_action if snapshots else vm_clone_action if clone else vm_resource_action

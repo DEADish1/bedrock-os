@@ -40,8 +40,10 @@ def environment():
         "image_attachment_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_IMAGE_ATTACHMENT_HELPER", "/usr/lib/bedrock/manage-vm-image-attachment")),
         "network_attachment_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_NETWORK_ATTACHMENT_HELPER", "/usr/lib/bedrock/manage-vm-network-attachment")),
         "passthrough_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_PASSTHROUGH_HELPER", "/usr/lib/bedrock/change-vm-passthrough")),
+        "remote_device_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_REMOTE_DEVICE_HELPER", "/usr/lib/bedrock/change-remote-device")),
         "vm_requests": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_VM_REQUESTS", "/var/lib/bedrock/virtualization/requests")),
         "vm_definitions": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_VM_DEFINITIONS", "/var/lib/bedrock/virtualization/definitions")),
+        "remote_requests": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_REMOTE_REQUESTS", "/var/lib/bedrock/remote/requests")),
         "task_writer": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_TASK_WRITER", "/usr/lib/bedrock/record-api-task")),
         "expected_uid": int(os.environ["BEDROCK_ACTION_BROKER_EXPECTED_UID"]) if test_mode else pwd.getpwnam("bedrock-api").pw_uid,
     }
@@ -162,6 +164,18 @@ def parse_request(raw):
             raise RequestError("invalid-vm-passthrough", "VM passthrough selection or exact confirmations are invalid")
         details = {"schema": 1, "vm": name, "kind": kind, "devices": ordered, "action": operation,
                    "review_confirmation": review, "confirmation": mutate}
+    elif request.get("action") == "remote-device":
+        operation, device_id = request.get("operation"), request.get("id")
+        if not isinstance(device_id, str) or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", device_id):
+            raise RequestError("invalid-remote-device", "remote device identity is invalid")
+        if operation == "rename" and set(request) == {"schema", "request_id", "action", "operation", "id", "name"} and isinstance(request["name"], str) and 1 <= len(request["name"]) <= 64 and not any(ord(char) < 32 for char in request["name"]):
+            details = {"schema": 1, "operation": operation, "id": device_id, "name": request["name"]}
+        elif operation == "expire" and set(request) == {"schema", "request_id", "action", "operation", "id", "expires_unix", "confirmation"} and type(request["expires_unix"]) is int and request["confirmation"] == f"EXPIRE REMOTE DEVICE {device_id} AT {request['expires_unix']}":
+            details = {"schema": 1, "operation": operation, "id": device_id, "expires_unix": request["expires_unix"], "confirmation": request["confirmation"]}
+        elif operation == "revoke" and set(request) == {"schema", "request_id", "action", "operation", "id", "confirmation"} and request["confirmation"] == f"REVOKE REMOTE DEVICE {device_id}":
+            details = {"schema": 1, "operation": operation, "id": device_id, "confirmation": request["confirmation"]}
+        else:
+            raise RequestError("invalid-remote-device", "remote device change or exact confirmation is invalid")
     else:
         raise RequestError("unsupported-action", "action is not allowlisted")
     canonical = json.dumps(request, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -186,7 +200,7 @@ def load_state(path):
         if fields not in ({"request_id", "request_sha256", "action", "status"},
                           {"request_id", "request_sha256", "action", "status", "created_unix"}):
             raise RuntimeError("action result state contains an invalid result")
-        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough"} or item["status"] not in {"pending", "succeeded", "failed"}:
+        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough", "remote-device"} or item["status"] not in {"pending", "succeeded", "failed"}:
             raise RuntimeError("action result state contains an unsupported result")
         if item["status"] != "succeeded" and "created_unix" not in item:
             raise RuntimeError("incomplete action result lacks a creation time")
@@ -337,6 +351,25 @@ def execute_vm_admin(request, request_file, settings, helper_environment):
         if path.exists() and not path.is_symlink():
             path.unlink()
 
+def execute_remote_device(request, request_file, settings, helper_environment):
+    directory = settings["remote_requests"]
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if directory.is_symlink() or not directory.is_dir():
+        raise RuntimeError("remote request directory is unsafe")
+    path = directory / f"{request['id']}-{request['operation']}.json"
+    if path.exists() or path.is_symlink():
+        raise RuntimeError("remote device request path already exists")
+    descriptor, temporary = tempfile.mkstemp(prefix=".remote-device.", dir=directory)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(request_file, stream, sort_keys=True, separators=(",", ":")); stream.write("\n"); stream.flush(); os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        return subprocess.run([str(settings["remote_device_helper"]), str(path)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30, env=helper_environment, close_fds=True).returncode
+    finally:
+        if os.path.exists(temporary): os.unlink(temporary)
+        if path.exists() and not path.is_symlink(): path.unlink()
+
 
 def execute(raw, settings):
     request, digest, details = parse_request(raw)
@@ -387,6 +420,13 @@ def execute(raw, settings):
         save_state(settings["state"], state)
         if completed_code != 0:
             raise RequestError("action-failed", "guarded VM administration helper rejected the action")
+        return response(request["request_id"], "succeeded", replayed=False)
+    if request["action"] == "remote-device":
+        completed_code = execute_remote_device(request, details, settings, helper_environment)
+        result_entry["status"] = "succeeded" if completed_code == 0 else "failed"
+        save_state(settings["state"], state)
+        if completed_code != 0:
+            raise RequestError("action-failed", "guarded remote device helper rejected the action")
         return response(request["request_id"], "succeeded", replayed=False)
     task_id = f"settings-{request['request_id']}"
     queued = subprocess.run(
