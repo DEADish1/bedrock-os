@@ -67,6 +67,7 @@ def main() -> None:
         action_socket = work / "action.sock"
         action_results = work / "action-results.json"
         action_calls = work / "action-calls"
+        action_task_state = work / "action-task-state"
         action_helper = work / "update-helper"
         action_helper.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$BEDROCK_TEST_CALLS\"\n", encoding="utf-8")
         action_helper.chmod(0o755)
@@ -113,7 +114,9 @@ def main() -> None:
             "BEDROCK_ACTION_BROKER_SOCKET": str(action_socket),
             "BEDROCK_ACTION_BROKER_STATE": str(action_results),
             "BEDROCK_ACTION_BROKER_UPDATE_HELPER": str(action_helper),
+            "BEDROCK_ACTION_BROKER_TASK_WRITER": str(ROOT / "config/includes.chroot/usr/lib/bedrock/record-api-task"),
             "BEDROCK_TEST_CALLS": str(action_calls),
+            "BEDROCK_API_TASK_STATE_DIR": str(action_task_state),
         }
         broker = subprocess.Popen([sys.executable, str(BROKER)], env=broker_environment)
         for _ in range(50):

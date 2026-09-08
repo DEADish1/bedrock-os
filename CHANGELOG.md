@@ -4,6 +4,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Published update-policy changes into the bounded task and audit feeds, with a durable pending broker phase that preserves task identity across interrupted retries and emits exactly one terminal event.
 - Added authenticated idempotent update-policy mutation through `PUT /api/v1/settings`, including strict request/header validation, explicit beta-risk acknowledgement, broker failure/conflict mapping, and OpenAPI plus end-to-end API coverage.
 - Added a separately hardened root action broker with kernel Unix-peer authentication, strict bounded update-policy requests, shell-free guarded-helper delegation, output suppression, and a persistent bounded idempotency ledger that rejects conflicting request reuse.
 - Added authenticated, strictly validated `/api/v1/apps` and `/api/v1/backups` read contracts backed by privacy-safe snapshots that exclude registry digests, paths, repositories, credentials, and snapshot identifiers.

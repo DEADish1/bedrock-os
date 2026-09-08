@@ -8,6 +8,7 @@ import socket
 import struct
 import subprocess
 import tempfile
+import time
 import uuid
 
 MAX_REQUEST_BYTES = 16 * 1024
@@ -28,6 +29,7 @@ def environment():
         "socket": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_SOCKET", "/run/bedrock-action-broker/action.sock")),
         "state": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_STATE", "/var/lib/bedrock/api/action-results.json")),
         "helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_UPDATE_HELPER", "/usr/sbin/bedrock-update-settings")),
+        "task_writer": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_TASK_WRITER", "/usr/lib/bedrock/record-api-task")),
         "expected_uid": int(os.environ["BEDROCK_ACTION_BROKER_EXPECTED_UID"]) if test_mode else pwd.getpwnam("bedrock-api").pw_uid,
     }
 
@@ -86,10 +88,16 @@ def load_state(path):
     if not isinstance(results, list) or len(results) > MAX_RESULTS:
         raise RuntimeError("action result state has an invalid result list")
     for item in results:
-        if not isinstance(item, dict) or set(item) != {"request_id", "request_sha256", "action", "status"}:
+        fields = set(item) if isinstance(item, dict) else set()
+        if fields not in ({"request_id", "request_sha256", "action", "status"},
+                          {"request_id", "request_sha256", "action", "status", "created_unix"}):
             raise RuntimeError("action result state contains an invalid result")
-        if item["action"] != "update-policy" or item["status"] != "succeeded":
+        if item["action"] != "update-policy" or item["status"] not in {"pending", "succeeded", "failed"}:
             raise RuntimeError("action result state contains an unsupported result")
+        if item["status"] != "succeeded" and "created_unix" not in item:
+            raise RuntimeError("incomplete action result lacks a creation time")
+        if "created_unix" in item and (type(item["created_unix"]) is not int or item["created_unix"] < 0):
+            raise RuntimeError("action result has an invalid creation time")
     return state
 
 
@@ -121,22 +129,57 @@ def execute(raw, settings):
     if existing:
         if existing["request_sha256"] != digest:
             raise RequestError("idempotency-conflict", "request_id was already used for different input")
-        return response(request["request_id"], "succeeded", replayed=True)
+        if existing["status"] == "succeeded":
+            return response(request["request_id"], "succeeded", replayed=True)
+        if existing["status"] == "failed":
+            raise RequestError("action-failed", "guarded update-policy helper rejected the action")
+        result_entry = existing
+    else:
+        result_entry = {"request_id": request["request_id"], "request_sha256": digest,
+                        "action": "update-policy", "status": "pending", "created_unix": int(time.time())}
+        state["results"].append(result_entry)
+        state["results"] = state["results"][-MAX_RESULTS:]
+        save_state(settings["state"], state)
     helper_environment = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"}
     if settings["test_mode"]:
         helper_environment["BEDROCK_TEST_CALLS"] = os.environ["BEDROCK_TEST_CALLS"]
+        helper_environment["BEDROCK_API_TASK_TEST_MODE"] = "1"
+        helper_environment["BEDROCK_API_TASK_STATE_DIR"] = os.environ["BEDROCK_API_TASK_STATE_DIR"]
+    task_id = f"settings-{request['request_id']}"
+    queued = subprocess.run(
+        [str(settings["task_writer"]), task_id, "update-policy", "queued",
+         str(result_entry["created_unix"]), "0", "1", "steps"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        timeout=10, env=helper_environment, close_fds=True,
+    )
+    if queued.returncode != 0:
+        raise RuntimeError("could not record queued action")
     completed = subprocess.run(
         [str(settings["helper"]), *arguments], stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30,
         env=helper_environment, close_fds=True,
     )
     if completed.returncode != 0:
+        failed = subprocess.run(
+            [str(settings["task_writer"]), task_id, "update-policy", "failed",
+             str(result_entry["created_unix"]), "0", "1", "steps"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=10, env=helper_environment, close_fds=True,
+        )
+        if failed.returncode != 0:
+            raise RuntimeError("could not record failed action")
+        result_entry["status"] = "failed"
+        save_state(settings["state"], state)
         raise RequestError("action-failed", "guarded update-policy helper rejected the action")
-    state["results"].append({
-        "request_id": request["request_id"], "request_sha256": digest,
-        "action": "update-policy", "status": "succeeded",
-    })
-    state["results"] = state["results"][-MAX_RESULTS:]
+    succeeded = subprocess.run(
+        [str(settings["task_writer"]), task_id, "update-policy", "succeeded",
+         str(result_entry["created_unix"]), "1", "1", "steps"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        timeout=10, env=helper_environment, close_fds=True,
+    )
+    if succeeded.returncode != 0:
+        raise RuntimeError("could not record successful action")
+    result_entry["status"] = "succeeded"
     save_state(settings["state"], state)
     return response(request["request_id"], "succeeded", replayed=False)
 
