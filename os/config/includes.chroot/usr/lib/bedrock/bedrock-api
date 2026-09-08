@@ -146,6 +146,25 @@ def vm_snapshot_action(request_id: str, name: str, body: object) -> dict:
     return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "vm-snapshot",
                          "name": name, "snapshot": snapshot, "operation": operation, "confirmation": confirmation})
 
+def vm_clone_action(request_id: str, source: str, body: object) -> dict:
+    pattern = r"[a-z][a-z0-9-]{0,30}[a-z0-9]"
+    if not re.fullmatch(pattern, source) or not isinstance(body, dict) or set(body) != {"schema", "name", "confirmation"} or body.get("schema") != 1:
+        raise ValueError("invalid VM clone request")
+    name, confirmation = body["name"], body["confirmation"]
+    if not isinstance(name, str) or not re.fullmatch(pattern, name) or name == source or not isinstance(confirmation, str) or not hmac.compare_digest(confirmation, f"CLONE VM {source} AS {name}"):
+        raise ValueError("invalid VM clone request")
+    return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "vm-clone",
+                         "source": source, "name": name, "confirmation": confirmation})
+
+def vm_delete_action(request_id: str, name: str, body: object) -> dict:
+    if not re.fullmatch(r"[a-z][a-z0-9-]{0,30}[a-z0-9]", name) or not isinstance(body, dict) or set(body) != {"schema", "confirmation"} or body.get("schema") != 1:
+        raise ValueError("invalid VM delete request")
+    confirmation = body["confirmation"]
+    if not isinstance(confirmation, str) or not hmac.compare_digest(confirmation, f"DELETE VM {name} AND STORAGE"):
+        raise ValueError("invalid VM delete confirmation")
+    return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "vm-delete",
+                         "name": name, "confirmation": confirmation})
+
 def bounded_string(value: object, maximum: int) -> str:
     if not isinstance(value, str) or not value or len(value) > maximum or any(ord(char) < 32 for char in value):
         raise ValueError("invalid string")
@@ -563,7 +582,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         power = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/power", self.path)
         snapshots = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/snapshots", self.path)
-        if not power and not snapshots:
+        clone = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/clone", self.path)
+        if not power and not snapshots and not clone:
             self.send_json(405, {"schema": 1, "error": "method-not-allowed"})
             return
         if self.headers.get("Transfer-Encoding") is not None or self.headers.get("Content-Type") != "application/json":
@@ -574,8 +594,40 @@ class Handler(BaseHTTPRequestHandler):
             if not 1 <= length <= 4096:
                 raise ValueError("invalid body length")
             body = json.loads(self.rfile.read(length).decode("utf-8"))
-            result = (vm_control_action if power else vm_snapshot_action)(
-                self.headers.get("Idempotency-Key", ""), (power or snapshots).group(1), body)
+            action = vm_control_action if power else vm_snapshot_action if snapshots else vm_clone_action
+            result = action(self.headers.get("Idempotency-Key", ""), (power or snapshots or clone).group(1), body)
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
+            self.send_json(400, {"schema": 1, "error": "invalid-request"})
+            return
+        except (OSError, socket.timeout):
+            self.send_json(503, {"schema": 1, "error": "action-broker-unavailable"})
+            return
+        if result["status"] == "succeeded":
+            self.send_json(200, result)
+        elif result["error"]["code"] == "idempotency-conflict":
+            self.send_json(409, result)
+        elif result["error"]["code"] == "action-failed":
+            self.send_json(422, result)
+        else:
+            self.send_json(503, {"schema": 1, "error": "action-broker-unavailable"})
+
+    def do_DELETE(self) -> None:
+        if not authorized(self.headers.get("Authorization")):
+            self.send_json(401, {"schema": 1, "error": "unauthorized"})
+            return
+        target = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])", self.path)
+        if not target:
+            self.send_json(405, {"schema": 1, "error": "method-not-allowed"})
+            return
+        if self.headers.get("Transfer-Encoding") is not None or self.headers.get("Content-Type") != "application/json":
+            self.send_json(400, {"schema": 1, "error": "invalid-request"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", ""))
+            if not 1 <= length <= 4096:
+                raise ValueError("invalid body length")
+            body = json.loads(self.rfile.read(length).decode("utf-8"))
+            result = vm_delete_action(self.headers.get("Idempotency-Key", ""), target.group(1), body)
         except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
             self.send_json(400, {"schema": 1, "error": "invalid-request"})
             return
