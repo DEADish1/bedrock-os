@@ -35,6 +35,7 @@ def environment():
         "snapshot_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_SNAPSHOT_HELPER", "/usr/lib/bedrock/manage-vm-snapshot")),
         "clone_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_CLONE_HELPER", "/usr/lib/bedrock/clone-vm")),
         "delete_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_DELETE_HELPER", "/usr/lib/bedrock/delete-vm")),
+        "resource_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_RESOURCE_HELPER", "/usr/lib/bedrock/update-vm-resources")),
         "vm_requests": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_VM_REQUESTS", "/var/lib/bedrock/virtualization/requests")),
         "vm_definitions": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_VM_DEFINITIONS", "/var/lib/bedrock/virtualization/definitions")),
         "task_writer": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_TASK_WRITER", "/usr/lib/bedrock/record-api-task")),
@@ -110,6 +111,18 @@ def parse_request(raw):
         if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,30}[a-z0-9]", name) or confirmation != f"DELETE VM {name} AND STORAGE":
             raise RequestError("invalid-vm-delete", "VM name or exact deletion confirmation is invalid")
         details = {"schema": 1, "action": "delete", "name": name, "confirmation": confirmation}
+    elif request.get("action") == "vm-resources":
+        if set(request) != {"schema", "request_id", "action", "name", "vcpus", "memory_mib", "boot_order", "confirmation"}:
+            raise RequestError("invalid-request", "request fields do not match the vm-resources schema")
+        name, vcpus, memory, boot, confirmation = request["name"], request["vcpus"], request["memory_mib"], request["boot_order"], request["confirmation"]
+        valid_name = isinstance(name, str) and re.fullmatch(r"[a-z][a-z0-9-]{0,30}[a-z0-9]", name)
+        valid_vcpus = type(vcpus) is int and 1 <= vcpus <= 64
+        valid_memory = type(memory) is int and 512 <= memory <= 262144 and memory % 256 == 0
+        valid_boot = boot in (["disk"], ["cdrom", "disk"])
+        expected = f"UPDATE VM {name} CPU {vcpus} MEMORY {memory} BOOT {','.join(boot)}" if valid_name and valid_boot else ""
+        if not valid_name or not valid_vcpus or not valid_memory or not valid_boot or confirmation != expected:
+            raise RequestError("invalid-vm-resources", "VM resources or exact confirmation are invalid")
+        details = {"schema": 1, "name": name, "vcpus": vcpus, "memory_mib": memory, "boot_order": boot, "confirmation": confirmation}
     else:
         raise RequestError("unsupported-action", "action is not allowlisted")
     canonical = json.dumps(request, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -134,7 +147,7 @@ def load_state(path):
         if fields not in ({"request_id", "request_sha256", "action", "status"},
                           {"request_id", "request_sha256", "action", "status", "created_unix"}):
             raise RuntimeError("action result state contains an invalid result")
-        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-clone", "vm-delete"} or item["status"] not in {"pending", "succeeded", "failed"}:
+        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-clone", "vm-delete", "vm-resources"} or item["status"] not in {"pending", "succeeded", "failed"}:
             raise RuntimeError("action result state contains an unsupported result")
         if item["status"] != "succeeded" and "created_unix" not in item:
             raise RuntimeError("incomplete action result lacks a creation time")
@@ -232,7 +245,7 @@ def execute_vm_admin(request, request_file, settings, helper_environment):
     if request["action"] == "vm-clone":
         path = request_directory / f"clone-{request['source']}-as-{request['name']}.json"
         helper = settings["clone_helper"]
-    else:
+    elif request["action"] == "vm-delete":
         definition = settings["vm_definitions"] / f"{request['name']}.xml"
         descriptor = os.open(definition, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         try:
@@ -247,6 +260,9 @@ def execute_vm_admin(request, request_file, settings, helper_environment):
                 os.close(descriptor)
         path = request_directory / f"{request['name']}-delete.json"
         helper = settings["delete_helper"]
+    else:
+        path = request_directory / f"{request['name']}-resources.json"
+        helper = settings["resource_helper"]
     if path.exists() or path.is_symlink():
         raise RuntimeError("VM administration request path already exists")
     descriptor, temporary = tempfile.mkstemp(prefix=".vm-admin.", dir=request_directory)
@@ -314,7 +330,7 @@ def execute(raw, settings):
         if completed_code != 0:
             raise RequestError("action-failed", "guarded VM snapshot helper rejected the action")
         return response(request["request_id"], "succeeded", replayed=False)
-    if request["action"] in {"vm-clone", "vm-delete"}:
+    if request["action"] in {"vm-clone", "vm-delete", "vm-resources"}:
         completed_code = execute_vm_admin(request, details, settings, helper_environment)
         result_entry["status"] = "succeeded" if completed_code == 0 else "failed"
         save_state(settings["state"], state)

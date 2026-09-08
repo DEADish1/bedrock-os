@@ -56,12 +56,16 @@ while IFS= read -r name; do
   if ! awk 'length($0) < 2 || length($0) > 32 || $0 !~ /^[a-z][a-z0-9-]*[a-z0-9]$/ {exit 1}' "$work/snapshots"; then fail "VM snapshot inventory contains an unsafe name: $name"; fi
   snapshot_names=$(jq -Rsc 'split("\n")|map(select(length>0))|sort|if length==(unique|length) then . else error("duplicate snapshot") end' "$work/snapshots") || fail "VM snapshot inventory is invalid: $name"
   snapshot_count=$(printf '%s' "$snapshot_names" | jq 'length')
+  "$virsh" --connect qemu:///system dumpxml --inactive "$name" > "$work/domain.xml" || fail "VM definition is unavailable: $name"
+  boot_order=$(grep -oE "<boot[[:space:]]+dev=['\"](hd|cdrom)['\"][[:space:]]*/?>" "$work/domain.xml" | sed -E "s/.*dev=['\"](hd|cdrom)['\"].*/\1/" | sed 's/^hd$/disk/' | paste -sd, -)
+  case "$boot_order" in disk|cdrom,disk) ;; *) fail "VM boot order is unsupported: $name" ;; esac
+  boot_order_json=$(printf '%s' "$boot_order" | jq -R 'split(",")')
   images=$(jq --arg name "$name" '[.attachments[]|select(.vm==$name)|.image]|sort' "$image_attachments")
   networks=$(jq --arg name "$name" '[.attachments[]|select(.vm==$name)|.network]|sort' "$network_attachments")
   allocation=$(jq -c --arg name "$name" '.domains[]|select(.name==$name)' "$domains")
-  jq -c -n --arg name "$name" --arg state "$state" --argjson autostart "$autostart" --argjson snapshot_count "$snapshot_count" --argjson snapshots "$snapshot_names" \
+  jq -c -n --arg name "$name" --arg state "$state" --argjson autostart "$autostart" --argjson snapshot_count "$snapshot_count" --argjson snapshots "$snapshot_names" --argjson boot_order "$boot_order_json" \
     --argjson images "$images" --argjson networks "$networks" --argjson allocation "$allocation" \
-    '{name:$name,state:$state,autostart:$autostart,vcpus:$allocation.vcpus,memory_mib:$allocation.memory_mib,snapshot_count:$snapshot_count,snapshots:$snapshots,image_attachments:$images,network_attachments:$networks}' >> "$work/domains.jsonl"
+    '{name:$name,state:$state,autostart:$autostart,vcpus:$allocation.vcpus,memory_mib:$allocation.memory_mib,boot_order:$boot_order,snapshot_count:$snapshot_count,snapshots:$snapshots,image_attachments:$images,network_attachments:$networks}' >> "$work/domains.jsonl"
 done < "$work/names"
 jq -S -n --argjson now "$now" --slurpfile domains "$work/domains.jsonl" '{schema:1,generated_unix:$now,domains:($domains|sort_by(.name))}' > "$work/status.json"
 

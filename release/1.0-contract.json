@@ -35,6 +35,7 @@
       "/api/v1/vms/{name}",
       "/api/v1/vms/{name}/clone",
       "/api/v1/vms/{name}/power",
+      "/api/v1/vms/{name}/resources",
       "/api/v1/vms/{name}/snapshots"
     ]
   },

@@ -52,6 +52,12 @@ def delete_request(request_id):
             "confirmation": "DELETE VM test-vm AND STORAGE"}
 
 
+def resource_request(request_id):
+    return {"schema": 1, "request_id": request_id, "action": "vm-resources", "name": "test-vm",
+            "vcpus": 6, "memory_mib": 12288, "boot_order": ["cdrom", "disk"],
+            "confirmation": "UPDATE VM test-vm CPU 6 MEMORY 12288 BOOT cdrom,disk"}
+
+
 def main():
     if not hasattr(socket, "SO_PEERCRED"):
         raise SystemExit("SO_PEERCRED support is required")
@@ -88,6 +94,7 @@ def main():
             "BEDROCK_SNAPSHOT_ACTION_CALLS": str(snapshot_calls),
             "BEDROCK_ACTION_BROKER_CLONE_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_DELETE_HELPER": str(admin_helper),
+            "BEDROCK_ACTION_BROKER_RESOURCE_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_VM_DEFINITIONS": str(definitions),
             "BEDROCK_VM_ADMIN_CALLS": str(admin_calls),
         }
@@ -155,10 +162,15 @@ def main():
             admin_requests = [json.loads(line) for line in admin_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[0] == {"schema": 1, "source": "test-vm", "name": "copy-vm", "confirmation": "CLONE VM test-vm AS copy-vm"}
             assert admin_requests[1]["action"] == "delete" and admin_requests[1]["definition_sha256"] == hashlib.sha256(b"<domain/>\n").hexdigest()
+            resource_id = str(uuid.uuid4())
+            assert exchange(socket_path, resource_request(resource_id))["status"] == "succeeded"
+            assert exchange(socket_path, resource_request(resource_id))["replayed"] is True
+            admin_requests = [json.loads(line) for line in admin_calls.read_text(encoding="utf-8").splitlines()]
+            assert admin_requests[2]["vcpus"] == 6 and admin_requests[2]["boot_order"] == ["cdrom", "disk"]
             assert not any(vm_requests.iterdir())
 
             ledger = json.loads(state.read_text(encoding="utf-8"))
-            assert ledger["schema"] == 1 and len(ledger["results"]) == 8
+            assert ledger["schema"] == 1 and len(ledger["results"]) == 9
             serialized = state.read_text(encoding="utf-8")
             assert "I_ACCEPT" not in serialized and "automatic_checks" not in serialized
             assert state.stat().st_mode & 0o777 == 0o600

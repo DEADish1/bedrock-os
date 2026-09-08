@@ -17,12 +17,13 @@ case "$3" in
   dominfo) printf 'Name: test-vm\nAutostart: enable\n' ;;
   domstate) cat "$BEDROCK_VM_RUNTIME_STATE" ;;
   snapshot-list) printf 'clean-install\n' ;;
+  dumpxml) printf "<domain><os><boot dev='cdrom'/><boot dev='hd'/></os></domain>\n" ;;
   *) exit 1 ;;
 esac
 EOF
 chmod +x "$work/bin/virsh"
 run() { BEDROCK_VM_TEST_MODE=1 BEDROCK_VM_STATE_ROOT="$work/state" BEDROCK_VM_DOMAINS="$work/domains.json" BEDROCK_VM_ATTACHMENTS="$work/images.json" BEDROCK_VM_NETWORK_ATTACHMENTS="$work/networks.json" BEDROCK_VM_STATUS="$work/state/status.json" BEDROCK_VM_AUDIT="$work/state/audit.jsonl" BEDROCK_VM_VIRSH="${BEDROCK_VM_VIRSH_OVERRIDE:-$work/bin/virsh}" BEDROCK_VM_RUNTIME_STATE="$work/runtime-state" BEDROCK_VM_NOW="$1" "$collector"; }
-run 100 | jq -e '.domains==[{autostart:true,image_attachments:["installer"],memory_mib:8192,name:"test-vm",network_attachments:["lab"],snapshot_count:1,snapshots:["clean-install"],state:"shut off",vcpus:4}]' >/dev/null
+run 100 | jq -e '.domains==[{autostart:true,boot_order:["cdrom","disk"],image_attachments:["installer"],memory_mib:8192,name:"test-vm",network_attachments:["lab"],snapshot_count:1,snapshots:["clean-install"],state:"shut off",vcpus:4}]' >/dev/null
 jq -e '.event=="observed" and .timestamp_unix==100' "$work/state/audit.jsonl" >/dev/null
 run 101 >/dev/null
 [ "$(wc -l < "$work/state/audit.jsonl")" -eq 1 ]

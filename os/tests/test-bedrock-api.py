@@ -96,7 +96,7 @@ def main() -> None:
         storage.write_text(json.dumps({"schema": 1, "generated_unix": 100, "overall": "healthy", "read_only": True, "disks": [{"path": "/dev/sda", "serial": "private-serial", "model": "Bedrock SSD", "size_bytes": 1000000000, "transport": "sata", "smart": {"available": True, "passed": True, "temperature_c": 31, "power_on_hours": 1000, "power_mode": "ACTIVE", "command_exit": 0, "health": "healthy"}}, {"path": "/dev/sdb", "serial": None, "model": "Archive", "size_bytes": 2000000000, "transport": "sas", "smart": {"available": False, "passed": None, "temperature_c": None, "power_on_hours": None, "power_mode": "unknown", "command_exit": 1, "health": "unknown"}}], "software_raid": {"md_arrays": [{"name": "md0", "path": "/dev/md0", "level": "raid1", "state": "active", "member_pattern": "UU", "expected_members": 2, "active_members": 2, "health": "healthy", "sync": {"action": None, "percent": 0}}], "zfs": {"available": True, "pools": [{"name": "main", "size_bytes": 1000, "allocated_bytes": 400, "free_bytes": 600, "health": "ONLINE", "status": "healthy"}]}}, "hardware_raid": {"controllers": [{"address": "0000:01:00.0"}], "management_tools": [], "vendor_reports": [], "explanation": "limited"}}), encoding="utf-8")
         alerts.write_text(json.dumps({"schema": 1, "generated_unix": 101, "attention_required": True, "active_count": 1,
             "active": [{"alert_id": "disk-smart:sda", "kind": "disk-smart", "resource": "/dev/sda", "severity": "critical", "first_seen_unix": 90, "last_seen_unix": 101}]}), encoding="utf-8")
-        vms.write_text(json.dumps({"schema": 1, "generated_unix": 102, "domains": [{"name": "private-name", "state": "running", "autostart": True, "vcpus": 4, "memory_mib": 8192, "snapshot_count": 2, "snapshots": ["clean-install", "pre-upgrade"], "image_attachments": ["windows"], "network_attachments": ["private-lan"]}, {"name": "other", "state": "shut off", "autostart": False, "vcpus": 2, "memory_mib": 2048, "snapshot_count": 0, "snapshots": [], "image_attachments": [], "network_attachments": []}]}), encoding="utf-8")
+        vms.write_text(json.dumps({"schema": 1, "generated_unix": 102, "domains": [{"name": "private-name", "state": "running", "autostart": True, "vcpus": 4, "memory_mib": 8192, "boot_order": ["disk"], "snapshot_count": 2, "snapshots": ["clean-install", "pre-upgrade"], "image_attachments": ["windows"], "network_attachments": ["private-lan"]}, {"name": "other", "state": "shut off", "autostart": False, "vcpus": 2, "memory_mib": 2048, "boot_order": ["cdrom", "disk"], "snapshot_count": 0, "snapshots": [], "image_attachments": [], "network_attachments": []}]}), encoding="utf-8")
         updates.write_text(json.dumps({"schema": 1, "status": "available", "checked_unix": 103, "installed_generation": 1, "available_generation": 2, "available_version": "0.6.0", "available_channel": "stable"}), encoding="utf-8")
         tasks.write_text(json.dumps({"schema": 1, "generated_unix": 104, "tasks": [{"id": "task-1", "kind": "image-import", "state": "running", "created_unix": 100, "updated_unix": 104, "progress": {"current": 25, "total": 100, "unit": "percent"}}]}), encoding="utf-8")
         audit.write_text(json.dumps({"id": "event-1", "category": "storage", "action": "scrub", "outcome": "succeeded", "occurred_unix": 99}) + "\n", encoding="utf-8")
@@ -140,6 +140,7 @@ def main() -> None:
             "BEDROCK_SNAPSHOT_ACTION_CALLS": str(snapshot_action_calls),
             "BEDROCK_ACTION_BROKER_CLONE_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_DELETE_HELPER": str(admin_action_helper),
+            "BEDROCK_ACTION_BROKER_RESOURCE_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_VM_DEFINITIONS": str(vm_definitions),
             "BEDROCK_VM_ADMIN_CALLS": str(admin_action_calls),
         }
@@ -167,7 +168,7 @@ def main() -> None:
             assert request(socket_path, "GET", "/api/v1/health")[0] == 200
             schema_status, schema_body = request(socket_path, "GET", "/api/v1/openapi.json")
             assert schema_status == 200 and schema_body["openapi"] == "3.1.0"
-            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/backups", "/api/v1/hardware", "/api/v1/images", "/api/v1/remote/devices", "/api/v1/settings", "/api/v1/storage", "/api/v1/users", "/api/v1/virtualization/capabilities", "/api/v1/vms", "/api/v1/vms/{name}", "/api/v1/vms/{name}/clone", "/api/v1/vms/{name}/power", "/api/v1/vms/{name}/snapshots"}
+            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/backups", "/api/v1/hardware", "/api/v1/images", "/api/v1/remote/devices", "/api/v1/settings", "/api/v1/storage", "/api/v1/users", "/api/v1/virtualization/capabilities", "/api/v1/vms", "/api/v1/vms/{name}", "/api/v1/vms/{name}/clone", "/api/v1/vms/{name}/power", "/api/v1/vms/{name}/resources", "/api/v1/vms/{name}/snapshots"}
             assert schema_body["security"] == [{"bearerAuth": []}]
             assert set(schema_body["paths"]["/api/v1/settings"]) == {"get", "put"}
             assert request(socket_path, "GET", "/api/v1/virtualization/capabilities") == (200, {"schema": 1, "data": {"schema": 1, "status": "ready"}})
@@ -221,6 +222,12 @@ def main() -> None:
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[0]["source"] == "test-vm" and admin_requests[0]["name"] == "copy-vm"
             assert admin_requests[1]["action"] == "delete" and len(admin_requests[1]["definition_sha256"]) == 64
+            resource_id = str(uuid.uuid4())
+            resource_body = {"schema": 1, "vcpus": 6, "memory_mib": 12288, "boot_order": ["cdrom", "disk"], "confirmation": "UPDATE VM test-vm CPU 6 MEMORY 12288 BOOT cdrom,disk"}
+            resource_headers = {"Content-Type": "application/json", "Idempotency-Key": resource_id}
+            assert request(socket_path, "POST", "/api/v1/vms/test-vm/resources", body=resource_body, extra_headers=resource_headers)[0] == 200
+            admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
+            assert admin_requests[2]["memory_mib"] == 12288 and admin_requests[2]["boot_order"] == ["cdrom", "disk"]
             image_status, image_body = request(socket_path, "GET", "/api/v1/images")
             assert image_status == 200 and image_body["images"][0]["sha256"] == "c" * 64 and "path" not in json.dumps(image_body)
             storage_status, storage_body = request(socket_path, "GET", "/api/v1/storage")

@@ -165,6 +165,19 @@ def vm_delete_action(request_id: str, name: str, body: object) -> dict:
     return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "vm-delete",
                          "name": name, "confirmation": confirmation})
 
+def vm_resource_action(request_id: str, name: str, body: object) -> dict:
+    fields = {"schema", "vcpus", "memory_mib", "boot_order", "confirmation"}
+    if not re.fullmatch(r"[a-z][a-z0-9-]{0,30}[a-z0-9]", name) or not isinstance(body, dict) or set(body) != fields or body.get("schema") != 1:
+        raise ValueError("invalid VM resource request")
+    vcpus, memory, boot, confirmation = body["vcpus"], body["memory_mib"], body["boot_order"], body["confirmation"]
+    if type(vcpus) is not int or not 1 <= vcpus <= 64 or type(memory) is not int or not 512 <= memory <= 262144 or memory % 256 or boot not in (["disk"], ["cdrom", "disk"]):
+        raise ValueError("invalid VM resources")
+    expected = f"UPDATE VM {name} CPU {vcpus} MEMORY {memory} BOOT {','.join(boot)}"
+    if not isinstance(confirmation, str) or not hmac.compare_digest(confirmation, expected):
+        raise ValueError("invalid VM resource confirmation")
+    return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "vm-resources",
+                         "name": name, "vcpus": vcpus, "memory_mib": memory, "boot_order": boot, "confirmation": confirmation})
+
 def bounded_string(value: object, maximum: int) -> str:
     if not isinstance(value, str) or not value or len(value) > maximum or any(ord(char) < 32 for char in value):
         raise ValueError("invalid string")
@@ -329,12 +342,14 @@ def vm_feed() -> dict:
     value = regular_json(VMS, 1048576)
     if not isinstance(value, dict) or set(value) != {"schema", "generated_unix", "domains"} or value["schema"] != 1 or type(value["generated_unix"]) is not int or value["generated_unix"] < 0 or not isinstance(value["domains"], list) or len(value["domains"]) > 128:
         raise ValueError("invalid virtual machine status")
-    fields = {"name", "state", "autostart", "vcpus", "memory_mib", "snapshot_count", "snapshots", "image_attachments", "network_attachments"}
+    fields = {"name", "state", "autostart", "vcpus", "memory_mib", "boot_order", "snapshot_count", "snapshots", "image_attachments", "network_attachments"}
     states = {"running", "paused", "shut off", "crashed", "in shutdown", "pmsuspended"}
     for item in value["domains"]:
         if not isinstance(item, dict) or set(item) != fields or not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", bounded_string(item["name"], 32)) or item["state"] not in states or type(item["autostart"]) is not bool or type(item["vcpus"]) is not int or not 1 <= item["vcpus"] <= 256 or type(item["memory_mib"]) is not int or not 128 <= item["memory_mib"] <= 1048576 or type(item["snapshot_count"]) is not int or not 0 <= item["snapshot_count"] <= 256:
             raise ValueError("invalid virtual machine")
         snapshots = item["snapshots"]
+        if item["boot_order"] not in (["disk"], ["cdrom", "disk"]):
+            raise ValueError("invalid VM boot order")
         if not isinstance(snapshots, list) or len(snapshots) > 256 or len(snapshots) != item["snapshot_count"] or snapshots != sorted(snapshots) or len(set(snapshots)) != len(snapshots) or any(not re.fullmatch(r"[a-z][a-z0-9-]{0,30}[a-z0-9]", bounded_string(name, 32)) for name in snapshots):
             raise ValueError("invalid virtual machine snapshots")
         for attachments in (item["image_attachments"], item["network_attachments"]):
@@ -583,7 +598,8 @@ class Handler(BaseHTTPRequestHandler):
         power = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/power", self.path)
         snapshots = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/snapshots", self.path)
         clone = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/clone", self.path)
-        if not power and not snapshots and not clone:
+        resources = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/resources", self.path)
+        if not power and not snapshots and not clone and not resources:
             self.send_json(405, {"schema": 1, "error": "method-not-allowed"})
             return
         if self.headers.get("Transfer-Encoding") is not None or self.headers.get("Content-Type") != "application/json":
@@ -594,8 +610,8 @@ class Handler(BaseHTTPRequestHandler):
             if not 1 <= length <= 4096:
                 raise ValueError("invalid body length")
             body = json.loads(self.rfile.read(length).decode("utf-8"))
-            action = vm_control_action if power else vm_snapshot_action if snapshots else vm_clone_action
-            result = action(self.headers.get("Idempotency-Key", ""), (power or snapshots or clone).group(1), body)
+            action = vm_control_action if power else vm_snapshot_action if snapshots else vm_clone_action if clone else vm_resource_action
+            result = action(self.headers.get("Idempotency-Key", ""), (power or snapshots or clone or resources).group(1), body)
         except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
             self.send_json(400, {"schema": 1, "error": "invalid-request"})
             return
