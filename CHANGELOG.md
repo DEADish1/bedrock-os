@@ -4,6 +4,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Added a bounded live VM creation form for unique names, vCPU, memory, disk capacity, and optional autostart, with exact confirmation and server-confirmed inventory refresh.
 - Added a guarded VM creation orchestrator and authenticated idempotent API route that revalidate capacity, render and hash-bind deterministic Q35/UEFI/TPM definitions, register stopped guests, and publish task/audit state.
 - Added a USB/ISO live hardware-test boot option that suppresses installation, performs the 1.0 baseline compatibility checks, stores its report only in RAM, and never selects or writes a disk.
 - Added authenticated, idempotent VM image and isolated-network attachment APIs and matching offline dashboard controls, backed by exact confirmations, guarded helper verification, task progress, and terminal audit publication.
