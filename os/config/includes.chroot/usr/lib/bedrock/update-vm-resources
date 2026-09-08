@@ -6,6 +6,10 @@ set -eu
 [ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
 request=$1
 fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+task_writer=${BEDROCK_RECORD_API_TASK:-$(dirname "$0")/record-api-task}
+task_active=0
+task_done=0
+task_current=0
 [ -f "$request" ] && [ ! -L "$request" ] || fail "VM resource request is missing or indirect"
 command -v jq >/dev/null 2>&1 || fail "jq is required"
 jq -e '
@@ -56,8 +60,11 @@ mkdir "$lock" 2>/dev/null || fail "another VM lifecycle operation is running"
 work=
 mutated=0
 state_changed=0
+task_created=$(date +%s)
+task_id="vm-resources-$$"
 cleanup() {
   status=$?
+  if [ "$task_active" -eq 1 ] && [ "$task_done" -eq 0 ]; then "$task_writer" "$task_id" vm-resources failed "$task_created" "$task_current" 4 steps >/dev/null 2>&1 || true; fi
   if [ "$status" -ne 0 ] && [ -n "$work" ]; then
     [ "$state_changed" -eq 0 ] || cp "$work/state.before.json" "$state" 2>/dev/null || true
     if [ "$mutated" -eq 1 ]; then "$virsh" --connect qemu:///system define "$work/domain.before.xml" >/dev/null 2>&1 || true; cp "$work/definition.before.xml" "$definition" 2>/dev/null || true; fi
@@ -68,12 +75,16 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
+"$task_writer" "$task_id" vm-resources queued "$task_created" 0 4 steps
+task_active=1
 work=$(mktemp -d "$base/.resource-update.XXXXXX")
 cp "$state" "$work/state.before.json"
 cp "$definition" "$work/definition.before.xml"
 "$virsh" --connect qemu:///system dominfo "$name" >/dev/null 2>&1 || fail "managed VM is missing from libvirt"
 runtime=$(LC_ALL=C "$virsh" --connect qemu:///system domstate "$name" | tr '[:upper:]' '[:lower:]' | tr -d '\r')
 [ "$runtime" = "shut off" ] || fail "VM must be shut off before resource updates"
+task_current=1
+"$task_writer" "$task_id" vm-resources running "$task_created" "$task_current" 4 steps
 "$virsh" --connect qemu:///system dumpxml --inactive "$name" > "$work/domain.before.xml"
 "$xmlstarlet" ed -u '/domain/memory' -v "$memory" -u '/domain/currentMemory' -v "$memory" -u '/domain/vcpu' -v "$vcpus" -d '/domain/os/boot' "$work/domain.before.xml" > "$work/domain.base.xml"
 if [ "$boot" = disk ]; then
@@ -84,6 +95,8 @@ else
 fi
 mutated=1
 "$virsh" --connect qemu:///system define "$work/domain.updated.xml" >/dev/null
+task_current=2
+"$task_writer" "$task_id" vm-resources running "$task_created" "$task_current" 4 steps
 "$virsh" --connect qemu:///system dumpxml --inactive "$name" > "$work/domain.verified.xml"
 grep -Eq "<memory[^>]*>$memory</memory>" "$work/domain.verified.xml" || fail "libvirt did not persist VM memory"
 grep -Eq "<vcpu[^>]*>$vcpus</vcpu>" "$work/domain.verified.xml" || fail "libvirt did not persist VM vCPUs"
@@ -92,6 +105,8 @@ expected_boot=$(printf '%s' "$boot" | sed 's/disk/hd/g')
 [ "$actual_boot" = "$expected_boot" ] || fail "libvirt did not persist VM boot order: $actual_boot"
 cp "$work/domain.verified.xml" "$definition"
 chmod 0600 "$definition"
+task_current=3
+"$task_writer" "$task_id" vm-resources running "$task_created" "$task_current" 4 steps
 temporary=$work/state.updated.json
 jq -S --arg name "$name" --argjson vcpus "$vcpus" --argjson memory "$memory" \
   '(.domains[]|select(.name==$name)) |= (.vcpus=$vcpus | .memory_mib=$memory)' "$state" > "$temporary"
@@ -100,6 +115,9 @@ state_changed=1
 mv "$temporary" "$state"
 state_changed=0
 mutated=0
+task_current=4
+"$task_writer" "$task_id" vm-resources succeeded "$task_created" "$task_current" 4 steps
+task_done=1
 trap - EXIT INT TERM
 rm -rf "$work"
 work=

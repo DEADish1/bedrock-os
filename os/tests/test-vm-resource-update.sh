@@ -3,6 +3,7 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 updater="$ROOT/os/config/includes.chroot/usr/lib/bedrock/update-vm-resources"
+task_writer="$ROOT/os/config/includes.chroot/usr/lib/bedrock/record-api-task"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
 mkdir -p "$work/bin" "$work/state/definitions"
@@ -46,10 +47,12 @@ esac
 EOF
 chmod +x "$work/bin/virsh" "$work/bin/xmlstarlet"
 jq -n '{schema:1,name:"test-vm",vcpus:6,memory_mib:12288,boot_order:["cdrom","disk"],confirmation:"UPDATE VM test-vm CPU 6 MEMORY 12288 BOOT cdrom,disk"}' > "$work/request.json"
-run() { BEDROCK_VM_TEST_MODE=1 BEDROCK_VM_STATE_ROOT="$work/state" BEDROCK_VM_DOMAINS="$work/domains.json" BEDROCK_VM_HARDWARE="$work/hardware.json" BEDROCK_VM_VIRSH="$work/bin/virsh" BEDROCK_VM_XMLSTARLET="$work/bin/xmlstarlet" BEDROCK_VM_RUNTIME_STATE="$work/runtime-state" BEDROCK_VM_RUNTIME_XML="$work/runtime.xml" "$updater" "$work/request.json"; }
+run() { BEDROCK_VM_TEST_MODE=1 BEDROCK_VM_STATE_ROOT="$work/state" BEDROCK_VM_DOMAINS="$work/domains.json" BEDROCK_VM_HARDWARE="$work/hardware.json" BEDROCK_VM_VIRSH="$work/bin/virsh" BEDROCK_VM_XMLSTARLET="$work/bin/xmlstarlet" BEDROCK_VM_RUNTIME_STATE="$work/runtime-state" BEDROCK_VM_RUNTIME_XML="$work/runtime.xml" BEDROCK_RECORD_API_TASK="$task_writer" BEDROCK_API_TASK_TEST_MODE=1 BEDROCK_API_TASK_STATE_DIR="$work/api" "$updater" "$work/request.json"; }
 run | jq -e '.status=="updated" and .vcpus==6 and .memory_mib==12288 and .boot_order==["cdrom","disk"]' >/dev/null
 jq -e '.domains[0].vcpus==6 and .domains[0].memory_mib==12288' "$work/domains.json" >/dev/null
 grep -q "<boot dev='cdrom'/>" "$work/state/definitions/test-vm.xml"
+jq -e '.tasks|length==1 and .[0].kind=="vm-resources" and .[0].state=="succeeded" and .[0].progress.current==4' "$work/api/tasks.json" >/dev/null
+[ "$(wc -l < "$work/api/audit.jsonl")" -eq 1 ]
 must_fail() { if "$@" >/dev/null 2>&1; then printf 'error: command unexpectedly succeeded\n' >&2; exit 1; fi; }
 printf 'running\n' > "$work/runtime-state"; must_fail run; printf 'shut off\n' > "$work/runtime-state"
 jq '.confirmation="UPDATE VM wrong"' "$work/request.json" > "$work/bad.json"; mv "$work/bad.json" "$work/request.json"; must_fail run

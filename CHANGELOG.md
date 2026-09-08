@@ -4,6 +4,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Added four-step task progress and exactly-once terminal audit publication to guarded offline VM CPU, memory, and boot-order updates ahead of authenticated API exposure.
 - Added shut-off-only VM clone and recoverable-delete controls to the live interface, with validated destination names, exact confirmations, explicit storage impact, and server-confirmed refresh.
 - Added authenticated idempotent VM clone and recoverable-delete endpoints through the privileged action broker, including strict names, exact confirmations, internal definition-hash binding, and guarded helper delegation.
 - Added bounded task progress and exactly-once terminal audit publication to guarded VM clone and recoverable-delete operations ahead of authenticated API exposure.
