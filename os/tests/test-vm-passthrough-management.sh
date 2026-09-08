@@ -41,4 +41,6 @@ authorize assign 'ASSIGN USB PASSTHROUGH VM test-vm DEVICES 1-2'; run | jq -e '.
 [ "$(cat "$work/hostdev-count")" -eq 1 ]
 authorize remove 'REMOVE USB PASSTHROUGH VM test-vm DEVICES 1-2'; run | jq -e '.kind=="usb" and .action=="remove"' >/dev/null
 [ "$(cat "$work/hostdev-count")" -eq 0 ]
+jq -n --arg hash "$hash" '{schema:1,assignments:[{vm:"other-vm",kind:"usb",devices:["1-2"],plan_sha256:$hash}]}' > "$work/passthrough.json"
+authorize assign 'ASSIGN USB PASSTHROUGH VM test-vm DEVICES 1-2'; must_fail run
 printf 'VM passthrough management tests passed.\n'

@@ -59,7 +59,13 @@ else
   ' "$hardware" >/dev/null || fail "USB topology or safety state changed"
 fi
 record=$(jq -c --arg vm "$vm" --arg kind "$kind" '.assignments[]?|select(.vm==$vm and .kind==$kind)' "$state")
-case "$action" in assign) [ -z "$record" ] || fail "passthrough kind is already assigned to this VM" ;; remove) [ -n "$record" ] && [ "$(printf '%s' "$record" | jq -c '.devices|sort')" = "$devices" ] || fail "recorded passthrough assignment does not match plan" ;; esac
+case "$action" in
+  assign)
+    [ -z "$record" ] || fail "passthrough kind is already assigned to this VM"
+    jq -e --argjson selected "$devices" '. as $root | all($root.assignments[]?; (.devices | map(select(. as $device | $selected | index($device))) | length)==0)' "$state" >/dev/null || fail "one or more passthrough devices are already assigned to another VM"
+    ;;
+  remove) [ -n "$record" ] && [ "$(printf '%s' "$record" | jq -c '.devices|sort')" = "$devices" ] || fail "recorded passthrough assignment does not match plan" ;;
+esac
 [ -d "$base" ] && [ ! -L "$base" ] || fail "virtualization state path is indirect"
 lock=$base/.operation.lock
 mkdir "$lock" 2>/dev/null || fail "another VM lifecycle operation is running"
