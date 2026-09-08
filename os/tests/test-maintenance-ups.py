@@ -6,7 +6,7 @@ def invoke(tool,env,*args,ok=True):
     if ok and result.returncode: raise AssertionError(result.stderr)
     return result
 def main():
-    guarded=["clone-vm","control-vm","convert-vm-image","create-passthrough-plan","create-vm-plan","delete-vm","import-vm-image","import-vm-image-archive","manage-isolated-network","manage-vm-image-attachment","manage-vm-network-attachment","manage-vm-passthrough","manage-vm-snapshot","register-vm","render-vm-domain","update-vm-resources"]
+    guarded=["clone-vm","control-vm","convert-vm-image","create-passthrough-plan","create-vm","create-vm-plan","delete-vm","import-vm-image","import-vm-image-archive","manage-isolated-network","manage-vm-image-attachment","manage-vm-network-attachment","manage-vm-passthrough","manage-vm-snapshot","register-vm","render-vm-domain","update-vm-resources"]
     for name in guarded: assert "/usr/lib/bedrock/require-normal-mode" in (ROOT/"os/config/includes.chroot/usr/lib/bedrock"/name).read_text()
     for name in ["bedrock-apps","bedrock-nas","bedrock-storage","bedrock-storage-guided","bedrock-update","bedrock-update-settings"]: assert "/usr/lib/bedrock/require-normal-mode" in (ROOT/"os/config/includes.chroot/usr/sbin"/name).read_text()
     policy=(ROOT/"os/config/includes.chroot/etc/nut/upssched.conf").read_text(); assert "AT LOWBATT * EXECUTE LOWBATT" in policy and "AT FSD * EXECUTE FSD" in policy

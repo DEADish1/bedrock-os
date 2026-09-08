@@ -1,0 +1,62 @@
+#!/bin/sh
+set -eu
+
+[ ! -x /usr/lib/bedrock/require-normal-mode ] || /usr/lib/bedrock/require-normal-mode
+[ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
+request=$1
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+task_writer=${BEDROCK_RECORD_API_TASK:-$(dirname "$0")/record-api-task}
+planner=${BEDROCK_VM_CREATE_PLANNER:-$(dirname "$0")/create-vm-plan}
+renderer=${BEDROCK_VM_CREATE_RENDERER:-$(dirname "$0")/render-vm-domain}
+registrar=${BEDROCK_VM_CREATE_REGISTRAR:-$(dirname "$0")/register-vm}
+for tool in jq sha256sum "$planner" "$renderer" "$registrar" "$task_writer"; do [ -x "$tool" ] && [ ! -L "$tool" ] || command -v "$tool" >/dev/null 2>&1 || fail "required VM creation tool is unavailable or indirect: $tool"; done
+[ -f "$request" ] && [ ! -L "$request" ] || fail "VM creation request is missing or indirect"
+jq -e '
+  (keys|sort)==(["autostart","confirmation","disk_size_gib","memory_mib","name","schema","vcpus"]|sort) and .schema==1 and
+  (.name|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+  (.vcpus|type=="number" and floor==. and .>=1 and .<=64) and
+  (.memory_mib|type=="number" and floor==. and .>=512 and .<=262144 and .%256==0) and
+  (.disk_size_gib|type=="number" and floor==. and .>=8 and .<=4096) and (.autostart|type=="boolean") and
+  .confirmation==("CREATE VM "+.name)
+' "$request" >/dev/null || fail "VM creation request or confirmation is invalid"
+name=$(jq -r .name "$request")
+if [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ]; then
+  base=${BEDROCK_VM_STATE_ROOT:?test mode requires BEDROCK_VM_STATE_ROOT}
+else
+  [ "$(id -u)" -eq 0 ] || fail "VM creation requires root"
+  [ "$request" = "/var/lib/bedrock/virtualization/requests/create-$name.json" ] || fail "VM creation request path is not name-bound"
+  base=/var/lib/bedrock/virtualization
+fi
+plans=$base/plans; definitions=$base/definitions; authorizations=$base/authorizations
+for directory in "$base" "$plans" "$definitions" "$authorizations"; do mkdir -p "$directory"; [ -d "$directory" ] && [ ! -L "$directory" ] || fail "VM creation path is indirect: $directory"; done
+plan=$plans/$name.json; definition=$definitions/$name.xml; authorization=$authorizations/$name.json
+[ ! -e "$plan" ] && [ ! -e "$definition" ] && [ ! -e "$authorization" ] || fail "VM creation output already exists"
+work=$(mktemp -d "$base/.create-vm.XXXXXX")
+task_created=$(date +%s); task_id="vm-create-$$"; task_active=0; task_done=0; task_current=0; registered=0
+cleanup() {
+  status=$?
+  if [ "$task_active" -eq 1 ] && [ "$task_done" -eq 0 ]; then "$task_writer" "$task_id" vm-create failed "$task_created" "$task_current" 4 steps >/dev/null 2>&1 || true; fi
+  rm -f "$authorization" "$plan"
+  [ "$registered" -eq 1 ] || rm -f "$definition"
+  rm -rf "$work"
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+"$task_writer" "$task_id" vm-create queued "$task_created" 0 4 steps; task_active=1
+jq -S '{schema:1,name,vcpus,memory_mib,disk_size_gib,firmware:"uefi",network:"default",autostart}' "$request" > "$work/plan-request.json"
+"$planner" "$work/plan-request.json" "$plan" >/dev/null
+task_current=1; "$task_writer" "$task_id" vm-create running "$task_created" "$task_current" 4 steps
+"$renderer" "$plan" "$definition" >/dev/null
+task_current=2; "$task_writer" "$task_id" vm-create running "$task_created" "$task_current" 4 steps
+plan_hash=$(sha256sum "$plan" | awk '{print $1}'); definition_hash=$(sha256sum "$definition" | awk '{print $1}')
+jq -S -n --arg name "$name" --arg confirmation "CREATE VM $name" --arg plan "$plan_hash" --arg definition "$definition_hash" \
+  '{schema:1,action:"create",name:$name,confirmation:$confirmation,plan_sha256:$plan,definition_sha256:$definition}' > "$authorization"
+chmod 0600 "$authorization"
+"$registrar" "$plan" "$definition" "$authorization" >/dev/null
+registered=1
+task_current=3; "$task_writer" "$task_id" vm-create running "$task_created" "$task_current" 4 steps
+task_current=4; "$task_writer" "$task_id" vm-create succeeded "$task_created" "$task_current" 4 steps; task_done=1
+trap - EXIT INT TERM
+rm -f "$authorization" "$plan"; rm -rf "$work"
+jq -S -n --arg name "$name" '{schema:1,status:"registered",name:$name,running:false}'

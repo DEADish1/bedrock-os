@@ -36,6 +36,7 @@ def environment():
         "clone_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_CLONE_HELPER", "/usr/lib/bedrock/clone-vm")),
         "delete_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_DELETE_HELPER", "/usr/lib/bedrock/delete-vm")),
         "resource_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_RESOURCE_HELPER", "/usr/lib/bedrock/update-vm-resources")),
+        "create_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_CREATE_HELPER", "/usr/lib/bedrock/create-vm")),
         "image_attachment_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_IMAGE_ATTACHMENT_HELPER", "/usr/lib/bedrock/manage-vm-image-attachment")),
         "network_attachment_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_NETWORK_ATTACHMENT_HELPER", "/usr/lib/bedrock/manage-vm-network-attachment")),
         "vm_requests": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_VM_REQUESTS", "/var/lib/bedrock/virtualization/requests")),
@@ -125,6 +126,14 @@ def parse_request(raw):
         if not valid_name or not valid_vcpus or not valid_memory or not valid_boot or confirmation != expected:
             raise RequestError("invalid-vm-resources", "VM resources or exact confirmation are invalid")
         details = {"schema": 1, "name": name, "vcpus": vcpus, "memory_mib": memory, "boot_order": boot, "confirmation": confirmation}
+    elif request.get("action") == "vm-create":
+        if set(request) != {"schema", "request_id", "action", "name", "vcpus", "memory_mib", "disk_size_gib", "autostart", "confirmation"}:
+            raise RequestError("invalid-request", "request fields do not match the vm-create schema")
+        name, vcpus, memory, disk, autostart, confirmation = request["name"], request["vcpus"], request["memory_mib"], request["disk_size_gib"], request["autostart"], request["confirmation"]
+        valid_name = isinstance(name, str) and re.fullmatch(r"[a-z][a-z0-9-]{0,30}[a-z0-9]", name)
+        if not valid_name or type(vcpus) is not int or not 1 <= vcpus <= 64 or type(memory) is not int or not 512 <= memory <= 262144 or memory % 256 or type(disk) is not int or not 8 <= disk <= 4096 or type(autostart) is not bool or confirmation != f"CREATE VM {name}":
+            raise RequestError("invalid-vm-create", "VM settings or exact creation confirmation are invalid")
+        details = {"schema": 1, "name": name, "vcpus": vcpus, "memory_mib": memory, "disk_size_gib": disk, "autostart": autostart, "confirmation": confirmation}
     elif request.get("action") in {"vm-image-attachment", "vm-network-attachment"}:
         kind = "image" if request["action"] == "vm-image-attachment" else "network"
         expected_fields = {"schema", "request_id", "action", "name", kind, "operation", "confirmation"}
@@ -161,7 +170,7 @@ def load_state(path):
         if fields not in ({"request_id", "request_sha256", "action", "status"},
                           {"request_id", "request_sha256", "action", "status", "created_unix"}):
             raise RuntimeError("action result state contains an invalid result")
-        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-clone", "vm-delete", "vm-resources", "vm-image-attachment", "vm-network-attachment"} or item["status"] not in {"pending", "succeeded", "failed"}:
+        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment"} or item["status"] not in {"pending", "succeeded", "failed"}:
             raise RuntimeError("action result state contains an unsupported result")
         if item["status"] != "succeeded" and "created_unix" not in item:
             raise RuntimeError("incomplete action result lacks a creation time")
@@ -259,6 +268,9 @@ def execute_vm_admin(request, request_file, settings, helper_environment):
     if request["action"] == "vm-clone":
         path = request_directory / f"clone-{request['source']}-as-{request['name']}.json"
         helper = settings["clone_helper"]
+    elif request["action"] == "vm-create":
+        path = request_directory / f"create-{request['name']}.json"
+        helper = settings["create_helper"]
     elif request["action"] == "vm-delete":
         definition = settings["vm_definitions"] / f"{request['name']}.xml"
         descriptor = os.open(definition, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
@@ -350,7 +362,7 @@ def execute(raw, settings):
         if completed_code != 0:
             raise RequestError("action-failed", "guarded VM snapshot helper rejected the action")
         return response(request["request_id"], "succeeded", replayed=False)
-    if request["action"] in {"vm-clone", "vm-delete", "vm-resources", "vm-image-attachment", "vm-network-attachment"}:
+    if request["action"] in {"vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment"}:
         completed_code = execute_vm_admin(request, details, settings, helper_environment)
         result_entry["status"] = "succeeded" if completed_code == 0 else "failed"
         save_state(settings["state"], state)

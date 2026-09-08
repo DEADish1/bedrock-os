@@ -141,6 +141,7 @@ def main() -> None:
             "BEDROCK_ACTION_BROKER_CLONE_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_DELETE_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_RESOURCE_HELPER": str(admin_action_helper),
+            "BEDROCK_ACTION_BROKER_CREATE_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_IMAGE_ATTACHMENT_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_NETWORK_ATTACHMENT_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_VM_DEFINITIONS": str(vm_definitions),
@@ -230,6 +231,12 @@ def main() -> None:
             assert request(socket_path, "POST", "/api/v1/vms/test-vm/resources", body=resource_body, extra_headers=resource_headers)[0] == 200
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[2]["memory_mib"] == 12288 and admin_requests[2]["boot_order"] == ["cdrom", "disk"]
+            create_id = str(uuid.uuid4())
+            create_body = {"schema": 1, "name": "new-vm", "vcpus": 4, "memory_mib": 8192, "disk_size_gib": 64, "autostart": False, "confirmation": "CREATE VM new-vm"}
+            create_headers = {"Content-Type": "application/json", "Idempotency-Key": create_id}
+            assert request(socket_path, "POST", "/api/v1/vms", body=create_body, extra_headers=create_headers)[0] == 200
+            assert request(socket_path, "POST", "/api/v1/vms", body=create_body, extra_headers=create_headers)[1]["replayed"] is True
+            assert request(socket_path, "POST", "/api/v1/vms", body=create_body | {"confirmation": "CREATE VM other"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
             image_attachment_id = str(uuid.uuid4())
             image_attachment_body = {"schema": 1, "image": "installer", "operation": "attach", "confirmation": "ATTACH IMAGE installer TO VM test-vm"}
             image_attachment_headers = {"Content-Type": "application/json", "Idempotency-Key": image_attachment_id}
@@ -240,8 +247,9 @@ def main() -> None:
             assert request(socket_path, "POST", "/api/v1/vms/test-vm/networks", body=network_attachment_body, extra_headers={"Content-Type": "application/json", "Idempotency-Key": network_attachment_id})[0] == 200
             assert request(socket_path, "POST", "/api/v1/vms/test-vm/networks", body=network_attachment_body | {"confirmation": "DETACH NETWORK other FROM VM test-vm"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
-            assert admin_requests[3] == {"schema": 1, "vm": "test-vm", "image": "installer", "action": "attach", "confirmation": "ATTACH IMAGE installer TO VM test-vm"}
-            assert admin_requests[4] == {"schema": 1, "vm": "test-vm", "network": "lab", "action": "detach", "confirmation": "DETACH NETWORK lab FROM VM test-vm"}
+            assert admin_requests[3]["name"] == "new-vm" and admin_requests[3]["disk_size_gib"] == 64
+            assert admin_requests[4] == {"schema": 1, "vm": "test-vm", "image": "installer", "action": "attach", "confirmation": "ATTACH IMAGE installer TO VM test-vm"}
+            assert admin_requests[5] == {"schema": 1, "vm": "test-vm", "network": "lab", "action": "detach", "confirmation": "DETACH NETWORK lab FROM VM test-vm"}
             image_status, image_body = request(socket_path, "GET", "/api/v1/images")
             assert image_status == 200 and image_body["images"][0]["sha256"] == "c" * 64 and "path" not in json.dumps(image_body)
             storage_status, storage_body = request(socket_path, "GET", "/api/v1/storage")

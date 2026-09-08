@@ -178,6 +178,16 @@ def vm_resource_action(request_id: str, name: str, body: object) -> dict:
     return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "vm-resources",
                          "name": name, "vcpus": vcpus, "memory_mib": memory, "boot_order": boot, "confirmation": confirmation})
 
+def vm_create_action(request_id: str, body: object) -> dict:
+    fields = {"schema", "name", "vcpus", "memory_mib", "disk_size_gib", "autostart", "confirmation"}
+    if not isinstance(body, dict) or set(body) != fields or body.get("schema") != 1:
+        raise ValueError("invalid VM creation request")
+    name, vcpus, memory, disk, autostart, confirmation = body["name"], body["vcpus"], body["memory_mib"], body["disk_size_gib"], body["autostart"], body["confirmation"]
+    if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,30}[a-z0-9]", name) or type(vcpus) is not int or not 1 <= vcpus <= 64 or type(memory) is not int or not 512 <= memory <= 262144 or memory % 256 or type(disk) is not int or not 8 <= disk <= 4096 or type(autostart) is not bool or not isinstance(confirmation, str) or not hmac.compare_digest(confirmation, f"CREATE VM {name}"):
+        raise ValueError("invalid VM creation request")
+    return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "vm-create", "name": name,
+                         "vcpus": vcpus, "memory_mib": memory, "disk_size_gib": disk, "autostart": autostart, "confirmation": confirmation})
+
 def vm_attachment_action(request_id: str, name: str, body: object, kind: str) -> dict:
     pattern = r"[a-z][a-z0-9-]{0,30}[a-z0-9]"
     fields = {"schema", kind, "operation", "confirmation"}
@@ -610,13 +620,14 @@ class Handler(BaseHTTPRequestHandler):
         if not authorized(self.headers.get("Authorization")):
             self.send_json(401, {"schema": 1, "error": "unauthorized"})
             return
+        create = self.path == "/api/v1/vms"
         power = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/power", self.path)
         snapshots = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/snapshots", self.path)
         clone = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/clone", self.path)
         resources = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/resources", self.path)
         images = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/images", self.path)
         networks = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/networks", self.path)
-        if not power and not snapshots and not clone and not resources and not images and not networks:
+        if not create and not power and not snapshots and not clone and not resources and not images and not networks:
             self.send_json(405, {"schema": 1, "error": "method-not-allowed"})
             return
         if self.headers.get("Transfer-Encoding") is not None or self.headers.get("Content-Type") != "application/json":
@@ -627,10 +638,13 @@ class Handler(BaseHTTPRequestHandler):
             if not 1 <= length <= 4096:
                 raise ValueError("invalid body length")
             body = json.loads(self.rfile.read(length).decode("utf-8"))
-            target = (power or snapshots or clone or resources or images or networks).group(1)
-            if images or networks:
+            if create:
+                result = vm_create_action(self.headers.get("Idempotency-Key", ""), body)
+            elif images or networks:
+                target = (images or networks).group(1)
                 result = vm_attachment_action(self.headers.get("Idempotency-Key", ""), target, body, "image" if images else "network")
             else:
+                target = (power or snapshots or clone or resources).group(1)
                 action = vm_control_action if power else vm_snapshot_action if snapshots else vm_clone_action if clone else vm_resource_action
                 result = action(self.headers.get("Idempotency-Key", ""), target, body)
         except (ValueError, UnicodeDecodeError, json.JSONDecodeError):

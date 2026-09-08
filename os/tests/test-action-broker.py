@@ -58,6 +58,12 @@ def resource_request(request_id):
             "confirmation": "UPDATE VM test-vm CPU 6 MEMORY 12288 BOOT cdrom,disk"}
 
 
+def create_request(request_id):
+    return {"schema": 1, "request_id": request_id, "action": "vm-create", "name": "new-vm",
+            "vcpus": 4, "memory_mib": 8192, "disk_size_gib": 64, "autostart": False,
+            "confirmation": "CREATE VM new-vm"}
+
+
 def attachment_request(request_id, kind="image", operation="attach"):
     item = "installer" if kind == "image" else "lab"
     label = kind.upper()
@@ -103,6 +109,7 @@ def main():
             "BEDROCK_ACTION_BROKER_CLONE_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_DELETE_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_RESOURCE_HELPER": str(admin_helper),
+            "BEDROCK_ACTION_BROKER_CREATE_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_IMAGE_ATTACHMENT_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_NETWORK_ATTACHMENT_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_VM_DEFINITIONS": str(definitions),
@@ -177,6 +184,10 @@ def main():
             assert exchange(socket_path, resource_request(resource_id))["replayed"] is True
             admin_requests = [json.loads(line) for line in admin_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[2]["vcpus"] == 6 and admin_requests[2]["boot_order"] == ["cdrom", "disk"]
+            create_id = str(uuid.uuid4())
+            assert exchange(socket_path, create_request(create_id))["status"] == "succeeded"
+            assert exchange(socket_path, create_request(create_id))["replayed"] is True
+            assert exchange(socket_path, create_request(str(uuid.uuid4())) | {"confirmation": "CREATE VM other"})["error"]["code"] == "invalid-vm-create"
             image_id = str(uuid.uuid4())
             assert exchange(socket_path, attachment_request(image_id))["status"] == "succeeded"
             assert exchange(socket_path, attachment_request(image_id))["replayed"] is True
@@ -184,12 +195,13 @@ def main():
             network_id = str(uuid.uuid4())
             assert exchange(socket_path, attachment_request(network_id, "network", "detach"))["status"] == "succeeded"
             admin_requests = [json.loads(line) for line in admin_calls.read_text(encoding="utf-8").splitlines()]
-            assert admin_requests[3] == {"schema": 1, "vm": "test-vm", "image": "installer", "action": "attach", "confirmation": "ATTACH IMAGE installer TO VM test-vm"}
-            assert admin_requests[4] == {"schema": 1, "vm": "test-vm", "network": "lab", "action": "detach", "confirmation": "DETACH NETWORK lab FROM VM test-vm"}
+            assert admin_requests[3]["name"] == "new-vm" and admin_requests[3]["disk_size_gib"] == 64
+            assert admin_requests[4] == {"schema": 1, "vm": "test-vm", "image": "installer", "action": "attach", "confirmation": "ATTACH IMAGE installer TO VM test-vm"}
+            assert admin_requests[5] == {"schema": 1, "vm": "test-vm", "network": "lab", "action": "detach", "confirmation": "DETACH NETWORK lab FROM VM test-vm"}
             assert not any(vm_requests.iterdir())
 
             ledger = json.loads(state.read_text(encoding="utf-8"))
-            assert ledger["schema"] == 1 and len(ledger["results"]) == 11
+            assert ledger["schema"] == 1 and len(ledger["results"]) == 12
             serialized = state.read_text(encoding="utf-8")
             assert "I_ACCEPT" not in serialized and "automatic_checks" not in serialized
             assert state.stat().st_mode & 0o777 == 0o600
