@@ -55,6 +55,8 @@ The image workflow exposes a manual `protected_writer_acceptance` option. When s
 
 When an enabled acceptance image boots, `bedrock-install.service` opens the guided installer on the local console. The installed-system first-run wizard explicitly excludes live media, so the two interfaces cannot compete for the same console.
 
+The UEFI boot menu also offers **Try Bedrock — live hardware test (no disk changes)**. That entry sets a dedicated kernel mode, prevents the guided installer from starting, inventories hardware read-only, and prints a compatibility summary for the 1.0 baseline. Its JSON report is stored only at `/run/bedrock-live-test/report.json`, so it disappears at shutdown. The live test never selects, partitions, formats, mounts, or writes an installation target.
+
 The installer displays only eligible unused internal drives and includes model, kernel path, and capacity. It requires the complete typed phrase `INSTALL BEDROCK — <model> — <path> — <bytes>`, shows a second destructive review, creates a two-minute protected request, and then invokes the integrity-checked writer. It reports success only when raw write, full reread, GPT finalization, and persistent-state checks all return true. Failure tells the user not to boot the target and to perform a complete rewrite. After verified success, the user can reboot, power off, or return to the live console without entering a terminal command.
 
 Fixture tests exercise a successful guided request, incorrect confirmation, no eligible target, completion evidence, and the mutually exclusive live-versus-installed console conditions without opening a device.

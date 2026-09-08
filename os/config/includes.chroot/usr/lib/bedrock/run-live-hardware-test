@@ -1,0 +1,37 @@
+#!/bin/sh
+set -eu
+
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+cmdline=${BEDROCK_LIVE_TEST_CMDLINE:-/proc/cmdline}
+collector=${BEDROCK_LIVE_TEST_COLLECTOR:-/usr/lib/bedrock/collect-hardware-inventory}
+run_root=${BEDROCK_LIVE_TEST_RUN_ROOT:-/run/bedrock-live-test}
+efi_root=${BEDROCK_LIVE_TEST_EFI_ROOT:-/sys/firmware/efi}
+[ -f "$cmdline" ] && [ ! -L "$cmdline" ] || fail "kernel command line is unavailable or indirect"
+grep -Eq '(^|[[:space:]])bedrock\.mode=hardware-test($|[[:space:]])' "$cmdline" || fail "live hardware-test mode was not selected"
+[ -x "$collector" ] && [ ! -L "$collector" ] || fail "hardware inventory collector is unavailable or indirect"
+case "$run_root" in /run/*|*/test-run) ;; *) fail "live test output must remain in volatile runtime storage" ;; esac
+mkdir -p "$run_root"
+[ -d "$run_root" ] && [ ! -L "$run_root" ] || fail "live test runtime path is unsafe"
+inventory=$run_root/inventory.json
+report=$run_root/report.json
+"$collector" "$inventory" >/dev/null
+jq -e '.schema==2' "$inventory" >/dev/null || fail "hardware inventory is invalid"
+
+architecture=$(jq -r '.cpu.architecture=="x86_64"' "$inventory")
+threads=$(jq -r '.cpu.logical_processors>=4' "$inventory")
+memory=$(jq -r '.memory.total_bytes>=8589934592' "$inventory")
+virtualization=$(jq -r '.cpu.virtualization_supported==true' "$inventory")
+disk=$(jq -r 'any(.disks[]; .size_bytes>=34359738368)' "$inventory")
+wired=$(jq -r 'any(.networks[]; .link_type=="ether")' "$inventory")
+uefi=false; [ -d "$efi_root" ] && uefi=true
+overall=ready
+for result in "$architecture" "$threads" "$memory" "$virtualization" "$disk" "$wired" "$uefi"; do [ "$result" = true ] || overall=attention; done
+temporary=$run_root/.report.json
+jq -S -n --arg status "$overall" --argjson architecture "$architecture" --argjson threads "$threads" \
+  --argjson memory "$memory" --argjson virtualization "$virtualization" --argjson disk "$disk" \
+  --argjson wired "$wired" --argjson uefi "$uefi" \
+  '{schema:1,mode:"live-hardware-test",non_destructive:true,status:$status,checks:{architecture_x86_64:$architecture,minimum_threads:$threads,minimum_memory_8_gib:$memory,hardware_virtualization:$virtualization,system_disk_32_gib:$disk,wired_ethernet:$wired,uefi_boot:$uefi}}' > "$temporary"
+chmod 0600 "$temporary" && mv "$temporary" "$report"
+printf '\nBedrock live hardware test: %s\n' "$overall"
+jq -r '.checks|to_entries[]|"  \(if .value then "PASS" else "CHECK" end)  \(.key|gsub("_";" "))"' "$report"
+printf '\nNo disks were changed. Report: %s\n' "$report"

@@ -38,6 +38,8 @@ grep -q '^ExecStart=/usr/sbin/bedrock-install$' \
   "$work/root/usr/lib/systemd/system/bedrock-install.service"
 grep -q '^ConditionPathExists=/run/live/medium/bedrock/bedrock-os-amd64.raw$' \
   "$work/root/usr/lib/systemd/system/bedrock-install.service"
+grep -q '^ConditionKernelCommandLine=!bedrock.mode=hardware-test$' \
+  "$work/root/usr/lib/systemd/system/bedrock-install.service"
 grep -q '/usr/lib/bedrock/installer' "$work/root/usr/sbin/bedrock-install-system"
 grep -q 'package-manifest.sha256' "$work/root/usr/sbin/bedrock-install-system"
 grep -q 'writer_enabled == true' "$work/root/usr/sbin/bedrock-install-system"

@@ -1,0 +1,15 @@
+[Unit]
+Description=Bedrock non-destructive live hardware test
+ConditionKernelCommandLine=bedrock.mode=hardware-test
+ConditionPathExists=/run/live/medium
+After=systemd-udev-settle.service network-pre.target
+Wants=systemd-udev-settle.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/bedrock/run-live-hardware-test
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

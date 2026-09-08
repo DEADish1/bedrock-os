@@ -52,5 +52,7 @@ grep -q '^ConditionPathExists=!/run/live/medium/bedrock/bedrock-os-amd64.raw$' \
   "$ROOT/os/config/includes.chroot/usr/lib/systemd/system/bedrock-first-run.service"
 grep -q '^ConditionPathExists=/run/live/medium/bedrock/bedrock-os-amd64.raw$' \
   "$ROOT/os/installer/bedrock-install.service"
+grep -q '^ConditionKernelCommandLine=!bedrock.mode=hardware-test$' \
+  "$ROOT/os/installer/bedrock-install.service"
 
 printf 'Bedrock guided on-server installer tests passed.\n'

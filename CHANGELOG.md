@@ -4,6 +4,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Added a USB/ISO live hardware-test boot option that suppresses installation, performs the 1.0 baseline compatibility checks, stores its report only in RAM, and never selects or writes a disk.
 - Added authenticated, idempotent VM image and isolated-network attachment APIs and matching offline dashboard controls, backed by exact confirmations, guarded helper verification, task progress, and terminal audit publication.
 - Added a live shut-off-only VM resource editor for CPU, memory, and disk/CD boot order with bounded inputs, exact confirmation, capacity-aware failure feedback, and server-confirmed refresh.
 - Added validated VM boot-order inventory and an authenticated idempotent offline resource-update endpoint for CPU, memory, and boot order through the privileged broker and guarded capacity-aware helper.

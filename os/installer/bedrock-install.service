@@ -4,6 +4,7 @@ After=systemd-user-sessions.service
 Before=bedrock-first-run.service
 Conflicts=getty@tty1.service bedrock-first-run.service
 ConditionPathExists=/run/live/medium/bedrock/bedrock-os-amd64.raw
+ConditionKernelCommandLine=!bedrock.mode=hardware-test
 
 [Service]
 Type=simple

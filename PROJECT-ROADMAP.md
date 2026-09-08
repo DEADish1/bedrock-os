@@ -27,6 +27,7 @@ Exit: product scope, supported hardware, architecture, and release process are a
 - [x] Select the Linux base distribution and define the kernel pinning policy.
 - [x] Create reproducible OS image builds in CI.
 - [x] Implement UEFI boot, boot splash, service startup, and diagnostics mode.
+  - The USB/ISO boot menu now includes a non-destructive live hardware test that keeps its report in RAM, suppresses the guided installer, and checks the 1.0 UEFI, x86-64, CPU-thread, memory, virtualization, disk-capacity, and wired-network baseline without selecting or writing a disk.
 - [x] Add read-only system partition and persistent configuration/data partitions.
 - [x] Detect CPU, RAM, disks, NICs, and supported GPUs.
 - [x] Build a signed update manifest and rollback-capable updater.

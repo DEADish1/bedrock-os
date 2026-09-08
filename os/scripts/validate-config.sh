@@ -74,6 +74,7 @@ sh -n "$OS_DIR/tests/test-vm-resource-update.sh"
 sh -n "$OS_DIR/tests/test-vm-passthrough-plan.sh"
 sh -n "$OS_DIR/tests/test-vm-passthrough-management.sh"
 sh -n "$OS_DIR/tests/test-hardware-inventory.sh"
+sh -n "$OS_DIR/tests/test-live-hardware-test.sh"
 sh -n "$OS_DIR/tests/test-storage-health.sh"
 sh -n "$OS_DIR/tests/test-storage-alerts.sh"
 sh -n "$OS_DIR/tests/test-storage-plan.sh"
@@ -172,6 +173,8 @@ grep -q '^ExecStart=/usr/lib/bedrock/mark-boot-healthy$' "$OS_DIR/config/include
 [ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/multi-user.target.wants/bedrock-virtualization-capabilities.service" ] || { printf 'error: virtualization capability service is not enabled\n' >&2; exit 1; }
 [ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/multi-user.target.wants/bedrock-api.service" ] || { printf 'error: local API service is not enabled\n' >&2; exit 1; }
 [ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/multi-user.target.wants/bedrock-action-broker.service" ] || { printf 'error: privileged action broker is not enabled\n' >&2; exit 1; }
+[ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/multi-user.target.wants/bedrock-live-hardware-test.service" ] || { printf 'error: live hardware-test service is not enabled\n' >&2; exit 1; }
+grep -q 'bedrock.mode=hardware-test' "$OS_DIR/config/bootloaders/grub-efi/grub.cfg" || fail "live hardware-test boot entry is missing"
 grep -q '^User=bedrock-api$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-api.service"
 grep -q '^RestrictAddressFamilies=AF_UNIX$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-api.service"
 grep -q '^ProtectSystem=strict$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-api.service"
@@ -241,6 +244,7 @@ python3 "$OS_DIR/tests/test-maintenance-ups.py"
 python3 "$OS_DIR/tests/test-apps.py"
 sh "$OS_DIR/tests/test-restore-drill-report.sh"
 sh "$OS_DIR/tests/test-storage-health.sh"
+sh "$OS_DIR/tests/test-live-hardware-test.sh"
 sh "$OS_DIR/tests/test-storage-alerts.sh"
 sh "$OS_DIR/tests/test-storage-plan.sh"
 sh "$OS_DIR/tests/test-storage-operations.sh"
