@@ -1,0 +1,49 @@
+#!/bin/sh
+set -eu
+
+[ ! -x /usr/lib/bedrock/require-normal-mode ] || /usr/lib/bedrock/require-normal-mode
+
+[ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
+request=$1
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+[ -f "$request" ] && [ ! -L "$request" ] || fail "passthrough change request is missing or indirect"
+for tool in jq sha256sum; do command -v "$tool" >/dev/null 2>&1 || fail "$tool is required"; done
+jq -e '
+  (keys|sort)==(["action","confirmation","devices","kind","review_confirmation","schema","vm"]|sort) and .schema==1 and
+  (.action=="assign" or .action=="remove") and (.kind=="gpu" or .kind=="usb") and
+  (.vm|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+  (.devices|type=="array" and length>=1 and length<=16 and all(.[]; type=="string" and length>=1 and length<=64)) and
+  (.devices|unique|length)==(.devices|length) and
+  .review_confirmation==("REVIEW "+(.kind|ascii_upcase)+" PASSTHROUGH VM "+.vm+" DEVICES "+(.devices|sort|join(","))) and
+  .confirmation==((.action|ascii_upcase)+" "+(.kind|ascii_upcase)+" PASSTHROUGH VM "+.vm+" DEVICES "+(.devices|sort|join(",")))
+' "$request" >/dev/null || fail "passthrough change or confirmations are invalid"
+vm=$(jq -r .vm "$request" | tr -d '\r'); kind=$(jq -r .kind "$request" | tr -d '\r'); action=$(jq -r .action "$request" | tr -d '\r')
+if [ "${BEDROCK_VM_TEST_MODE:-0}" = 1 ]; then
+  base=${BEDROCK_VM_STATE_ROOT:?test mode requires BEDROCK_VM_STATE_ROOT}
+  planner=${BEDROCK_VM_PASSTHROUGH_PLANNER:?test mode requires BEDROCK_VM_PASSTHROUGH_PLANNER}
+  manager=${BEDROCK_VM_PASSTHROUGH_MANAGER:?test mode requires BEDROCK_VM_PASSTHROUGH_MANAGER}
+else
+  [ "$(id -u)" -eq 0 ] || fail "passthrough changes require root"
+  [ "$request" = "/var/lib/bedrock/virtualization/requests/$vm-$kind-$action-passthrough.json" ] || fail "passthrough request path is not name-bound"
+  base=/var/lib/bedrock/virtualization
+  planner=/usr/lib/bedrock/create-passthrough-plan
+  manager=/usr/lib/bedrock/manage-vm-passthrough
+fi
+for helper in "$planner" "$manager"; do [ -x "$helper" ] && [ ! -L "$helper" ] || fail "passthrough helper is unavailable or indirect"; done
+plans=$base/plans; authorizations=$base/authorizations
+mkdir -p "$plans" "$authorizations"
+for directory in "$base" "$plans" "$authorizations"; do [ -d "$directory" ] && [ ! -L "$directory" ] || fail "passthrough state directory is indirect"; done
+plan=$plans/$vm-$kind-passthrough.json
+authorization=$authorizations/$vm-$kind-$action.json
+review=$(mktemp "$base/.passthrough-review.XXXXXX")
+cleanup() { status=$?; rm -f "$review" "$authorization" "$plan"; exit "$status"; }
+trap cleanup EXIT INT TERM
+jq -S '{schema,vm,kind,devices,confirmation:.review_confirmation}' "$request" > "$review"
+chmod 0600 "$review"
+"$planner" "$review" "$plan" >/dev/null
+hash=$(sha256sum "$plan" | awk '{print $1}')
+jq -S --arg hash "$hash" '{schema,action,vm,kind,plan_sha256:$hash,confirmation}' "$request" > "$authorization"
+chmod 0600 "$authorization"
+"$manager" "$plan" "$authorization"
+trap - EXIT INT TERM
+rm -f "$review" "$authorization" "$plan"
