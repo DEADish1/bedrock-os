@@ -37,6 +37,7 @@ next-env.d.ts
 /dist/
 /.wrangler/
 /outputs/
+/.site-build/
 /work/
 /installer/desktop/src-tauri/binaries/
 
