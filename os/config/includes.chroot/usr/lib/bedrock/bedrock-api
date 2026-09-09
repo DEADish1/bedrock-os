@@ -261,11 +261,13 @@ def backup_restore_latest_action(request_id: str, backup_id: str, body: object) 
     return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "backup-restore-latest", "id": backup_id,
                          "confirmation": body["confirmation"]})
 
-def app_control_action(request_id: str, app_id: str, body: object) -> dict:
-    if not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", app_id) or not isinstance(body, dict) or set(body) != {"schema", "operation", "confirmation"} or body.get("schema") != 1:
+def app_control_action(request_id: str, app_id: str, body: object, forced_operation: str | None = None) -> dict:
+    expected_fields = {"schema", "confirmation"} if forced_operation else {"schema", "operation", "confirmation"}
+    if not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", app_id) or not isinstance(body, dict) or set(body) != expected_fields or body.get("schema") != 1:
         raise ValueError("invalid application control")
-    operation, confirmation = body["operation"], body["confirmation"]
-    expected = f"{operation.upper()} APPLICATION {app_id}" if operation in {"start", "stop"} else ""
+    operation, confirmation = forced_operation or body["operation"], body["confirmation"]
+    allowed = {"remove"} if forced_operation else {"start", "stop"}
+    expected = f"{operation.upper()} APPLICATION {app_id}" if operation in allowed else ""
     if not isinstance(confirmation, str) or not hmac.compare_digest(confirmation, expected):
         raise ValueError("invalid application control")
     return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "app-control", "id": app_id,
@@ -805,7 +807,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(401, {"schema": 1, "error": "unauthorized"})
             return
         target = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])", self.path)
-        if not target:
+        app_target = re.fullmatch(r"/api/v1/apps/([a-z][a-z0-9-]{0,31})", self.path)
+        if not target and not app_target:
             self.send_json(405, {"schema": 1, "error": "method-not-allowed"})
             return
         if self.headers.get("Transfer-Encoding") is not None or self.headers.get("Content-Type") != "application/json":
@@ -816,7 +819,7 @@ class Handler(BaseHTTPRequestHandler):
             if not 1 <= length <= 4096:
                 raise ValueError("invalid body length")
             body = json.loads(self.rfile.read(length).decode("utf-8"))
-            result = vm_delete_action(self.headers.get("Idempotency-Key", ""), target.group(1), body)
+            result = app_control_action(self.headers.get("Idempotency-Key", ""), app_target.group(1), body, "remove") if app_target else vm_delete_action(self.headers.get("Idempotency-Key", ""), target.group(1), body)
         except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
             self.send_json(400, {"schema": 1, "error": "invalid-request"})
             return

@@ -18,6 +18,7 @@
     "paths": [
       "/api/v1/alerts",
       "/api/v1/apps",
+      "/api/v1/apps/{id}",
       "/api/v1/apps/{id}/power",
       "/api/v1/audit",
       "/api/v1/backups",

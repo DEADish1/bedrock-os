@@ -4,6 +4,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Added authenticated idempotent application removal with exact confirmation, guarded root execution, task/audit reporting, immediate inventory refresh, and deliberate preservation of persistent application data for recovery.
 - Added verified isolated-application running state and authenticated idempotent start/stop controls, backed by exact confirmation, a guarded root wrapper, task/audit reporting, and refreshed state without exposing container internals.
 - Added authenticated idempotent latest-backup restore controls with exact confirmation, internal snapshot selection, fixed non-overwriting recovery destinations, guarded root execution, task/audit reporting, and no exposure of snapshot IDs, paths, repositories, or credentials.
 - Added authenticated idempotent “run now” controls for configured encrypted backup plans, with exact confirmation, guarded root execution, existing repository/retention enforcement, task/audit reporting, refreshed status, and no exposure of paths, snapshots, or credentials.

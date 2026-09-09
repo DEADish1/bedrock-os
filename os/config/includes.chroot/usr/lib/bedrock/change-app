@@ -9,7 +9,7 @@ fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
 command -v jq >/dev/null 2>&1 || fail "jq is required"
 jq -e '
   (keys|sort)==(["confirmation","id","operation","schema"]|sort) and .schema==1 and
-  (.operation=="start" or .operation=="stop") and
+  (.operation=="start" or .operation=="stop" or .operation=="remove") and
   (.id|type=="string" and test("^[a-z][a-z0-9-]{0,31}$")) and
   .confirmation==((.operation|ascii_upcase)+" APPLICATION "+.id)
 ' "$request" >/dev/null || fail "application request or exact confirmation is invalid"
