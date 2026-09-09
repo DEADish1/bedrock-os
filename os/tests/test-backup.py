@@ -12,6 +12,7 @@ def main():
         for path in (state/"secrets",data/"share",repos): path.mkdir(parents=True)
         (data/"share/file.txt").write_text("important data")
         password=state/"secrets/nightly.password"; password.write_text("a-long-test-password"); password.chmod(0o600)
+        archive_password=state/"secrets/archive.password"; archive_password.write_text("another-long-test-password"); archive_password.chmod(0o600)
         log=work/"restic.log"; stub=work/"restic.py"
         stub.write_text('''#!/usr/bin/python3
 import json,os,pathlib,sys
@@ -26,6 +27,10 @@ if "restore" in sys.argv: pathlib.Path(sys.argv[sys.argv.index("--target")+1]).m
         digest=hashlib.sha256(json.dumps(request,sort_keys=True,separators=(",",":")).encode()).hexdigest(); confirmation=f"CREATE ENCRYPTED BACKUP nightly {digest}"
         assert invoke(env,"create",str(request_path),"wrong",ok=False).returncode
         invoke(env,"create",str(request_path),confirmation)
+        staged=request|{"id":"archive","name":"Archive files","repository":str(repos/"archive"),"schedule":{"frequency":"daily","hour_utc":1,"weekday":None}}; request_path.write_text(json.dumps(staged)); staged_digest=hashlib.sha256(json.dumps(staged,sort_keys=True,separators=(",",":")).encode()).hexdigest()
+        assert invoke(env,"stage-create",str(request_path),"wrong",ok=False).returncode; invoke(env,"stage-create",str(request_path),f"STAGE ENCRYPTED BACKUP archive {staged_digest}")
+        staged_status=json.loads((state/"status.json").read_text()); assert staged_status["create_candidates"][0]["id"]=="archive" and "source" not in json.dumps(staged_status) and "repository" not in json.dumps(staged_status)
+        assert invoke(env,"create-staged","archive","wrong",ok=False).returncode; invoke(env,"create-staged","archive","CREATE ENCRYPTED BACKUP archive"); assert json.loads((state/"status.json").read_text())["create_candidates"]==[]
         listing=json.loads(invoke(env,"list").stdout); assert listing["plans"][0]["retention"]["monthly"]==6 and "password" not in json.dumps(listing)
         status=json.loads((state/"status.json").read_text()); assert status["plans"][0]["id"]=="nightly" and "source" not in json.dumps(status) and "repository" not in json.dumps(status) and "last_snapshot" not in json.dumps(status)
         result=json.loads(invoke(env,"run","nightly","RUN ENCRYPTED BACKUP nightly").stdout); snapshot=result["snapshot"]

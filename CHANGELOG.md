@@ -4,6 +4,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Added privacy-safe root-staged encrypted backup creation with exact confirmation, authenticated idempotent API execution, and a safe management-interface candidate summary that never exposes sources, repositories, passwords, or initialization choices.
 - Added authenticated idempotent installation of root-staged digest-pinned applications, exposing only safe resource/network summaries and keeping registry locations and image digests outside the browser and API boundary.
 - Added privacy-safe application update availability and authenticated idempotent update controls that keep candidate digests root-only, require exact confirmation, recreate the fixed sandbox, and restore the prior pinned container on failure.
 - Added authenticated idempotent application removal with exact confirmation, guarded root execution, task/audit reporting, immediate inventory refresh, and deliberate preservation of persistent application data for recovery.

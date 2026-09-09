@@ -261,6 +261,12 @@ def backup_restore_latest_action(request_id: str, backup_id: str, body: object) 
     return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "backup-restore-latest", "id": backup_id,
                          "confirmation": body["confirmation"]})
 
+def backup_create_action(request_id: str, backup_id: str, body: object) -> dict:
+    if not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", backup_id) or not isinstance(body, dict) or set(body) != {"schema", "confirmation"} or body.get("schema") != 1 or not isinstance(body["confirmation"], str) or not hmac.compare_digest(body["confirmation"], f"CREATE ENCRYPTED BACKUP {backup_id}"):
+        raise ValueError("invalid backup create")
+    return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "backup-create", "id": backup_id,
+                         "confirmation": body["confirmation"]})
+
 def app_control_action(request_id: str, app_id: str, body: object, forced_operation: str | None = None) -> dict:
     expected_fields = {"schema", "confirmation"} if forced_operation else {"schema", "operation", "confirmation"}
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", app_id) or not isinstance(body, dict) or set(body) != expected_fields or body.get("schema") != 1:
@@ -410,7 +416,7 @@ def app_feed() -> dict:
 
 def backup_feed() -> dict:
     value = regular_json(BACKUPS, 262144)
-    if not isinstance(value, dict) or set(value) != {"schema", "plans"} or value["schema"] != 1 or not isinstance(value["plans"], list) or len(value["plans"]) > 64:
+    if not isinstance(value, dict) or set(value) != {"schema", "plans", "create_candidates"} or value["schema"] != 1 or not isinstance(value["plans"], list) or len(value["plans"]) > 64 or not isinstance(value["create_candidates"], list) or len(value["create_candidates"]) > 64:
         raise ValueError("invalid backup status")
     fields = {"id", "name", "kind", "schedule", "retention", "created_unix", "last_success_unix", "has_snapshot"}
     for item in value["plans"]:
@@ -423,6 +429,16 @@ def backup_feed() -> dict:
             raise ValueError("invalid backup schedule")
         if not isinstance(retention, dict) or set(retention) != {"daily", "weekly", "monthly"} or any(type(retention[key]) is not int or not 0 <= retention[key] <= 365 for key in retention) or sum(retention.values()) < 1:
             raise ValueError("invalid backup retention")
+    candidate_fields = {"id", "name", "kind", "schedule", "retention"}; installed = {item["id"] for item in value["plans"]}; seen = set()
+    for item in value["create_candidates"]:
+        if not isinstance(item, dict) or set(item) != candidate_fields or not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", bounded_string(item["id"], 32)) or item["id"] in installed or item["id"] in seen or not 1 <= len(bounded_string(item["name"], 64)) <= 64 or item["kind"] not in {"local", "remote"}:
+            raise ValueError("invalid staged backup plan")
+        schedule, retention = item["schedule"], item["retention"]
+        if not isinstance(schedule, dict) or set(schedule) != {"frequency", "hour_utc", "weekday"} or schedule["frequency"] not in {"daily", "weekly"} or type(schedule["hour_utc"]) is not int or not 0 <= schedule["hour_utc"] <= 23 or (schedule["frequency"] == "daily" and schedule["weekday"] is not None) or (schedule["frequency"] == "weekly" and (type(schedule["weekday"]) is not int or not 0 <= schedule["weekday"] <= 6)):
+            raise ValueError("invalid staged backup schedule")
+        if not isinstance(retention, dict) or set(retention) != {"daily", "weekly", "monthly"} or any(type(retention[key]) is not int or not 0 <= retention[key] <= 365 for key in retention) or sum(retention.values()) < 1:
+            raise ValueError("invalid staged backup retention")
+        seen.add(item["id"])
     return value
 
 def hardware_feed() -> dict:
@@ -761,10 +777,11 @@ class Handler(BaseHTTPRequestHandler):
         image_conversion = re.fullmatch(r"/api/v1/images/([a-z][a-z0-9-]{0,30}[a-z0-9])/convert", self.path)
         backup_run = re.fullmatch(r"/api/v1/backups/([a-z][a-z0-9-]{0,31})/run", self.path)
         backup_restore_latest = re.fullmatch(r"/api/v1/backups/([a-z][a-z0-9-]{0,31})/restore-latest", self.path)
+        backup_create = re.fullmatch(r"/api/v1/backups/([a-z][a-z0-9-]{0,31})/create", self.path)
         app_control = re.fullmatch(r"/api/v1/apps/([a-z][a-z0-9-]{0,31})/power", self.path)
         app_update = re.fullmatch(r"/api/v1/apps/([a-z][a-z0-9-]{0,31})/update", self.path)
         app_install = re.fullmatch(r"/api/v1/apps/([a-z][a-z0-9-]{0,31})/install", self.path)
-        if not create and not power and not snapshots and not clone and not resources and not images and not networks and not passthrough and not remote_device and not pairing_approval and not image_conversion and not backup_run and not backup_restore_latest and not app_control and not app_update and not app_install:
+        if not create and not power and not snapshots and not clone and not resources and not images and not networks and not passthrough and not remote_device and not pairing_approval and not image_conversion and not backup_run and not backup_restore_latest and not backup_create and not app_control and not app_update and not app_install:
             self.send_json(405, {"schema": 1, "error": "method-not-allowed"})
             return
         if self.headers.get("Transfer-Encoding") is not None or self.headers.get("Content-Type") != "application/json":
@@ -792,6 +809,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = backup_run_action(self.headers.get("Idempotency-Key", ""), backup_run.group(1), body)
             elif backup_restore_latest:
                 result = backup_restore_latest_action(self.headers.get("Idempotency-Key", ""), backup_restore_latest.group(1), body)
+            elif backup_create:
+                result = backup_create_action(self.headers.get("Idempotency-Key", ""), backup_create.group(1), body)
             elif app_control:
                 result = app_control_action(self.headers.get("Idempotency-Key", ""), app_control.group(1), body)
             elif app_update:

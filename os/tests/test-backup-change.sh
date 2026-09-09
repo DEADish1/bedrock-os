@@ -18,7 +18,10 @@ grep -Fx 'run nightly RUN ENCRYPTED BACKUP nightly' "$work/backup-calls" >/dev/n
 jq -n '{schema:1,id:"nightly",operation:"restore-latest",confirmation:"RESTORE LATEST BACKUP nightly"}' > "$work/request.json"
 run
 grep -Fx 'restore-latest nightly RESTORE LATEST BACKUP nightly' "$work/backup-calls" >/dev/null
-[ "$(grep -c ' succeeded ' "$work/task-calls")" -eq 2 ]
+jq -n '{schema:1,id:"archive",operation:"create-staged",confirmation:"CREATE ENCRYPTED BACKUP archive"}' > "$work/request.json"
+run
+grep -Fx 'create-staged archive CREATE ENCRYPTED BACKUP archive' "$work/backup-calls" >/dev/null
+[ "$(grep -c ' succeeded ' "$work/task-calls")" -eq 3 ]
 jq '.confirmation="wrong"' "$work/request.json" > "$work/bad.json"; mv "$work/bad.json" "$work/request.json"
 if run >/dev/null 2>&1; then printf 'error: invalid backup action accepted\n' >&2; exit 1; fi
 printf 'Backup request wrapper tests passed.\n'

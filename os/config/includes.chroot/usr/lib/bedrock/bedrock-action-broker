@@ -196,6 +196,13 @@ def parse_request(raw):
         if not isinstance(backup_id, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", backup_id) or confirmation != f"RESTORE LATEST BACKUP {backup_id}":
             raise RequestError("invalid-backup-restore-latest", "backup identity or exact confirmation is invalid")
         details = {"schema": 1, "id": backup_id, "operation": "restore-latest", "confirmation": confirmation}
+    elif request.get("action") == "backup-create":
+        if set(request) != {"schema", "request_id", "action", "id", "confirmation"}:
+            raise RequestError("invalid-request", "request fields do not match the backup create schema")
+        backup_id, confirmation = request["id"], request["confirmation"]
+        if not isinstance(backup_id, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", backup_id) or confirmation != f"CREATE ENCRYPTED BACKUP {backup_id}":
+            raise RequestError("invalid-backup-create", "backup identity or exact confirmation is invalid")
+        details = {"schema": 1, "id": backup_id, "operation": "create-staged", "confirmation": confirmation}
     elif request.get("action") == "app-control":
         if set(request) != {"schema", "request_id", "action", "id", "operation", "confirmation"}:
             raise RequestError("invalid-request", "request fields do not match the application control schema")
@@ -247,7 +254,7 @@ def load_state(path):
         if fields not in ({"request_id", "request_sha256", "action", "status"},
                           {"request_id", "request_sha256", "action", "status", "created_unix"}):
             raise RuntimeError("action result state contains an invalid result")
-        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough", "image-convert", "backup-run", "backup-restore-latest", "app-control", "remote-device", "remote-pairing-approve"} or item["status"] not in {"pending", "succeeded", "failed"}:
+        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough", "image-convert", "backup-run", "backup-restore-latest", "backup-create", "app-control", "remote-device", "remote-pairing-approve"} or item["status"] not in {"pending", "succeeded", "failed"}:
             raise RuntimeError("action result state contains an unsupported result")
         if item["status"] != "succeeded" and "created_unix" not in item:
             raise RuntimeError("incomplete action result lacks a creation time")
@@ -519,7 +526,7 @@ def execute(raw, settings):
         if completed_code != 0:
             raise RequestError("action-failed", "guarded remote device helper rejected the action")
         return response(request["request_id"], "succeeded", replayed=False)
-    if request["action"] in {"backup-run", "backup-restore-latest"}:
+    if request["action"] in {"backup-run", "backup-restore-latest", "backup-create"}:
         completed_code = execute_backup(request, details, settings, helper_environment)
         result_entry["status"] = "succeeded" if completed_code == 0 else "failed"
         save_state(settings["state"], state)

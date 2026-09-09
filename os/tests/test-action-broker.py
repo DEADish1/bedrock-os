@@ -107,6 +107,10 @@ def backup_restore_latest_request(request_id):
     return {"schema": 1, "request_id": request_id, "action": "backup-restore-latest", "id": "nightly",
             "confirmation": "RESTORE LATEST BACKUP nightly"}
 
+def backup_create_request(request_id):
+    return {"schema": 1, "request_id": request_id, "action": "backup-create", "id": "archive",
+            "confirmation": "CREATE ENCRYPTED BACKUP archive"}
+
 def app_control_request(request_id, operation="stop"):
     return {"schema": 1, "request_id": request_id, "action": "app-control", "id": "photos", "operation": operation,
             "confirmation": f"{operation.upper()} APPLICATION photos"}
@@ -267,6 +271,10 @@ def main():
             assert exchange(socket_path, backup_restore_latest_request(restore_id))["status"] == "succeeded"
             assert exchange(socket_path, backup_restore_latest_request(restore_id))["replayed"] is True
             assert exchange(socket_path, backup_restore_latest_request(str(uuid.uuid4())) | {"confirmation": "wrong"})["error"]["code"] == "invalid-backup-restore-latest"
+            create_backup_id = str(uuid.uuid4())
+            assert exchange(socket_path, backup_create_request(create_backup_id))["status"] == "succeeded"
+            assert exchange(socket_path, backup_create_request(create_backup_id))["replayed"] is True
+            assert exchange(socket_path, backup_create_request(str(uuid.uuid4())) | {"confirmation": "wrong"})["error"]["code"] == "invalid-backup-create"
             app_id = str(uuid.uuid4())
             assert exchange(socket_path, app_control_request(app_id))["status"] == "succeeded"
             assert exchange(socket_path, app_control_request(app_id))["replayed"] is True
@@ -289,14 +297,15 @@ def main():
             assert admin_requests[9] == {"schema": 1, "source": "source", "source_sha256": "c" * 64, "target": "converted", "target_type": "qcow2", "confirmation": f"CONVERT IMAGE source {'c' * 64} TO QCOW2 converted"}
             assert admin_requests[10] == {"schema": 1, "id": "nightly", "operation": "run", "confirmation": "RUN ENCRYPTED BACKUP nightly"}
             assert admin_requests[11] == {"schema": 1, "id": "nightly", "operation": "restore-latest", "confirmation": "RESTORE LATEST BACKUP nightly"}
-            assert admin_requests[12] == {"schema": 1, "id": "photos", "operation": "stop", "confirmation": "STOP APPLICATION photos"}
-            assert admin_requests[13] == {"schema": 1, "id": "photos", "operation": "remove", "confirmation": "REMOVE APPLICATION photos"}
-            assert admin_requests[14] == {"schema": 1, "id": "photos", "operation": "update-latest", "confirmation": "UPDATE APPLICATION photos"}
-            assert admin_requests[15] == {"schema": 1, "id": "photos", "operation": "install-staged", "confirmation": "INSTALL APPLICATION photos"}
+            assert admin_requests[12] == {"schema": 1, "id": "archive", "operation": "create-staged", "confirmation": "CREATE ENCRYPTED BACKUP archive"}
+            assert admin_requests[13] == {"schema": 1, "id": "photos", "operation": "stop", "confirmation": "STOP APPLICATION photos"}
+            assert admin_requests[14] == {"schema": 1, "id": "photos", "operation": "remove", "confirmation": "REMOVE APPLICATION photos"}
+            assert admin_requests[15] == {"schema": 1, "id": "photos", "operation": "update-latest", "confirmation": "UPDATE APPLICATION photos"}
+            assert admin_requests[16] == {"schema": 1, "id": "photos", "operation": "install-staged", "confirmation": "INSTALL APPLICATION photos"}
             assert not any(vm_requests.iterdir())
 
             ledger = json.loads(state.read_text(encoding="utf-8"))
-            assert ledger["schema"] == 1 and len(ledger["results"]) == 22
+            assert ledger["schema"] == 1 and len(ledger["results"]) == 23
             serialized = state.read_text(encoding="utf-8")
             assert "I_ACCEPT" not in serialized and "automatic_checks" not in serialized
             assert state.stat().st_mode & 0o777 == 0o600

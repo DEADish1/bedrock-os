@@ -9,16 +9,18 @@ fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
 command -v jq >/dev/null 2>&1 || fail "jq is required"
 jq -e '
   (keys|sort)==(["confirmation","id","operation","schema"]|sort) and .schema==1 and
-  (.operation=="run" or .operation=="restore-latest") and
+  (.operation=="run" or .operation=="restore-latest" or .operation=="create-staged") and
   (.id|type=="string" and test("^[a-z][a-z0-9-]{0,31}$")) and
   ((.operation=="run" and .confirmation==("RUN ENCRYPTED BACKUP "+.id)) or
-   (.operation=="restore-latest" and .confirmation==("RESTORE LATEST BACKUP "+.id)))
+   (.operation=="restore-latest" and .confirmation==("RESTORE LATEST BACKUP "+.id)) or
+   (.operation=="create-staged" and .confirmation==("CREATE ENCRYPTED BACKUP "+.id)))
 ' "$request" >/dev/null || fail "backup request or exact confirmation is invalid"
 id=$(jq -r .id "$request" | tr -d '\r')
 operation=$(jq -r .operation "$request" | tr -d '\r')
 case "$operation" in
   run) task_kind=backup-run; confirmation="RUN ENCRYPTED BACKUP $id" ;;
   restore-latest) task_kind=backup-restore-latest; confirmation="RESTORE LATEST BACKUP $id" ;;
+  create-staged) task_kind=backup-create; confirmation="CREATE ENCRYPTED BACKUP $id" ;;
   *) fail "backup operation is unavailable" ;;
 esac
 if [ "${BEDROCK_BACKUP_ACTION_TEST_MODE:-0}" = 1 ]; then
