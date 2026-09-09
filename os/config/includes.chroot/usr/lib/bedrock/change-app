@@ -9,12 +9,13 @@ fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
 command -v jq >/dev/null 2>&1 || fail "jq is required"
 jq -e '
   (keys|sort)==(["confirmation","id","operation","schema"]|sort) and .schema==1 and
-  (.operation=="start" or .operation=="stop" or .operation=="remove" or .operation=="update-latest") and
+  (.operation=="start" or .operation=="stop" or .operation=="remove" or .operation=="update-latest" or .operation=="install-staged") and
   (.id|type=="string" and test("^[a-z][a-z0-9-]{0,31}$")) and
-  .confirmation==(if .operation=="update-latest" then "UPDATE APPLICATION "+.id else (.operation|ascii_upcase)+" APPLICATION "+.id end)
+  .confirmation==(if .operation=="update-latest" then "UPDATE APPLICATION "+.id elif .operation=="install-staged" then "INSTALL APPLICATION "+.id else (.operation|ascii_upcase)+" APPLICATION "+.id end)
 ' "$request" >/dev/null || fail "application request or exact confirmation is invalid"
 id=$(jq -r .id "$request" | tr -d '\r'); operation=$(jq -r .operation "$request" | tr -d '\r'); verb=$operation
 [ "$operation" != update-latest ] || verb=update
+[ "$operation" != install-staged ] || verb=install
 if [ "${BEDROCK_APP_ACTION_TEST_MODE:-0}" = 1 ]; then
   manager=${BEDROCK_APP_ACTION_MANAGER:?test mode requires BEDROCK_APP_ACTION_MANAGER}
 else

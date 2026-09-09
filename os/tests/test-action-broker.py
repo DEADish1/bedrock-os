@@ -275,6 +275,9 @@ def main():
             app_update_id = str(uuid.uuid4())
             update_request = app_control_request(app_update_id, "update-latest") | {"confirmation": "UPDATE APPLICATION photos"}
             assert exchange(socket_path, update_request)["status"] == "succeeded"
+            app_install_id = str(uuid.uuid4())
+            install_request = app_control_request(app_install_id, "install-staged") | {"confirmation": "INSTALL APPLICATION photos"}
+            assert exchange(socket_path, install_request)["status"] == "succeeded"
             assert exchange(socket_path, app_control_request(str(uuid.uuid4())) | {"confirmation": "wrong"})["error"]["code"] == "invalid-app-control"
             admin_requests = [json.loads(line) for line in admin_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[3]["name"] == "new-vm" and admin_requests[3]["disk_size_gib"] == 64
@@ -289,10 +292,11 @@ def main():
             assert admin_requests[12] == {"schema": 1, "id": "photos", "operation": "stop", "confirmation": "STOP APPLICATION photos"}
             assert admin_requests[13] == {"schema": 1, "id": "photos", "operation": "remove", "confirmation": "REMOVE APPLICATION photos"}
             assert admin_requests[14] == {"schema": 1, "id": "photos", "operation": "update-latest", "confirmation": "UPDATE APPLICATION photos"}
+            assert admin_requests[15] == {"schema": 1, "id": "photos", "operation": "install-staged", "confirmation": "INSTALL APPLICATION photos"}
             assert not any(vm_requests.iterdir())
 
             ledger = json.loads(state.read_text(encoding="utf-8"))
-            assert ledger["schema"] == 1 and len(ledger["results"]) == 21
+            assert ledger["schema"] == 1 and len(ledger["results"]) == 22
             serialized = state.read_text(encoding="utf-8")
             assert "I_ACCEPT" not in serialized and "automatic_checks" not in serialized
             assert state.stat().st_mode & 0o777 == 0o600

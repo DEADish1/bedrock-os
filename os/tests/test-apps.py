@@ -24,7 +24,11 @@ def main():
         call(env,"stop","photos","STOP APPLICATION photos"); assert json.loads((state/"status.json").read_text())["apps"][0]["running"] is False
         call(env,"start","photos","START APPLICATION photos"); assert json.loads((state/"status.json").read_text())["apps"][0]["running"] is True
         assert call(env,"remove","photos","wrong",ok=False).returncode; call(env,"remove","photos","REMOVE APPLICATION photos")
+        staged=request(path); assert call(env,"stage-install",str(path),"wrong",ok=False).returncode; call(env,"stage-install",str(path),confirm("STAGE",staged))
+        safe=json.loads((state/"status.json").read_text()); assert safe["apps"]==[] and safe["install_candidates"][0]["id"]=="photos" and "image" not in json.dumps(safe) and "digest" not in json.dumps(safe)
+        assert call(env,"install-staged","photos","wrong",ok=False).returncode; call(env,"install-staged","photos","INSTALL APPLICATION photos"); assert json.loads((state/"status.json").read_text())["install_candidates"]==[]
+        call(env,"remove","photos","REMOVE APPLICATION photos")
         assert json.loads(call(env,"list").stdout)["apps"]==[] and (data/"photos").is_dir()
-        assert json.loads((state/"status.json").read_text())["apps"]==[]
+        assert json.loads((state/"status.json").read_text())["apps"]==[] and json.loads((state/"status.json").read_text())["install_candidates"]==[]
     print("Bedrock isolated application lifecycle, limits, and update-policy tests passed.")
 if __name__=="__main__": main()

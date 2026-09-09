@@ -200,7 +200,7 @@ def parse_request(raw):
         if set(request) != {"schema", "request_id", "action", "id", "operation", "confirmation"}:
             raise RequestError("invalid-request", "request fields do not match the application control schema")
         app_id, operation, confirmation = request["id"], request["operation"], request["confirmation"]
-        expected = f"UPDATE APPLICATION {app_id}" if operation == "update-latest" else f"{operation.upper()} APPLICATION {app_id}" if operation in {"start", "stop", "remove"} else ""
+        expected = f"UPDATE APPLICATION {app_id}" if operation == "update-latest" else f"INSTALL APPLICATION {app_id}" if operation == "install-staged" else f"{operation.upper()} APPLICATION {app_id}" if operation in {"start", "stop", "remove"} else ""
         if not isinstance(app_id, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", app_id) or confirmation != expected:
             raise RequestError("invalid-app-control", "application identity, action, or exact confirmation is invalid")
         details = {"schema": 1, "id": app_id, "operation": operation, "confirmation": confirmation}
