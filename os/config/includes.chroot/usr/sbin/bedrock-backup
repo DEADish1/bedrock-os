@@ -92,7 +92,7 @@ def run_plan(base,data,repos,restic,state,plan,now):
     plan["last_success_unix"]=now; plan["last_snapshot"]=snapshot; atomic(base/"plans.json",state)
     return snapshot
 def main():
-    if len(sys.argv)<2 or sys.argv[1] not in {"create","list","run","run-due","restore"}: fail("usage: bedrock-backup create|list|run|run-due|restore ...")
+    if len(sys.argv)<2 or sys.argv[1] not in {"create","list","run","run-due","restore","restore-latest"}: fail("usage: bedrock-backup create|list|run|run-due|restore|restore-latest ...")
     if os.environ.get("BEDROCK_BACKUP_TEST_MODE")!="1" and sys.argv[1]!="list" and subprocess.run(["/usr/lib/bedrock/require-normal-mode"]).returncode: fail("maintenance mode blocks backup mutation")
     base,data,repos,restores,restic=context(); state_path=base/"plans.json"; lock_path=base/".lock"; now=int(os.environ.get("BEDROCK_BACKUP_TEST_NOW",str(int(time.time()))))
     with lock_path.open("a+") as lock:
@@ -131,9 +131,14 @@ def main():
         if command=="run":
             if len(sys.argv)!=4 or sys.argv[3]!=f"RUN ENCRYPTED BACKUP {plan['id']}": fail("backup run confirmation is invalid")
             snapshot=run_plan(base,data,repos,restic,state,plan,now); publish(state,os.environ.get("BEDROCK_BACKUP_TEST_MODE")=="1"); print(json.dumps({"schema":1,"status":"completed","snapshot":snapshot},sort_keys=True,separators=(",",":"))); return
-        if len(sys.argv)!=5 or not SNAPSHOT.fullmatch(sys.argv[3]) or sys.argv[4]!=f"RESTORE BACKUP {plan['id']} SNAPSHOT {sys.argv[3]}": fail("restore confirmation is invalid")
+        if command=="restore-latest":
+            if len(sys.argv)!=4 or sys.argv[3]!=f"RESTORE LATEST BACKUP {plan['id']}" or plan["last_snapshot"] is None: fail("restore latest confirmation or history is invalid")
+            snapshot=plan["last_snapshot"]
+        else:
+            if len(sys.argv)!=5 or not SNAPSHOT.fullmatch(sys.argv[3]) or sys.argv[4]!=f"RESTORE BACKUP {plan['id']} SNAPSHOT {sys.argv[3]}": fail("restore confirmation is invalid")
+            snapshot=sys.argv[3]
         validate_paths(plan,data,repos); target=restores/plan["id"]
         if target.exists() or target.is_symlink(): fail("restore target already exists")
         restores.mkdir(parents=True,exist_ok=True); confined(restores,data,True); password=secret(base,plan["id"])
-        restic_call(restic,plan,password,"restore",sys.argv[3],"--target",str(target)); print(json.dumps({"schema":1,"status":"restored","target":str(target),"snapshot":sys.argv[3]},sort_keys=True,separators=(",",":")))
+        restic_call(restic,plan,password,"restore",snapshot,"--target",str(target)); print(json.dumps({"schema":1,"status":"restored","target":str(target),"snapshot":snapshot},sort_keys=True,separators=(",",":")))
 if __name__=="__main__": main()

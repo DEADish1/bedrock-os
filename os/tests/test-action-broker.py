@@ -103,6 +103,10 @@ def backup_run_request(request_id):
     return {"schema": 1, "request_id": request_id, "action": "backup-run", "id": "nightly",
             "confirmation": "RUN ENCRYPTED BACKUP nightly"}
 
+def backup_restore_latest_request(request_id):
+    return {"schema": 1, "request_id": request_id, "action": "backup-restore-latest", "id": "nightly",
+            "confirmation": "RESTORE LATEST BACKUP nightly"}
+
 
 def main():
     if not hasattr(socket, "SO_PEERCRED"):
@@ -253,6 +257,10 @@ def main():
             assert exchange(socket_path, backup_run_request(backup_id))["status"] == "succeeded"
             assert exchange(socket_path, backup_run_request(backup_id))["replayed"] is True
             assert exchange(socket_path, backup_run_request(str(uuid.uuid4())) | {"confirmation": "wrong"})["error"]["code"] == "invalid-backup-run"
+            restore_id = str(uuid.uuid4())
+            assert exchange(socket_path, backup_restore_latest_request(restore_id))["status"] == "succeeded"
+            assert exchange(socket_path, backup_restore_latest_request(restore_id))["replayed"] is True
+            assert exchange(socket_path, backup_restore_latest_request(str(uuid.uuid4())) | {"confirmation": "wrong"})["error"]["code"] == "invalid-backup-restore-latest"
             admin_requests = [json.loads(line) for line in admin_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[3]["name"] == "new-vm" and admin_requests[3]["disk_size_gib"] == 64
             assert admin_requests[4] == {"schema": 1, "vm": "test-vm", "image": "installer", "action": "attach", "confirmation": "ATTACH IMAGE installer TO VM test-vm"}
@@ -262,10 +270,11 @@ def main():
             assert admin_requests[8] == {"schema": 1, "id": "12345678-1234-4123-8123-123456789abc", "confirmation": "APPROVE REMOTE DEVICE 12345678-1234-4123-8123-123456789abc"}
             assert admin_requests[9] == {"schema": 1, "source": "source", "source_sha256": "c" * 64, "target": "converted", "target_type": "qcow2", "confirmation": f"CONVERT IMAGE source {'c' * 64} TO QCOW2 converted"}
             assert admin_requests[10] == {"schema": 1, "id": "nightly", "operation": "run", "confirmation": "RUN ENCRYPTED BACKUP nightly"}
+            assert admin_requests[11] == {"schema": 1, "id": "nightly", "operation": "restore-latest", "confirmation": "RESTORE LATEST BACKUP nightly"}
             assert not any(vm_requests.iterdir())
 
             ledger = json.loads(state.read_text(encoding="utf-8"))
-            assert ledger["schema"] == 1 and len(ledger["results"]) == 17
+            assert ledger["schema"] == 1 and len(ledger["results"]) == 18
             serialized = state.read_text(encoding="utf-8")
             assert "I_ACCEPT" not in serialized and "automatic_checks" not in serialized
             assert state.stat().st_mode & 0o777 == 0o600

@@ -33,6 +33,7 @@ if "restore" in sys.argv: pathlib.Path(sys.argv[sys.argv.index("--target")+1]).m
         commands=log.read_text(); assert " backup " in commands and "forget --prune --keep-daily 7 --keep-weekly 4 --keep-monthly 6" in commands and "secret=True" in commands and "a-long-test-password" not in commands
         assert invoke(env,"restore","nightly",snapshot,"wrong",ok=False).returncode and not (restores/"nightly").exists()
         invoke(env,"restore","nightly",snapshot,f"RESTORE BACKUP nightly SNAPSHOT {snapshot}"); assert (restores/"nightly").is_dir()
+        pathlib.Path(restores/"nightly").rmdir(); invoke(env,"restore-latest","nightly","RESTORE LATEST BACKUP nightly"); assert (restores/"nightly").is_dir()
         pathlib.Path(restores/"nightly").rmdir(); before=log.read_text().count(" backup "); env["BEDROCK_BACKUP_TEST_NOW"]="259200"; invoke(env,"run-due"); assert log.read_text().count(" backup ")==before+1
     print("Bedrock encrypted backup plan, retention, schedule, and restore tests passed.")
 if __name__=="__main__": main()

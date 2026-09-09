@@ -252,7 +252,7 @@ def main() -> None:
             assert request(socket_path, "GET", "/api/v1/health")[0] == 200
             schema_status, schema_body = request(socket_path, "GET", "/api/v1/openapi.json")
             assert schema_status == 200 and schema_body["openapi"] == "3.1.0"
-            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/backups", "/api/v1/backups/{id}/run", "/api/v1/hardware", "/api/v1/images", "/api/v1/images/{name}/convert", "/api/v1/remote/devices", "/api/v1/remote/devices/{id}", "/api/v1/remote/pairings/{id}/approve", "/api/v1/settings", "/api/v1/storage", "/api/v1/users", "/api/v1/virtualization/capabilities", "/api/v1/virtualization/passthrough-candidates", "/api/v1/vms", "/api/v1/vms/{name}", "/api/v1/vms/{name}/clone", "/api/v1/vms/{name}/images", "/api/v1/vms/{name}/networks", "/api/v1/vms/{name}/passthrough", "/api/v1/vms/{name}/power", "/api/v1/vms/{name}/resources", "/api/v1/vms/{name}/snapshots"}
+            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/backups", "/api/v1/backups/{id}/restore-latest", "/api/v1/backups/{id}/run", "/api/v1/hardware", "/api/v1/images", "/api/v1/images/{name}/convert", "/api/v1/remote/devices", "/api/v1/remote/devices/{id}", "/api/v1/remote/pairings/{id}/approve", "/api/v1/settings", "/api/v1/storage", "/api/v1/users", "/api/v1/virtualization/capabilities", "/api/v1/virtualization/passthrough-candidates", "/api/v1/vms", "/api/v1/vms/{name}", "/api/v1/vms/{name}/clone", "/api/v1/vms/{name}/images", "/api/v1/vms/{name}/networks", "/api/v1/vms/{name}/passthrough", "/api/v1/vms/{name}/power", "/api/v1/vms/{name}/resources", "/api/v1/vms/{name}/snapshots"}
             assert schema_body["security"] == [{"bearerAuth": []}]
             assert set(schema_body["paths"]["/api/v1/settings"]) == {"get", "put"}
             concrete = lambda path: path.replace("{name}", "test-vm").replace("{id}", "12345678-1234-4123-8123-123456789abc")
@@ -394,6 +394,14 @@ def main() -> None:
             assert request(socket_path, "POST", "/api/v1/backups/nightly/run", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[10] == {"schema": 1, "id": "nightly", "operation": "run", "confirmation": "RUN ENCRYPTED BACKUP nightly"}
+            backup_restore_id = str(uuid.uuid4())
+            backup_restore_body = {"schema": 1, "confirmation": "RESTORE LATEST BACKUP nightly"}
+            backup_restore_headers = {"Content-Type": "application/json", "Idempotency-Key": backup_restore_id}
+            assert request(socket_path, "POST", "/api/v1/backups/nightly/restore-latest", body=backup_restore_body, extra_headers=backup_restore_headers)[0] == 200
+            assert request(socket_path, "POST", "/api/v1/backups/nightly/restore-latest", body=backup_restore_body, extra_headers=backup_restore_headers)[1]["replayed"] is True
+            assert request(socket_path, "POST", "/api/v1/backups/nightly/restore-latest", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
+            assert admin_requests[11] == {"schema": 1, "id": "nightly", "operation": "restore-latest", "confirmation": "RESTORE LATEST BACKUP nightly"}
             image_status, image_body = request(socket_path, "GET", "/api/v1/images")
             assert image_status == 200 and image_body["images"][0]["sha256"] == "c" * 64 and "path" not in json.dumps(image_body)
             storage_status, storage_body = request(socket_path, "GET", "/api/v1/storage")
