@@ -1,0 +1,38 @@
+#!/bin/sh
+set -eu
+
+[ ! -x /usr/lib/bedrock/require-normal-mode ] || /usr/lib/bedrock/require-normal-mode
+[ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
+request=$1
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+[ -f "$request" ] && [ ! -L "$request" ] || fail "pairing approval request is missing or indirect"
+command -v jq >/dev/null 2>&1 || fail "jq is required"
+jq -e '
+  (keys|sort)==(["confirmation","id","schema"]|sort) and .schema==1 and
+  (.id|type=="string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")) and
+  .confirmation==("APPROVE REMOTE DEVICE "+.id)
+' "$request" >/dev/null || fail "pairing approval or confirmation is invalid"
+id=$(jq -r .id "$request" | tr -d '\r'); confirmation=$(jq -r .confirmation "$request" | tr -d '\r')
+if [ "${BEDROCK_PAIRING_TEST_MODE:-0}" = 1 ]; then
+  manager=${BEDROCK_REMOTE_PAIRING_MANAGER:?test mode requires BEDROCK_REMOTE_PAIRING_MANAGER}
+  collector=${BEDROCK_REMOTE_STATUS_COLLECTOR:?test mode requires BEDROCK_REMOTE_STATUS_COLLECTOR}
+else
+  [ "$(id -u)" -eq 0 ] || fail "pairing approval requires root"
+  [ "$request" = "/var/lib/bedrock/remote/requests/$id-approve.json" ] || fail "pairing approval request path is not identity-bound"
+  manager=/usr/lib/bedrock/manage-remote-pairing
+  collector=/usr/lib/bedrock/collect-remote-status
+fi
+[ -x "$manager" ] && [ ! -L "$manager" ] || fail "remote pairing manager is unavailable or indirect"
+[ -x "$collector" ] && [ ! -L "$collector" ] || fail "remote status collector is unavailable or indirect"
+task_writer=${BEDROCK_RECORD_API_TASK:-$(dirname "$0")/record-api-task}
+[ -x "$task_writer" ] && [ ! -L "$task_writer" ] || fail "task recorder is unavailable or indirect"
+created=$(date +%s); task_id="remote-pairing-approve-$$"; active=0; done=0
+cleanup() { status=$?; if [ "$active" -eq 1 ] && [ "$done" -eq 0 ]; then "$task_writer" "$task_id" remote-pairing-approve failed "$created" 0 1 steps >/dev/null 2>&1 || true; fi; exit "$status"; }
+trap cleanup EXIT INT TERM
+"$task_writer" "$task_id" remote-pairing-approve queued "$created" 0 1 steps
+active=1
+"$manager" approve "$id" "$confirmation"
+"$collector"
+"$task_writer" "$task_id" remote-pairing-approve succeeded "$created" 1 1 steps
+done=1
+trap - EXIT INT TERM

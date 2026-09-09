@@ -27,6 +27,7 @@
       "/api/v1/openapi.json",
       "/api/v1/remote/devices",
       "/api/v1/remote/devices/{id}",
+      "/api/v1/remote/pairings/{id}/approve",
       "/api/v1/settings",
       "/api/v1/storage",
       "/api/v1/tasks",

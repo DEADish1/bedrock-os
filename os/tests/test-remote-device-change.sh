@@ -21,12 +21,18 @@ cat > "$work/recorder" <<'EOF'
 printf '%s\n' "$*" >> "$BEDROCK_TEST_TASK_CALLS"
 EOF
 chmod +x "$work/recorder"
-run() { BEDROCK_PAIRING_TEST_MODE=1 BEDROCK_PAIRING_STATE_DIR="$work" BEDROCK_PAIRING_TEST_WALL_NOW=1100 BEDROCK_PAIRING_SESSION_TERMINATOR="$work/terminator" BEDROCK_REMOTE_DEVICE_MANAGER="$work/manager" BEDROCK_TEST_REAL_MANAGER="$manager" BEDROCK_TEST_PYTHON="$python" BEDROCK_RECORD_API_TASK="$work/recorder" BEDROCK_TEST_TASK_CALLS="$work/task-calls" "$wrapper" "$work/request.json"; }
+cat > "$work/collector" <<'EOF'
+#!/bin/sh
+printf 'refresh\n' >> "$BEDROCK_TEST_STATUS_CALLS"
+EOF
+chmod +x "$work/collector"
+run() { BEDROCK_PAIRING_TEST_MODE=1 BEDROCK_PAIRING_STATE_DIR="$work" BEDROCK_PAIRING_TEST_WALL_NOW=1100 BEDROCK_PAIRING_SESSION_TERMINATOR="$work/terminator" BEDROCK_REMOTE_DEVICE_MANAGER="$work/manager" BEDROCK_TEST_REAL_MANAGER="$manager" BEDROCK_TEST_PYTHON="$python" BEDROCK_REMOTE_STATUS_COLLECTOR="$work/collector" BEDROCK_TEST_STATUS_CALLS="$work/status-calls" BEDROCK_RECORD_API_TASK="$work/recorder" BEDROCK_TEST_TASK_CALLS="$work/task-calls" "$wrapper" "$work/request.json"; }
 jq -n --arg id "$id" '{schema:1,id:$id,operation:"rename",name:"Office laptop"}' > "$work/request.json"; run | jq -e '.action=="rename"' >/dev/null
 jq -n --arg id "$id" '{schema:1,id:$id,operation:"expire",expires_unix:2000,confirmation:("EXPIRE REMOTE DEVICE "+$id+" AT 2000")}' > "$work/request.json"; run | jq -e '.action=="expire"' >/dev/null
 jq -n --arg id "$id" '{schema:1,id:$id,operation:"revoke",confirmation:("REVOKE REMOTE DEVICE "+$id)}' > "$work/request.json"; run | jq -e '.action=="revoke"' >/dev/null
 jq -e '.devices[0].name=="Office laptop" and .devices[0].expires_unix==2000 and .devices[0].revoked==true' "$work/pairings.json" >/dev/null
 [ "$(grep -c ' succeeded ' "$work/task-calls")" -eq 3 ]
+[ "$(wc -l < "$work/status-calls" | tr -d ' ')" -eq 3 ]
 jq '.confirmation="REVOKE REMOTE DEVICE wrong"' "$work/request.json" > "$work/bad.json"; mv "$work/bad.json" "$work/request.json"
 if run >/dev/null 2>&1; then printf 'error: invalid confirmation accepted\n' >&2; exit 1; fi
 printf 'Remote device request wrapper tests passed.\n'

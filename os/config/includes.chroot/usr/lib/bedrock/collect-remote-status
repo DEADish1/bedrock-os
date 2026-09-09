@@ -5,20 +5,37 @@ export PATH
 if [ "${BEDROCK_REMOTE_STATUS_TEST_MODE:-0}" = 1 ]; then
   manager=${BEDROCK_REMOTE_STATUS_MANAGER:?test mode requires manager}
   output=${BEDROCK_REMOTE_STATUS_OUTPUT:?test mode requires output}
+  pairings=${BEDROCK_REMOTE_STATUS_PAIRINGS:?test mode requires pairings}
+  boot_id=${BEDROCK_REMOTE_STATUS_BOOT_ID:?test mode requires boot identity}
+  now=${BEDROCK_REMOTE_STATUS_MONOTONIC:?test mode requires monotonic time}
 else
   [ "$(id -u)" -eq 0 ] || { printf 'error: remote status collection requires root\n' >&2; exit 1; }
   manager=/usr/lib/bedrock/manage-remote-devices
   output=/var/lib/bedrock/remote/status.json
+  pairings=/var/lib/bedrock/remote/pairings.json
+  boot_id=$(tr -d '\r\n' < /proc/sys/kernel/random/boot_id)
+  now=$(cut -d. -f1 < /proc/uptime)
 fi
 [ -x "$manager" ] && [ ! -L "$manager" ] || { printf 'error: remote device manager is unavailable or indirect\n' >&2; exit 1; }
 directory=$(dirname -- "$output")
 [ -d "$directory" ] && [ ! -L "$directory" ] || { printf 'error: remote state directory is unavailable or indirect\n' >&2; exit 1; }
 [ ! -e "$output" ] || { [ -f "$output" ] && [ ! -L "$output" ]; } || { printf 'error: remote status output is unsafe\n' >&2; exit 1; }
+[ -f "$pairings" ] && [ ! -L "$pairings" ] || { printf 'error: remote pairing state is unavailable or indirect\n' >&2; exit 1; }
+printf '%s' "$boot_id" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' || { printf 'error: boot identity is invalid\n' >&2; exit 1; }
+printf '%s' "$now" | grep -Eq '^[0-9]+$' || { printf 'error: monotonic time is invalid\n' >&2; exit 1; }
 temporary=$(mktemp "$directory/.remote-status.XXXXXX")
-trap 'rm -f "$temporary"' EXIT INT TERM
-"$manager" list > "$temporary"
+devices=$(mktemp "$directory/.remote-devices.XXXXXX")
+trap 'rm -f "$temporary" "$devices"' EXIT INT TERM
+"$manager" list > "$devices"
+jq -S --arg boot "$boot_id" --argjson now "$now" --slurpfile public "$devices" '
+  {schema:2,devices:$public[0].devices,pending_requests:[
+    .requests[] |
+    select(.boot_id==$boot and .used==false and .expires_monotonic>=$now) |
+    {id,approved,expires_in_seconds:(.expires_monotonic-$now)}
+  ]} | .pending_requests |= sort_by(.id)
+' "$pairings" > "$temporary"
 jq -e '
-  (keys|sort)==(["devices","schema"]|sort) and .schema==1 and (.devices|type=="array" and length<=128) and
+  (keys|sort)==(["devices","pending_requests","schema"]|sort) and .schema==2 and (.devices|type=="array" and length<=128) and
   all(.devices[]; . as $device |
     (keys|sort)==(["created_unix","expired","expires_unix","id","last_seen_unix","name","revoked"]|sort) and
     ($device.id|type=="string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")) and
@@ -26,8 +43,13 @@ jq -e '
     ($device.created_unix|type=="number") and ($device.created_unix|floor)==$device.created_unix and $device.created_unix>=0 and
     ($device.expires_unix|type=="number") and ($device.expires_unix|floor)==$device.expires_unix and $device.expires_unix>$device.created_unix and
     ($device.revoked|type=="boolean") and ($device.expired|type=="boolean") and
-    ($device.last_seen_unix==null or (($device.last_seen_unix|type=="number") and ($device.last_seen_unix|floor)==$device.last_seen_unix and $device.last_seen_unix>=0)))
+    ($device.last_seen_unix==null or (($device.last_seen_unix|type=="number") and ($device.last_seen_unix|floor)==$device.last_seen_unix and $device.last_seen_unix>=0))) and
+  (.pending_requests|type=="array" and length<=128) and all(.pending_requests[];
+    (keys|sort)==(["approved","expires_in_seconds","id"]|sort) and
+    (.id|type=="string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")) and
+    (.approved|type=="boolean") and (.expires_in_seconds|type=="number" and floor==. and .>=0 and .<=600))
 ' "$temporary" >/dev/null
 chmod 0644 "$temporary"
 mv "$temporary" "$output"
+rm -f "$devices"
 trap - EXIT INT TERM

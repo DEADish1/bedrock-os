@@ -20,12 +20,15 @@ jq -e '
 id=$(jq -r .id "$request" | tr -d '\r'); operation=$(jq -r .operation "$request" | tr -d '\r')
 if [ "${BEDROCK_PAIRING_TEST_MODE:-0}" = 1 ]; then
   manager=${BEDROCK_REMOTE_DEVICE_MANAGER:?test mode requires BEDROCK_REMOTE_DEVICE_MANAGER}
+  collector=${BEDROCK_REMOTE_STATUS_COLLECTOR:?test mode requires BEDROCK_REMOTE_STATUS_COLLECTOR}
 else
   [ "$(id -u)" -eq 0 ] || fail "remote device changes require root"
   [ "$request" = "/var/lib/bedrock/remote/requests/$id-$operation.json" ] || fail "remote device request path is not identity-bound"
   manager=/usr/lib/bedrock/manage-remote-devices
+  collector=/usr/lib/bedrock/collect-remote-status
 fi
 [ -x "$manager" ] && [ ! -L "$manager" ] || fail "remote device manager is unavailable or indirect"
+[ -x "$collector" ] && [ ! -L "$collector" ] || fail "remote status collector is unavailable or indirect"
 task_writer=${BEDROCK_RECORD_API_TASK:-$(dirname "$0")/record-api-task}
 [ -x "$task_writer" ] && [ ! -L "$task_writer" ] || fail "task recorder is unavailable or indirect"
 created=$(date +%s); task_id="remote-device-$operation-$$"; active=0; done=0
@@ -38,6 +41,7 @@ case "$operation" in
   expire) expiry=$(jq -r .expires_unix "$request" | tr -d '\r'); "$manager" expire "$id" "$expiry" "$(jq -r .confirmation "$request" | tr -d '\r')" ;;
   revoke) "$manager" revoke "$id" "$(jq -r .confirmation "$request" | tr -d '\r')" ;;
 esac
+"$collector"
 "$task_writer" "$task_id" "remote-device-$operation" succeeded "$created" 1 1 steps
 done=1
 trap - EXIT INT TERM

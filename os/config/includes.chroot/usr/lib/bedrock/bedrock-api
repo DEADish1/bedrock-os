@@ -236,6 +236,12 @@ def remote_device_action(request_id: str, device_id: str, body: object) -> dict:
         raise ValueError("invalid remote device change or confirmation")
     return broker_action(request_id, request)
 
+def remote_pairing_approval_action(request_id: str, pairing_id: str, body: object) -> dict:
+    if not DEVICE_ID.fullmatch(pairing_id) or not isinstance(body, dict) or set(body) != {"schema", "confirmation"} or body.get("schema") != 1 or not isinstance(body["confirmation"], str) or not hmac.compare_digest(body["confirmation"], f"APPROVE REMOTE DEVICE {pairing_id}"):
+        raise ValueError("invalid remote pairing approval")
+    return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "remote-pairing-approve",
+                         "id": pairing_id, "confirmation": body["confirmation"]})
+
 def bounded_string(value: object, maximum: int) -> str:
     if not isinstance(value, str) or not value or len(value) > maximum or any(ord(char) < 32 for char in value):
         raise ValueError("invalid string")
@@ -326,7 +332,7 @@ def audit_feed() -> dict:
 
 def remote_feed() -> dict:
     value = regular_json(REMOTE, 262144)
-    if not isinstance(value, dict) or set(value) != {"schema", "devices"} or value["schema"] != 1 or not isinstance(value["devices"], list) or len(value["devices"]) > 128:
+    if not isinstance(value, dict) or set(value) != {"schema", "devices", "pending_requests"} or value["schema"] != 2 or not isinstance(value["devices"], list) or len(value["devices"]) > 128 or not isinstance(value["pending_requests"], list) or len(value["pending_requests"]) > 128:
         raise ValueError("invalid remote status")
     fields = {"id", "name", "created_unix", "expires_unix", "revoked", "expired", "last_seen_unix"}
     for item in value["devices"]:
@@ -334,7 +340,12 @@ def remote_feed() -> dict:
             raise ValueError("invalid remote device")
         if type(item["created_unix"]) is not int or type(item["expires_unix"]) is not int or not 0 <= item["created_unix"] < item["expires_unix"] or type(item["revoked"]) is not bool or type(item["expired"]) is not bool or (item["last_seen_unix"] is not None and (type(item["last_seen_unix"]) is not int or item["last_seen_unix"] < 0)):
             raise ValueError("invalid remote device")
-    return value
+    pending = []
+    for item in value["pending_requests"]:
+        if not isinstance(item, dict) or set(item) != {"id", "approved", "expires_in_seconds"} or not DEVICE_ID.fullmatch(bounded_string(item["id"], 64)) or type(item["approved"]) is not bool or type(item["expires_in_seconds"]) is not int or not 0 <= item["expires_in_seconds"] <= 600:
+            raise ValueError("invalid pending pairing request")
+        pending.append(item)
+    return {"schema": 1, "devices": value["devices"], "pending_requests": pending}
 
 def app_feed() -> dict:
     value = regular_json(APPS, 262144)
@@ -700,7 +711,8 @@ class Handler(BaseHTTPRequestHandler):
         networks = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/networks", self.path)
         passthrough = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/passthrough", self.path)
         remote_device = re.fullmatch(r"/api/v1/remote/devices/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})", self.path)
-        if not create and not power and not snapshots and not clone and not resources and not images and not networks and not passthrough and not remote_device:
+        pairing_approval = re.fullmatch(r"/api/v1/remote/pairings/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})/approve", self.path)
+        if not create and not power and not snapshots and not clone and not resources and not images and not networks and not passthrough and not remote_device and not pairing_approval:
             self.send_json(405, {"schema": 1, "error": "method-not-allowed"})
             return
         if self.headers.get("Transfer-Encoding") is not None or self.headers.get("Content-Type") != "application/json":
@@ -720,6 +732,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = vm_passthrough_action(self.headers.get("Idempotency-Key", ""), passthrough.group(1), body)
             elif remote_device:
                 result = remote_device_action(self.headers.get("Idempotency-Key", ""), remote_device.group(1), body)
+            elif pairing_approval:
+                result = remote_pairing_approval_action(self.headers.get("Idempotency-Key", ""), pairing_approval.group(1), body)
             else:
                 target = (power or snapshots or clone or resources).group(1)
                 action = vm_control_action if power else vm_snapshot_action if snapshots else vm_clone_action if clone else vm_resource_action

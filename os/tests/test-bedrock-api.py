@@ -102,7 +102,7 @@ def main() -> None:
         updates.write_text(json.dumps({"schema": 1, "status": "available", "checked_unix": 103, "installed_generation": 1, "available_generation": 2, "available_version": "0.6.0", "available_channel": "stable"}), encoding="utf-8")
         tasks.write_text(json.dumps({"schema": 1, "generated_unix": 104, "tasks": [{"id": "task-1", "kind": "image-import", "state": "running", "created_unix": 100, "updated_unix": 104, "progress": {"current": 25, "total": 100, "unit": "percent"}}]}), encoding="utf-8")
         audit.write_text(json.dumps({"id": "event-1", "category": "storage", "action": "scrub", "outcome": "succeeded", "occurred_unix": 99}) + "\n", encoding="utf-8")
-        remote.write_text(json.dumps({"schema": 1, "devices": [{"id": "42345678-1234-4123-8123-123456789abc", "name": "Office laptop", "created_unix": 1000, "expires_unix": 2000, "revoked": False, "expired": False, "last_seen_unix": None}]}), encoding="utf-8")
+        remote.write_text(json.dumps({"schema": 2, "devices": [{"id": "42345678-1234-4123-8123-123456789abc", "name": "Office laptop", "created_unix": 1000, "expires_unix": 2000, "revoked": False, "expired": False, "last_seen_unix": None}], "pending_requests": [{"id": "12345678-1234-4123-8123-123456789abc", "approved": False, "expires_in_seconds": 420}]}), encoding="utf-8")
         apps.write_text(json.dumps({"schema": 1, "apps": [{"id": "media", "name": "Media", "network": "bridge", "port_count": 1, "resources": {"cpus": 1, "memory_mib": 512, "pids": 128}, "update_policy": "notify", "created_unix": 100}]}), encoding="utf-8")
         backups.write_text(json.dumps({"schema": 1, "plans": [{"id": "daily", "name": "Daily", "kind": "local", "schedule": {"frequency": "daily", "hour_utc": 2, "weekday": None}, "retention": {"daily": 7, "weekly": 4, "monthly": 3}, "created_unix": 100, "last_success_unix": 200, "has_snapshot": True}]}), encoding="utf-8")
         images.write_text(json.dumps({"schema": 1, "images": [{"name": "installer", "type": "iso", "sha256": "c" * 64, "size_bytes": 4096, "converted": False}]}), encoding="utf-8")
@@ -148,6 +148,7 @@ def main() -> None:
             "BEDROCK_ACTION_BROKER_NETWORK_ATTACHMENT_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_PASSTHROUGH_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_REMOTE_DEVICE_HELPER": str(admin_action_helper),
+            "BEDROCK_ACTION_BROKER_REMOTE_PAIRING_APPROVAL_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_REMOTE_REQUESTS": str(vm_action_requests),
             "BEDROCK_ACTION_BROKER_VM_DEFINITIONS": str(vm_definitions),
             "BEDROCK_VM_ADMIN_CALLS": str(admin_action_calls),
@@ -176,7 +177,7 @@ def main() -> None:
             assert request(socket_path, "GET", "/api/v1/health")[0] == 200
             schema_status, schema_body = request(socket_path, "GET", "/api/v1/openapi.json")
             assert schema_status == 200 and schema_body["openapi"] == "3.1.0"
-            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/backups", "/api/v1/hardware", "/api/v1/images", "/api/v1/remote/devices", "/api/v1/remote/devices/{id}", "/api/v1/settings", "/api/v1/storage", "/api/v1/users", "/api/v1/virtualization/capabilities", "/api/v1/virtualization/passthrough-candidates", "/api/v1/vms", "/api/v1/vms/{name}", "/api/v1/vms/{name}/clone", "/api/v1/vms/{name}/images", "/api/v1/vms/{name}/networks", "/api/v1/vms/{name}/passthrough", "/api/v1/vms/{name}/power", "/api/v1/vms/{name}/resources", "/api/v1/vms/{name}/snapshots"}
+            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/backups", "/api/v1/hardware", "/api/v1/images", "/api/v1/remote/devices", "/api/v1/remote/devices/{id}", "/api/v1/remote/pairings/{id}/approve", "/api/v1/settings", "/api/v1/storage", "/api/v1/users", "/api/v1/virtualization/capabilities", "/api/v1/virtualization/passthrough-candidates", "/api/v1/vms", "/api/v1/vms/{name}", "/api/v1/vms/{name}/clone", "/api/v1/vms/{name}/images", "/api/v1/vms/{name}/networks", "/api/v1/vms/{name}/passthrough", "/api/v1/vms/{name}/power", "/api/v1/vms/{name}/resources", "/api/v1/vms/{name}/snapshots"}
             assert schema_body["security"] == [{"bearerAuth": []}]
             assert set(schema_body["paths"]["/api/v1/settings"]) == {"get", "put"}
             assert request(socket_path, "GET", "/api/v1/virtualization/capabilities") == (200, {"schema": 1, "data": {"schema": 1, "status": "ready"}})
@@ -192,6 +193,7 @@ def main() -> None:
             assert request(socket_path, "GET", "/api/v1/audit") == (200, {"schema": 1, "events": [{"id": "event-1", "category": "storage", "action": "scrub", "outcome": "succeeded", "occurred_unix": 99}]})
             remote_status, remote_body = request(socket_path, "GET", "/api/v1/remote/devices")
             assert remote_status == 200 and remote_body["devices"][0]["name"] == "Office laptop"
+            assert remote_body["pending_requests"] == [{"id": "12345678-1234-4123-8123-123456789abc", "approved": False, "expires_in_seconds": 420}]
             assert "public_key" not in json.dumps(remote_body) and "sha256" not in json.dumps(remote_body)
             app_status, app_body = request(socket_path, "GET", "/api/v1/apps")
             assert app_status == 200 and app_body["apps"][0]["id"] == "media"
@@ -276,6 +278,15 @@ def main() -> None:
             assert request(socket_path, "POST", f"/api/v1/remote/devices/{remote_device_id}", body=remote_revoke_body | {"confirmation": "REVOKE REMOTE DEVICE wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[7] == {"schema": 1, "operation": "revoke", "id": remote_device_id, "confirmation": f"REVOKE REMOTE DEVICE {remote_device_id}"}
+            pairing_id = "12345678-1234-4123-8123-123456789abc"
+            pairing_approval_id = str(uuid.uuid4())
+            pairing_body = {"schema": 1, "confirmation": f"APPROVE REMOTE DEVICE {pairing_id}"}
+            pairing_headers = {"Content-Type": "application/json", "Idempotency-Key": pairing_approval_id}
+            assert request(socket_path, "POST", f"/api/v1/remote/pairings/{pairing_id}/approve", body=pairing_body, extra_headers=pairing_headers)[0] == 200
+            assert request(socket_path, "POST", f"/api/v1/remote/pairings/{pairing_id}/approve", body=pairing_body, extra_headers=pairing_headers)[1]["replayed"] is True
+            assert request(socket_path, "POST", f"/api/v1/remote/pairings/{pairing_id}/approve", body={"schema": 1, "confirmation": "APPROVE REMOTE DEVICE wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
+            assert admin_requests[8] == {"schema": 1, "id": pairing_id, "confirmation": f"APPROVE REMOTE DEVICE {pairing_id}"}
             image_status, image_body = request(socket_path, "GET", "/api/v1/images")
             assert image_status == 200 and image_body["images"][0]["sha256"] == "c" * 64 and "path" not in json.dumps(image_body)
             storage_status, storage_body = request(socket_path, "GET", "/api/v1/storage")
