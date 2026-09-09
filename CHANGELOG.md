@@ -4,6 +4,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Added recursive OpenAPI response-conformance tests and missing/invalid bearer authorization checks for every documented API operation, including strict objects, references, alternatives, formats, patterns, bounds, and collection invariants.
 - Added a privacy-bounded pending remote-pairing feed and authenticated, idempotent server approval through the management interface and API, with exact confirmation, root-only execution, immediate status refresh, and no exposure of client keys, fingerprints, or one-time codes.
 - Added live trusted-device rename, expiry, and revocation controls backed by authenticated idempotent mutations and a strict root wrapper, including exact confirmation for expiry/revocation, immediate session termination on revoke, server-confirmed refresh, and task/audit publication.
 - Added a purpose-specific passthrough candidate feed, offline dashboard editor, authenticated idempotent mutation API, and guarded orchestrator. The feed exposes only safe selectable identifiers and active assignments, while mutations require separate review and execution confirmations, bind authorization to the generated plan hash, revalidate hardware, prevent cross-VM device reuse, and remove transient authorization material.

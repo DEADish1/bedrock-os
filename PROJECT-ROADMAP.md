@@ -119,7 +119,7 @@ Exit pending physical acceptance: one exact Bedrock image must still pass distin
 - [ ] Handle offline, reconnecting, partial failure, and concurrent changes.
   - Independent dashboard components already degrade without collapsing the full response. API state and audit reads now pin non-symlink file descriptors and reject mid-read mutation; UI offline/reconnect behavior and mutation conflict handling remain.
 - [ ] Add API schema tests, authorization tests, and UI end-to-end tests.
-  - The authenticated OpenAPI 3.1 document covers every implemented v1 route and its bearer security policy. Route/schema agreement and token issue/revocation tests pass; complete response-schema and UI end-to-end coverage remain.
+  - The authenticated OpenAPI 3.1 document covers every implemented v1 route and its bearer security policy. Route/schema agreement, recursive successful-response conformance, every documented operation with missing and invalid bearer credentials, and token issue/revocation tests pass. UI end-to-end coverage remains.
 
 Exit: every supported server task works through the UI and documented API.
 

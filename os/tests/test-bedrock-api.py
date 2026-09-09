@@ -4,6 +4,7 @@ import http.client
 import json
 import os
 import pathlib
+import re
 import socket
 import subprocess
 import sys
@@ -15,6 +16,77 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 API = ROOT / "config/includes.chroot/usr/lib/bedrock/bedrock-api"
 BROKER = ROOT / "config/includes.chroot/usr/lib/bedrock/bedrock-action-broker"
 TOKEN = "a" * 64
+
+
+def validate_openapi(value: object, schema: dict, document: dict, location: str = "response") -> None:
+    if "$ref" in schema:
+        prefix = "#/components/schemas/"
+        assert schema["$ref"].startswith(prefix), f"{location}: unsupported schema reference"
+        return validate_openapi(value, document["components"]["schemas"][schema["$ref"][len(prefix):]], document, location)
+    if "oneOf" in schema:
+        matches = 0
+        for candidate in schema["oneOf"]:
+            try:
+                validate_openapi(value, candidate, document, location)
+                matches += 1
+            except AssertionError:
+                pass
+        assert matches == 1, f"{location}: expected exactly one oneOf match, got {matches}"
+    if "const" in schema:
+        assert value == schema["const"] and type(value) is type(schema["const"]), f"{location}: const mismatch"
+    if "enum" in schema:
+        assert any(value == item and type(value) is type(item) for item in schema["enum"]), f"{location}: enum mismatch"
+    expected = schema.get("type")
+    if expected is not None:
+        expected_types = [expected] if isinstance(expected, str) else expected
+        checks = {
+            "null": value is None,
+            "boolean": type(value) is bool,
+            "integer": type(value) is int,
+            "number": type(value) in {int, float},
+            "string": isinstance(value, str),
+            "array": isinstance(value, list),
+            "object": isinstance(value, dict),
+        }
+        assert any(checks[item] for item in expected_types), f"{location}: expected {expected_types}, got {type(value).__name__}"
+    if isinstance(value, dict):
+        properties = schema.get("properties", {})
+        missing = set(schema.get("required", [])) - set(value)
+        assert not missing, f"{location}: missing required fields {sorted(missing)}"
+        if schema.get("additionalProperties") is False:
+            extra = set(value) - set(properties)
+            assert not extra, f"{location}: unexpected fields {sorted(extra)}"
+        for key, child in value.items():
+            if key in properties:
+                validate_openapi(child, properties[key], document, f"{location}.{key}")
+    if isinstance(value, list):
+        assert len(value) >= schema.get("minItems", 0), f"{location}: too few items"
+        assert len(value) <= schema.get("maxItems", len(value)), f"{location}: too many items"
+        if schema.get("uniqueItems"):
+            canonical = [json.dumps(item, sort_keys=True, separators=(",", ":")) for item in value]
+            assert len(canonical) == len(set(canonical)), f"{location}: duplicate items"
+        if "items" in schema:
+            for index, child in enumerate(value):
+                validate_openapi(child, schema["items"], document, f"{location}[{index}]")
+    if isinstance(value, str):
+        assert len(value) >= schema.get("minLength", 0), f"{location}: string is too short"
+        assert len(value) <= schema.get("maxLength", len(value)), f"{location}: string is too long"
+        if "pattern" in schema:
+            assert re.fullmatch(schema["pattern"], value), f"{location}: pattern mismatch"
+        if schema.get("format") == "uuid":
+            parsed = uuid.UUID(value)
+            assert str(parsed) == value and parsed.version == 4, f"{location}: UUID is not canonical v4"
+    if type(value) in {int, float}:
+        assert value >= schema.get("minimum", value), f"{location}: below minimum"
+        assert value <= schema.get("maximum", value), f"{location}: above maximum"
+        if "multipleOf" in schema:
+            quotient = value / schema["multipleOf"]
+            assert abs(quotient - round(quotient)) < 1e-9, f"{location}: invalid multiple"
+
+
+def validate_documented_response(document: dict, method: str, path: str, value: object) -> None:
+    schema = document["paths"][path][method]["responses"]["200"]["content"]["application/json"]["schema"]
+    validate_openapi(value, schema, document, f"{method.upper()} {path}")
 
 
 class UnixConnection(http.client.HTTPConnection):
@@ -180,6 +252,20 @@ def main() -> None:
             assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/backups", "/api/v1/hardware", "/api/v1/images", "/api/v1/remote/devices", "/api/v1/remote/devices/{id}", "/api/v1/remote/pairings/{id}/approve", "/api/v1/settings", "/api/v1/storage", "/api/v1/users", "/api/v1/virtualization/capabilities", "/api/v1/virtualization/passthrough-candidates", "/api/v1/vms", "/api/v1/vms/{name}", "/api/v1/vms/{name}/clone", "/api/v1/vms/{name}/images", "/api/v1/vms/{name}/networks", "/api/v1/vms/{name}/passthrough", "/api/v1/vms/{name}/power", "/api/v1/vms/{name}/resources", "/api/v1/vms/{name}/snapshots"}
             assert schema_body["security"] == [{"bearerAuth": []}]
             assert set(schema_body["paths"]["/api/v1/settings"]) == {"get", "put"}
+            concrete = lambda path: path.replace("{name}", "test-vm").replace("{id}", "12345678-1234-4123-8123-123456789abc")
+            for documented_path, operations in schema_body["paths"].items():
+                for method in operations:
+                    body = None if method == "get" else {}
+                    headers = None if method == "get" else {"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())}
+                    assert request(socket_path, method.upper(), concrete(documented_path), None, body, headers) == (401, {"schema": 1, "error": "unauthorized"})
+                    assert request(socket_path, method.upper(), concrete(documented_path), "b" * 64, body, headers) == (401, {"schema": 1, "error": "unauthorized"})
+            for documented_path, operations in schema_body["paths"].items():
+                response = operations.get("get", {}).get("responses", {}).get("200", {})
+                if "content" not in response:
+                    continue
+                status, value = request(socket_path, "GET", concrete(documented_path))
+                assert status == 200, f"documented GET failed: {documented_path}"
+                validate_documented_response(schema_body, "get", documented_path, value)
             assert request(socket_path, "GET", "/api/v1/virtualization/capabilities") == (200, {"schema": 1, "data": {"schema": 1, "status": "ready"}})
             dashboard_status, dashboard_body = request(socket_path, "GET", "/api/v1/dashboard")
             assert dashboard_status == 200 and dashboard_body["partial"] is False
