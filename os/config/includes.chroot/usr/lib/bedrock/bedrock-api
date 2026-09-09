@@ -261,6 +261,16 @@ def backup_restore_latest_action(request_id: str, backup_id: str, body: object) 
     return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "backup-restore-latest", "id": backup_id,
                          "confirmation": body["confirmation"]})
 
+def app_control_action(request_id: str, app_id: str, body: object) -> dict:
+    if not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", app_id) or not isinstance(body, dict) or set(body) != {"schema", "operation", "confirmation"} or body.get("schema") != 1:
+        raise ValueError("invalid application control")
+    operation, confirmation = body["operation"], body["confirmation"]
+    expected = f"{operation.upper()} APPLICATION {app_id}" if operation in {"start", "stop"} else ""
+    if not isinstance(confirmation, str) or not hmac.compare_digest(confirmation, expected):
+        raise ValueError("invalid application control")
+    return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "app-control", "id": app_id,
+                         "operation": operation, "confirmation": confirmation})
+
 def remote_pairing_approval_action(request_id: str, pairing_id: str, body: object) -> dict:
     if not DEVICE_ID.fullmatch(pairing_id) or not isinstance(body, dict) or set(body) != {"schema", "confirmation"} or body.get("schema") != 1 or not isinstance(body["confirmation"], str) or not hmac.compare_digest(body["confirmation"], f"APPROVE REMOTE DEVICE {pairing_id}"):
         raise ValueError("invalid remote pairing approval")
@@ -376,12 +386,12 @@ def app_feed() -> dict:
     value = regular_json(APPS, 262144)
     if not isinstance(value, dict) or set(value) != {"schema", "apps"} or value["schema"] != 1 or not isinstance(value["apps"], list) or len(value["apps"]) > 64:
         raise ValueError("invalid application status")
-    fields = {"id", "name", "network", "port_count", "resources", "update_policy", "created_unix"}
+    fields = {"id", "name", "network", "port_count", "resources", "update_policy", "created_unix", "running"}
     for item in value["apps"]:
         if not isinstance(item, dict) or set(item) != fields or not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", bounded_string(item["id"], 32)) or not 1 <= len(bounded_string(item["name"], 64)) <= 64:
             raise ValueError("invalid application")
         resources = item["resources"]
-        if item["network"] not in {"none", "bridge"} or item["update_policy"] not in {"manual", "notify"} or type(item["port_count"]) is not int or not 0 <= item["port_count"] <= 16 or type(item["created_unix"]) is not int or item["created_unix"] < 0:
+        if item["network"] not in {"none", "bridge"} or item["update_policy"] not in {"manual", "notify"} or type(item["port_count"]) is not int or not 0 <= item["port_count"] <= 16 or type(item["created_unix"]) is not int or item["created_unix"] < 0 or type(item["running"]) is not bool:
             raise ValueError("invalid application")
         if not isinstance(resources, dict) or set(resources) != {"cpus", "memory_mib", "pids"} or type(resources["cpus"]) not in {int, float} or not .25 <= resources["cpus"] <= 16 or type(resources["memory_mib"]) is not int or not 128 <= resources["memory_mib"] <= 32768 or type(resources["pids"]) is not int or not 16 <= resources["pids"] <= 4096:
             raise ValueError("invalid application resources")
@@ -740,7 +750,8 @@ class Handler(BaseHTTPRequestHandler):
         image_conversion = re.fullmatch(r"/api/v1/images/([a-z][a-z0-9-]{0,30}[a-z0-9])/convert", self.path)
         backup_run = re.fullmatch(r"/api/v1/backups/([a-z][a-z0-9-]{0,31})/run", self.path)
         backup_restore_latest = re.fullmatch(r"/api/v1/backups/([a-z][a-z0-9-]{0,31})/restore-latest", self.path)
-        if not create and not power and not snapshots and not clone and not resources and not images and not networks and not passthrough and not remote_device and not pairing_approval and not image_conversion and not backup_run and not backup_restore_latest:
+        app_control = re.fullmatch(r"/api/v1/apps/([a-z][a-z0-9-]{0,31})/power", self.path)
+        if not create and not power and not snapshots and not clone and not resources and not images and not networks and not passthrough and not remote_device and not pairing_approval and not image_conversion and not backup_run and not backup_restore_latest and not app_control:
             self.send_json(405, {"schema": 1, "error": "method-not-allowed"})
             return
         if self.headers.get("Transfer-Encoding") is not None or self.headers.get("Content-Type") != "application/json":
@@ -768,6 +779,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = backup_run_action(self.headers.get("Idempotency-Key", ""), backup_run.group(1), body)
             elif backup_restore_latest:
                 result = backup_restore_latest_action(self.headers.get("Idempotency-Key", ""), backup_restore_latest.group(1), body)
+            elif app_control:
+                result = app_control_action(self.headers.get("Idempotency-Key", ""), app_control.group(1), body)
             else:
                 target = (power or snapshots or clone or resources).group(1)
                 action = vm_control_action if power else vm_snapshot_action if snapshots else vm_clone_action if clone else vm_resource_action

@@ -11,17 +11,19 @@ def confirm(action,value): return f"{action} APPLICATION {value['id']} "+hashlib
 def main():
     with tempfile.TemporaryDirectory() as temporary:
         work=pathlib.Path(temporary); state=work/"state"; data=work/"data"; log=work/"runtime.log"; podman=work/"podman.py"; skopeo=work/"skopeo.py"
-        podman.write_text('import os,sys\nopen(os.environ["BEDROCK_TEST_APP_LOG"],"a").write("podman "+" ".join(sys.argv[1:])+"\\n")\n'); skopeo.write_text('print("sha256:"+"b"*64)\n')
-        env=os.environ|{"BEDROCK_APPS_TEST_MODE":"1","BEDROCK_APPS_STATE_DIR":str(state),"BEDROCK_APPS_DATA_DIR":str(data),"BEDROCK_APPS_PODMAN":str(podman),"BEDROCK_APPS_SKOPEO":str(skopeo),"BEDROCK_APPS_TEST_NOW":"1000","BEDROCK_TEST_APP_LOG":str(log)}; path=work/"request.json"; value=request(path)
+        podman.write_text('import os,pathlib,sys\na=sys.argv[1:]; s=pathlib.Path(os.environ["BEDROCK_TEST_APP_RUNNING"]); open(os.environ["BEDROCK_TEST_APP_LOG"],"a").write("podman "+" ".join(a)+"\\n")\nif a and a[0]=="start": s.write_text("true")\nif a and a[0] in {"stop","rm"}: s.write_text("false")\nif a and a[0]=="inspect": print(s.read_text() if s.exists() else "false")\n'); skopeo.write_text('print("sha256:"+"b"*64)\n')
+        env=os.environ|{"BEDROCK_APPS_TEST_MODE":"1","BEDROCK_APPS_STATE_DIR":str(state),"BEDROCK_APPS_DATA_DIR":str(data),"BEDROCK_APPS_PODMAN":str(podman),"BEDROCK_APPS_SKOPEO":str(skopeo),"BEDROCK_APPS_TEST_NOW":"1000","BEDROCK_TEST_APP_LOG":str(log),"BEDROCK_TEST_APP_RUNNING":str(work/"running")}; path=work/"request.json"; value=request(path)
         assert call(env,"install",str(path),"wrong",ok=False).returncode
         result=json.loads(call(env,"install",str(path),confirm("INSTALL",value)).stdout); assert result["status"]=="installed"
-        status=json.loads((state/"status.json").read_text()); assert status["apps"][0]["id"]=="photos" and "image" not in json.dumps(status) and "digest" not in json.dumps(status)
+        status=json.loads((state/"status.json").read_text()); assert status["apps"][0]["id"]=="photos" and status["apps"][0]["running"] is True and "image" not in json.dumps(status) and "digest" not in json.dumps(status)
         commands=log.read_text(); assert "--read-only" in commands and "--cap-drop=all" in commands and "--security-opt=no-new-privileges" in commands and "--user 65532:65532" in commands and "--memory 512m" in commands and "--cpus 1.5" in commands and "--pids-limit 128" in commands and "--network bridge" in commands and "8443:8080/tcp" in commands and "@sha256:" in commands
         assert (data/"photos").is_dir() and len(json.loads(call(env,"list").stdout)["apps"])==1
         updates=json.loads(call(env,"check-updates").stdout); assert updates["updates"][0]["status"]=="available"
         bad=request(path,network="none",ports=[{"host":8443,"container":8080,"protocol":"tcp"}]); assert call(env,"update",str(path),confirm("UPDATE",bad),ok=False).returncode
         updated=request(path,digest="sha256:"+"b"*64); call(env,"update",str(path),confirm("UPDATE",updated)); assert json.loads(call(env,"list").stdout)["apps"][0]["digest"].endswith("b"*64)
-        call(env,"stop","photos","STOP APPLICATION photos"); call(env,"start","photos","START APPLICATION photos"); assert call(env,"remove","photos","wrong",ok=False).returncode; call(env,"remove","photos","REMOVE APPLICATION photos")
+        call(env,"stop","photos","STOP APPLICATION photos"); assert json.loads((state/"status.json").read_text())["apps"][0]["running"] is False
+        call(env,"start","photos","START APPLICATION photos"); assert json.loads((state/"status.json").read_text())["apps"][0]["running"] is True
+        assert call(env,"remove","photos","wrong",ok=False).returncode; call(env,"remove","photos","REMOVE APPLICATION photos")
         assert json.loads(call(env,"list").stdout)["apps"]==[] and (data/"photos").is_dir()
         assert json.loads((state/"status.json").read_text())["apps"]==[]
     print("Bedrock isolated application lifecycle, limits, and update-policy tests passed.")
