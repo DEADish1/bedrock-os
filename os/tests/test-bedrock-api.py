@@ -175,7 +175,7 @@ def main() -> None:
         tasks.write_text(json.dumps({"schema": 1, "generated_unix": 104, "tasks": [{"id": "task-1", "kind": "image-import", "state": "running", "created_unix": 100, "updated_unix": 104, "progress": {"current": 25, "total": 100, "unit": "percent"}}]}), encoding="utf-8")
         audit.write_text(json.dumps({"id": "event-1", "category": "storage", "action": "scrub", "outcome": "succeeded", "occurred_unix": 99}) + "\n", encoding="utf-8")
         remote.write_text(json.dumps({"schema": 2, "devices": [{"id": "42345678-1234-4123-8123-123456789abc", "name": "Office laptop", "created_unix": 1000, "expires_unix": 2000, "revoked": False, "expired": False, "last_seen_unix": None}], "pending_requests": [{"id": "12345678-1234-4123-8123-123456789abc", "approved": False, "expires_in_seconds": 420}]}), encoding="utf-8")
-        apps.write_text(json.dumps({"schema": 1, "apps": [{"id": "media", "name": "Media", "network": "bridge", "port_count": 1, "resources": {"cpus": 1, "memory_mib": 512, "pids": 128}, "update_policy": "notify", "created_unix": 100, "running": True}]}), encoding="utf-8")
+        apps.write_text(json.dumps({"schema": 1, "apps": [{"id": "media", "name": "Media", "network": "bridge", "port_count": 1, "resources": {"cpus": 1, "memory_mib": 512, "pids": 128}, "update_policy": "notify", "created_unix": 100, "running": True, "update_available": True}]}), encoding="utf-8")
         backups.write_text(json.dumps({"schema": 1, "plans": [{"id": "daily", "name": "Daily", "kind": "local", "schedule": {"frequency": "daily", "hour_utc": 2, "weekday": None}, "retention": {"daily": 7, "weekly": 4, "monthly": 3}, "created_unix": 100, "last_success_unix": 200, "has_snapshot": True}]}), encoding="utf-8")
         images.write_text(json.dumps({"schema": 1, "images": [{"name": "installer", "type": "iso", "sha256": "c" * 64, "size_bytes": 4096, "converted": False}]}), encoding="utf-8")
         update_policy.write_text(json.dumps({"schema": 2, "automatic_checks": True, "setup_choice_recorded": True, "channel": "stable"}), encoding="utf-8")
@@ -254,7 +254,7 @@ def main() -> None:
             assert request(socket_path, "GET", "/api/v1/health")[0] == 200
             schema_status, schema_body = request(socket_path, "GET", "/api/v1/openapi.json")
             assert schema_status == 200 and schema_body["openapi"] == "3.1.0"
-            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/apps/{id}", "/api/v1/apps/{id}/power", "/api/v1/backups", "/api/v1/backups/{id}/restore-latest", "/api/v1/backups/{id}/run", "/api/v1/hardware", "/api/v1/images", "/api/v1/images/{name}/convert", "/api/v1/remote/devices", "/api/v1/remote/devices/{id}", "/api/v1/remote/pairings/{id}/approve", "/api/v1/settings", "/api/v1/storage", "/api/v1/users", "/api/v1/virtualization/capabilities", "/api/v1/virtualization/passthrough-candidates", "/api/v1/vms", "/api/v1/vms/{name}", "/api/v1/vms/{name}/clone", "/api/v1/vms/{name}/images", "/api/v1/vms/{name}/networks", "/api/v1/vms/{name}/passthrough", "/api/v1/vms/{name}/power", "/api/v1/vms/{name}/resources", "/api/v1/vms/{name}/snapshots"}
+            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/apps/{id}", "/api/v1/apps/{id}/power", "/api/v1/apps/{id}/update", "/api/v1/backups", "/api/v1/backups/{id}/restore-latest", "/api/v1/backups/{id}/run", "/api/v1/hardware", "/api/v1/images", "/api/v1/images/{name}/convert", "/api/v1/remote/devices", "/api/v1/remote/devices/{id}", "/api/v1/remote/pairings/{id}/approve", "/api/v1/settings", "/api/v1/storage", "/api/v1/users", "/api/v1/virtualization/capabilities", "/api/v1/virtualization/passthrough-candidates", "/api/v1/vms", "/api/v1/vms/{name}", "/api/v1/vms/{name}/clone", "/api/v1/vms/{name}/images", "/api/v1/vms/{name}/networks", "/api/v1/vms/{name}/passthrough", "/api/v1/vms/{name}/power", "/api/v1/vms/{name}/resources", "/api/v1/vms/{name}/snapshots"}
             assert schema_body["security"] == [{"bearerAuth": []}]
             assert set(schema_body["paths"]["/api/v1/settings"]) == {"get", "put"}
             concrete = lambda path: path.replace("{name}", "test-vm").replace("{id}", "12345678-1234-4123-8123-123456789abc")
@@ -287,7 +287,7 @@ def main() -> None:
             assert remote_body["pending_requests"] == [{"id": "12345678-1234-4123-8123-123456789abc", "approved": False, "expires_in_seconds": 420}]
             assert "public_key" not in json.dumps(remote_body) and "sha256" not in json.dumps(remote_body)
             app_status, app_body = request(socket_path, "GET", "/api/v1/apps")
-            assert app_status == 200 and app_body["apps"][0]["id"] == "media" and app_body["apps"][0]["running"] is True
+            assert app_status == 200 and app_body["apps"][0]["id"] == "media" and app_body["apps"][0]["running"] is True and app_body["apps"][0]["update_available"] is True
             assert "image" not in json.dumps(app_body) and "digest" not in json.dumps(app_body)
             backup_status, backup_body = request(socket_path, "GET", "/api/v1/backups")
             assert backup_status == 200 and backup_body["plans"][0]["has_snapshot"] is True
@@ -420,6 +420,14 @@ def main() -> None:
             assert request(socket_path, "DELETE", "/api/v1/apps/media", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[13] == {"schema": 1, "id": "media", "operation": "remove", "confirmation": "REMOVE APPLICATION media"}
+            app_update_id = str(uuid.uuid4())
+            app_update_body = {"schema": 1, "confirmation": "UPDATE APPLICATION media"}
+            app_update_headers = {"Content-Type": "application/json", "Idempotency-Key": app_update_id}
+            assert request(socket_path, "POST", "/api/v1/apps/media/update", body=app_update_body, extra_headers=app_update_headers)[0] == 200
+            assert request(socket_path, "POST", "/api/v1/apps/media/update", body=app_update_body, extra_headers=app_update_headers)[1]["replayed"] is True
+            assert request(socket_path, "POST", "/api/v1/apps/media/update", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
+            assert admin_requests[14] == {"schema": 1, "id": "media", "operation": "update-latest", "confirmation": "UPDATE APPLICATION media"}
             image_status, image_body = request(socket_path, "GET", "/api/v1/images")
             assert image_status == 200 and image_body["images"][0]["sha256"] == "c" * 64 and "path" not in json.dumps(image_body)
             storage_status, storage_body = request(socket_path, "GET", "/api/v1/storage")

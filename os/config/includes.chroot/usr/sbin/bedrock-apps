@@ -20,12 +20,21 @@ def atomic(path,value):
         os.chmod(temp,0o600); os.replace(temp,path)
     finally:
         if os.path.exists(temp): os.unlink(temp)
-def publish(state,test,podman):
+def load_candidates(path,state):
+    if not path.exists(): return {}
+    try: value=json.loads(path.read_text())
+    except (OSError,ValueError,json.JSONDecodeError): fail("application update state is invalid")
+    ids={item["id"] for item in state["apps"]}
+    if not isinstance(value,dict) or set(value)!={"schema","candidates"} or value["schema"]!=1 or not isinstance(value["candidates"],dict) or len(value["candidates"])>64: fail("application update state is invalid")
+    if any(not NAME.fullmatch(key) or key not in ids or not isinstance(digest,str) or not DIGEST.fullmatch(digest) for key,digest in value["candidates"].items()): fail("application update state is invalid")
+    return value["candidates"]
+def save_candidates(path,candidates): atomic(path,{"schema":1,"candidates":candidates})
+def publish(state,test,podman,candidates):
     path=pathlib.Path(os.environ.get("BEDROCK_APPS_STATUS",str(pathlib.Path(os.environ.get("BEDROCK_APPS_STATE_DIR","."))/"status.json"))) if test else pathlib.Path("/var/lib/bedrock/api/sources/apps.json")
     safe={"schema":1,"apps":[]}
     for item in state["apps"]:
         status=run(podman,"inspect","--format","{{.State.Running}}","bedrock-app-"+item["id"],capture=True,ok=False)
-        safe["apps"].append({"id":item["id"],"name":item["name"],"network":item["network"],"port_count":len(item["ports"]),"resources":item["resources"],"update_policy":item["update_policy"],"created_unix":item["created_unix"],"running":status.returncode==0 and status.stdout.strip()=="true"})
+        safe["apps"].append({"id":item["id"],"name":item["name"],"network":item["network"],"port_count":len(item["ports"]),"resources":item["resources"],"update_policy":item["update_policy"],"created_unix":item["created_unix"],"running":status.returncode==0 and status.stdout.strip()=="true","update_available":item["id"] in candidates})
     path.parent.mkdir(parents=True,exist_ok=True); atomic(path,safe); os.chmod(path,0o644)
 def valid(item):
     if not isinstance(item,dict) or set(item)!=FIELDS or not NAME.fullmatch(item.get("id","")) or not isinstance(item.get("name"),str) or not 1<=len(item["name"])<=64 or not IMAGE.fullmatch(item.get("image","")) or not DIGEST.fullmatch(item.get("digest","")): fail("application definition is invalid")
@@ -55,26 +64,38 @@ def create_args(item,data):
     for port in item["ports"]: args.extend(["--publish",f"{port['host']}:{port['container']}/{port['protocol']}"])
     return args+[item["image"]+"@"+item["digest"]]
 def main():
-    if len(sys.argv)<2 or sys.argv[1] not in {"install","list","start","stop","update","remove","check-updates"}: fail("usage: bedrock-apps install|list|start|stop|update|remove|check-updates")
+    if len(sys.argv)<2 or sys.argv[1] not in {"install","list","start","stop","update","update-latest","remove","check-updates"}: fail("usage: bedrock-apps install|list|start|stop|update|update-latest|remove|check-updates")
     test=os.environ.get("BEDROCK_APPS_TEST_MODE")=="1"
     if not test and os.geteuid()!=0: fail("application management requires root")
     if not test and sys.argv[1] not in {"list","check-updates"} and run("/usr/lib/bedrock/require-normal-mode",ok=False).returncode: fail("maintenance mode blocks application mutation")
     base=pathlib.Path(os.environ.get("BEDROCK_APPS_STATE_DIR","/var/lib/bedrock/apps")) if test else pathlib.Path("/var/lib/bedrock/apps"); data=pathlib.Path(os.environ.get("BEDROCK_APPS_DATA_DIR","/srv/bedrock/apps")) if test else pathlib.Path("/srv/bedrock/apps"); podman=os.environ.get("BEDROCK_APPS_PODMAN","podman") if test else "/usr/bin/podman"; skopeo=os.environ.get("BEDROCK_APPS_SKOPEO","skopeo") if test else "/usr/bin/skopeo"
     base.mkdir(parents=True,exist_ok=True); data.mkdir(parents=True,exist_ok=True)
     if base.is_symlink() or data.is_symlink(): fail("application directory is unsafe")
-    state_path=base/"apps.json"; lock=(base/".lock").open("a+"); os.chmod(base/".lock",0o600); fcntl.flock(lock,fcntl.LOCK_EX); state=load(state_path); action=sys.argv[1]
-    publish(state,test,podman)
+    state_path=base/"apps.json"; candidate_path=base/"update-candidates.json"; lock=(base/".lock").open("a+"); os.chmod(base/".lock",0o600); fcntl.flock(lock,fcntl.LOCK_EX); state=load(state_path); candidates=load_candidates(candidate_path,state); action=sys.argv[1]
+    publish(state,test,podman,candidates)
     if action=="list":
         if len(sys.argv)!=2: fail("list accepts no arguments")
         print(json.dumps(state,sort_keys=True,separators=(",",":"))); return
     if action=="check-updates":
         if len(sys.argv)!=2: fail("check-updates accepts no arguments")
-        updates=[]
+        updates=[]; candidates={}
         for item in state["apps"]:
             if item["update_policy"]!="notify": continue
             result=run(skopeo,"inspect","--format","{{.Digest}}","docker://"+item["image"],capture=True,ok=False); candidate=result.stdout.strip()
-            updates.append({"id":item["id"],"status":"available" if result.returncode==0 and DIGEST.fullmatch(candidate) and candidate!=item["digest"] else "current" if candidate==item["digest"] else "unavailable","candidate":candidate if DIGEST.fullmatch(candidate) else None})
+            status="available" if result.returncode==0 and DIGEST.fullmatch(candidate) and candidate!=item["digest"] else "current" if candidate==item["digest"] else "unavailable"
+            updates.append({"id":item["id"],"status":status});
+            if status=="available": candidates[item["id"]]=candidate
+        save_candidates(candidate_path,candidates); publish(state,test,podman,candidates)
         print(json.dumps({"schema":1,"updates":updates},sort_keys=True,separators=(",",":"))); return
+    if action=="update-latest":
+        if len(sys.argv)!=4 or not NAME.fullmatch(sys.argv[2]) or sys.argv[3]!=f"UPDATE APPLICATION {sys.argv[2]}": fail("application identity or confirmation is invalid")
+        matches=[item for item in state["apps"] if item["id"]==sys.argv[2]]; candidate=candidates.get(sys.argv[2])
+        if len(matches)!=1 or candidate is None or candidate==matches[0]["digest"] or matches[0]["update_policy"]!="notify": fail("application update is unavailable")
+        old=matches[0]; item=old|{"digest":candidate}; run(podman,"pull",item["image"]+"@"+item["digest"]); run(podman,"stop","--time","30","bedrock-app-"+item["id"],ok=False); run(podman,"rm","bedrock-app-"+item["id"])
+        try: run(podman,*create_args(item,data)); run(podman,"start","bedrock-app-"+item["id"])
+        except SystemExit:
+            run(podman,*create_args(old,data),ok=False); run(podman,"start","bedrock-app-"+old["id"],ok=False); raise
+        state["apps"]=[existing for existing in state["apps"] if existing["id"]!=item["id"]]+[item]; candidates.pop(item["id"],None); atomic(state_path,state); save_candidates(candidate_path,candidates); publish(state,test,podman,candidates); print(json.dumps({"schema":1,"status":"updated","id":item["id"]},sort_keys=True,separators=(",",":"))); return
     if action in {"install","update"}:
         if len(sys.argv)!=4: fail(action+" requires REQUEST.json and exact confirmation")
         path=pathlib.Path(sys.argv[2]); info=path.lstat()
@@ -99,14 +120,14 @@ def main():
             if action=="update":
                 old=matches[0]; run(podman,*create_args(old,data),ok=False); run(podman,"start","bedrock-app-"+old["id"],ok=False)
             raise
-        state["apps"]=[existing for existing in state["apps"] if existing["id"]!=item["id"]]+[item]; atomic(state_path,state); publish(state,test,podman); print(json.dumps({"schema":1,"status":"installed" if action=="install" else "updated","id":item["id"]},sort_keys=True,separators=(",",":"))); return
+        state["apps"]=[existing for existing in state["apps"] if existing["id"]!=item["id"]]+[item]; candidates.pop(item["id"],None); atomic(state_path,state); save_candidates(candidate_path,candidates); publish(state,test,podman,candidates); print(json.dumps({"schema":1,"status":"installed" if action=="install" else "updated","id":item["id"]},sort_keys=True,separators=(",",":"))); return
     if len(sys.argv)!=4 or not NAME.fullmatch(sys.argv[2]) or sys.argv[3]!=f"{action.upper()} APPLICATION {sys.argv[2]}": fail("application identity or confirmation is invalid")
     matches=[item for item in state["apps"] if item["id"]==sys.argv[2]]
     if len(matches)!=1: fail("application is unavailable")
     name="bedrock-app-"+sys.argv[2]
-    if action=="start": run(podman,"start",name); publish(state,test,podman)
-    elif action=="stop": run(podman,"stop","--time","30",name); publish(state,test,podman)
+    if action=="start": run(podman,"start",name); publish(state,test,podman,candidates)
+    elif action=="stop": run(podman,"stop","--time","30",name); publish(state,test,podman,candidates)
     else:
-        run(podman,"stop","--time","30",name,ok=False); run(podman,"rm",name); state["apps"]=[item for item in state["apps"] if item["id"]!=sys.argv[2]]; atomic(state_path,state); publish(state,test,podman)
+        run(podman,"stop","--time","30",name,ok=False); run(podman,"rm",name); state["apps"]=[item for item in state["apps"] if item["id"]!=sys.argv[2]]; candidates.pop(sys.argv[2],None); atomic(state_path,state); save_candidates(candidate_path,candidates); publish(state,test,podman,candidates)
     print(json.dumps({"schema":1,"status":{"start":"started","stop":"stopped","remove":"removed"}[action],"id":sys.argv[2]},sort_keys=True,separators=(",",":")))
 if __name__=="__main__": main()

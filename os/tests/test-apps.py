@@ -18,9 +18,9 @@ def main():
         status=json.loads((state/"status.json").read_text()); assert status["apps"][0]["id"]=="photos" and status["apps"][0]["running"] is True and "image" not in json.dumps(status) and "digest" not in json.dumps(status)
         commands=log.read_text(); assert "--read-only" in commands and "--cap-drop=all" in commands and "--security-opt=no-new-privileges" in commands and "--user 65532:65532" in commands and "--memory 512m" in commands and "--cpus 1.5" in commands and "--pids-limit 128" in commands and "--network bridge" in commands and "8443:8080/tcp" in commands and "@sha256:" in commands
         assert (data/"photos").is_dir() and len(json.loads(call(env,"list").stdout)["apps"])==1
-        updates=json.loads(call(env,"check-updates").stdout); assert updates["updates"][0]["status"]=="available"
+        updates=json.loads(call(env,"check-updates").stdout); assert updates["updates"][0]=={"id":"photos","status":"available"} and json.loads((state/"status.json").read_text())["apps"][0]["update_available"] is True
+        assert call(env,"update-latest","photos","wrong",ok=False).returncode; call(env,"update-latest","photos","UPDATE APPLICATION photos"); assert json.loads(call(env,"list").stdout)["apps"][0]["digest"].endswith("b"*64) and json.loads((state/"status.json").read_text())["apps"][0]["update_available"] is False
         bad=request(path,network="none",ports=[{"host":8443,"container":8080,"protocol":"tcp"}]); assert call(env,"update",str(path),confirm("UPDATE",bad),ok=False).returncode
-        updated=request(path,digest="sha256:"+"b"*64); call(env,"update",str(path),confirm("UPDATE",updated)); assert json.loads(call(env,"list").stdout)["apps"][0]["digest"].endswith("b"*64)
         call(env,"stop","photos","STOP APPLICATION photos"); assert json.loads((state/"status.json").read_text())["apps"][0]["running"] is False
         call(env,"start","photos","START APPLICATION photos"); assert json.loads((state/"status.json").read_text())["apps"][0]["running"] is True
         assert call(env,"remove","photos","wrong",ok=False).returncode; call(env,"remove","photos","REMOVE APPLICATION photos")

@@ -14,7 +14,8 @@ run() { BEDROCK_APP_ACTION_TEST_MODE=1 BEDROCK_APP_ACTION_MANAGER="$work/manager
 jq -n '{schema:1,id:"photos",operation:"stop",confirmation:"STOP APPLICATION photos"}' > "$work/request.json"; run
 jq -n '{schema:1,id:"photos",operation:"start",confirmation:"START APPLICATION photos"}' > "$work/request.json"; run
 jq -n '{schema:1,id:"photos",operation:"remove",confirmation:"REMOVE APPLICATION photos"}' > "$work/request.json"; run
-[ "$(grep -c ' succeeded ' "$work/task-calls")" -eq 3 ]; grep -Fx 'stop photos STOP APPLICATION photos' "$work/app-calls" >/dev/null; grep -Fx 'start photos START APPLICATION photos' "$work/app-calls" >/dev/null; grep -Fx 'remove photos REMOVE APPLICATION photos' "$work/app-calls" >/dev/null
+jq -n '{schema:1,id:"photos",operation:"update-latest",confirmation:"UPDATE APPLICATION photos"}' > "$work/request.json"; run
+[ "$(grep -c ' succeeded ' "$work/task-calls")" -eq 4 ]; grep -Fx 'stop photos STOP APPLICATION photos' "$work/app-calls" >/dev/null; grep -Fx 'start photos START APPLICATION photos' "$work/app-calls" >/dev/null; grep -Fx 'remove photos REMOVE APPLICATION photos' "$work/app-calls" >/dev/null; grep -Fx 'update-latest photos UPDATE APPLICATION photos' "$work/app-calls" >/dev/null
 jq '.confirmation="wrong"' "$work/request.json" > "$work/bad.json"; mv "$work/bad.json" "$work/request.json"
 if run >/dev/null 2>&1; then printf 'error: invalid application action accepted\n' >&2; exit 1; fi
 printf 'Application request wrapper tests passed.\n'
