@@ -4,6 +4,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Added authenticated idempotent “run now” controls for configured encrypted backup plans, with exact confirmation, guarded root execution, existing repository/retention enforcement, task/audit reporting, refreshed status, and no exposure of paths, snapshots, or credentials.
 - Added authenticated idempotent managed-image conversion and matching Image Library controls, backed by source SHA-256 binding, exact confirmation, guarded root execution, verified output publication, task/audit state, and no browser-visible host paths.
 - Added previously omitted top-level execution of passthrough-change, remote-device-change, remote-pairing-approval, and image-change wrapper tests so the Linux validation gate now exercises every guarded mutation layer.
 - Added recursive OpenAPI response-conformance tests and missing/invalid bearer authorization checks for every documented API operation, including strict objects, references, alternatives, formats, patterns, bounds, and collection invariants.

@@ -1,0 +1,33 @@
+#!/bin/sh
+set -eu
+
+[ ! -x /usr/lib/bedrock/require-normal-mode ] || /usr/lib/bedrock/require-normal-mode
+[ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
+request=$1
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+[ -f "$request" ] && [ ! -L "$request" ] || fail "backup request is missing or indirect"
+command -v jq >/dev/null 2>&1 || fail "jq is required"
+jq -e '
+  (keys|sort)==(["confirmation","id","operation","schema"]|sort) and .schema==1 and .operation=="run" and
+  (.id|type=="string" and test("^[a-z][a-z0-9-]{0,31}$")) and .confirmation==("RUN ENCRYPTED BACKUP "+.id)
+' "$request" >/dev/null || fail "backup request or exact confirmation is invalid"
+id=$(jq -r .id "$request" | tr -d '\r')
+if [ "${BEDROCK_BACKUP_ACTION_TEST_MODE:-0}" = 1 ]; then
+  manager=${BEDROCK_BACKUP_ACTION_MANAGER:?test mode requires BEDROCK_BACKUP_ACTION_MANAGER}
+else
+  [ "$(id -u)" -eq 0 ] || fail "backup action requires root"
+  [ "$request" = "/var/lib/bedrock/backup/requests/$id-run.json" ] || fail "backup request path is not identity-bound"
+  manager=/usr/sbin/bedrock-backup
+fi
+[ -x "$manager" ] && [ ! -L "$manager" ] || fail "backup manager is unavailable or indirect"
+task_writer=${BEDROCK_RECORD_API_TASK:-$(dirname "$0")/record-api-task}
+[ -x "$task_writer" ] && [ ! -L "$task_writer" ] || fail "task recorder is unavailable or indirect"
+created=$(date +%s); task_id="backup-run-$$"; active=0; done=0
+cleanup() { status=$?; if [ "$active" -eq 1 ] && [ "$done" -eq 0 ]; then "$task_writer" "$task_id" backup-run failed "$created" 0 1 steps >/dev/null 2>&1 || true; fi; exit "$status"; }
+trap cleanup EXIT INT TERM
+"$task_writer" "$task_id" backup-run queued "$created" 0 1 steps
+active=1
+"$manager" run "$id" "RUN ENCRYPTED BACKUP $id"
+"$task_writer" "$task_id" backup-run succeeded "$created" 1 1 steps
+done=1
+trap - EXIT INT TERM

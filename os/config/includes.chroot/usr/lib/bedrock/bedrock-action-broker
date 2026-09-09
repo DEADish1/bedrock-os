@@ -41,11 +41,13 @@ def environment():
         "network_attachment_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_NETWORK_ATTACHMENT_HELPER", "/usr/lib/bedrock/manage-vm-network-attachment")),
         "passthrough_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_PASSTHROUGH_HELPER", "/usr/lib/bedrock/change-vm-passthrough")),
         "image_conversion_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_IMAGE_CONVERSION_HELPER", "/usr/lib/bedrock/change-vm-image")),
+        "backup_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_BACKUP_HELPER", "/usr/lib/bedrock/change-backup")),
         "remote_device_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_REMOTE_DEVICE_HELPER", "/usr/lib/bedrock/change-remote-device")),
         "remote_pairing_approval_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_REMOTE_PAIRING_APPROVAL_HELPER", "/usr/lib/bedrock/approve-remote-pairing")),
         "vm_requests": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_VM_REQUESTS", "/var/lib/bedrock/virtualization/requests")),
         "vm_definitions": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_VM_DEFINITIONS", "/var/lib/bedrock/virtualization/definitions")),
         "remote_requests": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_REMOTE_REQUESTS", "/var/lib/bedrock/remote/requests")),
+        "backup_requests": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_BACKUP_REQUESTS", "/var/lib/bedrock/backup/requests")),
         "task_writer": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_TASK_WRITER", "/usr/lib/bedrock/record-api-task")),
         "expected_uid": int(os.environ["BEDROCK_ACTION_BROKER_EXPECTED_UID"]) if test_mode else pwd.getpwnam("bedrock-api").pw_uid,
     }
@@ -178,6 +180,13 @@ def parse_request(raw):
             raise RequestError("invalid-image-conversion", "image identities, type, hash, or exact confirmation are invalid")
         details = {"schema": 1, "source": source, "source_sha256": source_hash, "target": target,
                    "target_type": target_type, "confirmation": request["confirmation"]}
+    elif request.get("action") == "backup-run":
+        if set(request) != {"schema", "request_id", "action", "id", "confirmation"}:
+            raise RequestError("invalid-request", "request fields do not match the backup run schema")
+        backup_id, confirmation = request["id"], request["confirmation"]
+        if not isinstance(backup_id, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", backup_id) or confirmation != f"RUN ENCRYPTED BACKUP {backup_id}":
+            raise RequestError("invalid-backup-run", "backup identity or exact confirmation is invalid")
+        details = {"schema": 1, "id": backup_id, "operation": "run", "confirmation": confirmation}
     elif request.get("action") == "remote-device":
         operation, device_id = request.get("operation"), request.get("id")
         if not isinstance(device_id, str) or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", device_id):
@@ -221,7 +230,7 @@ def load_state(path):
         if fields not in ({"request_id", "request_sha256", "action", "status"},
                           {"request_id", "request_sha256", "action", "status", "created_unix"}):
             raise RuntimeError("action result state contains an invalid result")
-        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough", "image-convert", "remote-device", "remote-pairing-approve"} or item["status"] not in {"pending", "succeeded", "failed"}:
+        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough", "image-convert", "backup-run", "remote-device", "remote-pairing-approve"} or item["status"] not in {"pending", "succeeded", "failed"}:
             raise RuntimeError("action result state contains an unsupported result")
         if item["status"] != "succeeded" and "created_unix" not in item:
             raise RuntimeError("incomplete action result lacks a creation time")
@@ -397,6 +406,26 @@ def execute_remote_device(request, request_file, settings, helper_environment):
         if path.exists() and not path.is_symlink(): path.unlink()
 
 
+def execute_backup(request, request_file, settings, helper_environment):
+    directory = settings["backup_requests"]
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if directory.is_symlink() or not directory.is_dir():
+        raise RuntimeError("backup request directory is unsafe")
+    path = directory / f"{request['id']}-run.json"
+    if path.exists() or path.is_symlink():
+        raise RuntimeError("backup request path already exists")
+    descriptor, temporary = tempfile.mkstemp(prefix=".backup-action.", dir=directory)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(request_file, stream, sort_keys=True, separators=(",", ":")); stream.write("\n"); stream.flush(); os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        return subprocess.run([str(settings["backup_helper"]), str(path)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=86400, env=helper_environment, close_fds=True).returncode
+    finally:
+        if os.path.exists(temporary): os.unlink(temporary)
+        if path.exists() and not path.is_symlink(): path.unlink()
+
+
 def execute(raw, settings):
     request, digest, details = parse_request(raw)
     state = load_state(settings["state"])
@@ -453,6 +482,13 @@ def execute(raw, settings):
         save_state(settings["state"], state)
         if completed_code != 0:
             raise RequestError("action-failed", "guarded remote device helper rejected the action")
+        return response(request["request_id"], "succeeded", replayed=False)
+    if request["action"] == "backup-run":
+        completed_code = execute_backup(request, details, settings, helper_environment)
+        result_entry["status"] = "succeeded" if completed_code == 0 else "failed"
+        save_state(settings["state"], state)
+        if completed_code != 0:
+            raise RequestError("action-failed", "guarded backup helper rejected the action")
         return response(request["request_id"], "succeeded", replayed=False)
     task_id = f"settings-{request['request_id']}"
     queued = subprocess.run(
