@@ -40,6 +40,7 @@ def environment():
         "image_attachment_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_IMAGE_ATTACHMENT_HELPER", "/usr/lib/bedrock/manage-vm-image-attachment")),
         "network_attachment_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_NETWORK_ATTACHMENT_HELPER", "/usr/lib/bedrock/manage-vm-network-attachment")),
         "passthrough_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_PASSTHROUGH_HELPER", "/usr/lib/bedrock/change-vm-passthrough")),
+        "image_conversion_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_IMAGE_CONVERSION_HELPER", "/usr/lib/bedrock/change-vm-image")),
         "remote_device_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_REMOTE_DEVICE_HELPER", "/usr/lib/bedrock/change-remote-device")),
         "remote_pairing_approval_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_REMOTE_PAIRING_APPROVAL_HELPER", "/usr/lib/bedrock/approve-remote-pairing")),
         "vm_requests": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_VM_REQUESTS", "/var/lib/bedrock/virtualization/requests")),
@@ -165,6 +166,18 @@ def parse_request(raw):
             raise RequestError("invalid-vm-passthrough", "VM passthrough selection or exact confirmations are invalid")
         details = {"schema": 1, "vm": name, "kind": kind, "devices": ordered, "action": operation,
                    "review_confirmation": review, "confirmation": mutate}
+    elif request.get("action") == "image-convert":
+        fields = {"schema", "request_id", "action", "source", "source_sha256", "target", "target_type", "confirmation"}
+        if set(request) != fields:
+            raise RequestError("invalid-request", "request fields do not match the image conversion schema")
+        source, target, target_type, source_hash = request["source"], request["target"], request["target_type"], request["source_sha256"]
+        valid_name = lambda value: isinstance(value, str) and re.fullmatch(r"[a-z][a-z0-9-]{0,30}[a-z0-9]", value)
+        valid_hash = isinstance(source_hash, str) and re.fullmatch(r"[0-9a-f]{64}", source_hash)
+        expected = f"CONVERT IMAGE {source} {source_hash} TO {target_type.upper()} {target}" if target_type in {"qcow2", "img"} else ""
+        if not valid_name(source) or not valid_name(target) or source == target or not valid_hash or request["confirmation"] != expected:
+            raise RequestError("invalid-image-conversion", "image identities, type, hash, or exact confirmation are invalid")
+        details = {"schema": 1, "source": source, "source_sha256": source_hash, "target": target,
+                   "target_type": target_type, "confirmation": request["confirmation"]}
     elif request.get("action") == "remote-device":
         operation, device_id = request.get("operation"), request.get("id")
         if not isinstance(device_id, str) or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", device_id):
@@ -208,7 +221,7 @@ def load_state(path):
         if fields not in ({"request_id", "request_sha256", "action", "status"},
                           {"request_id", "request_sha256", "action", "status", "created_unix"}):
             raise RuntimeError("action result state contains an invalid result")
-        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough", "remote-device", "remote-pairing-approve"} or item["status"] not in {"pending", "succeeded", "failed"}:
+        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough", "image-convert", "remote-device", "remote-pairing-approve"} or item["status"] not in {"pending", "succeeded", "failed"}:
             raise RuntimeError("action result state contains an unsupported result")
         if item["status"] != "succeeded" and "created_unix" not in item:
             raise RuntimeError("incomplete action result lacks a creation time")
@@ -333,6 +346,9 @@ def execute_vm_admin(request, request_file, settings, helper_environment):
     elif request["action"] == "vm-passthrough":
         path = request_directory / f"{request['name']}-{request['kind']}-{request['operation']}-passthrough.json"
         helper = settings["passthrough_helper"]
+    elif request["action"] == "image-convert":
+        path = request_directory / f"convert-{request['source']}-to-{request['target']}.json"
+        helper = settings["image_conversion_helper"]
     else:
         path = request_directory / f"{request['name']}-resources.json"
         helper = settings["resource_helper"]
@@ -424,7 +440,7 @@ def execute(raw, settings):
         if completed_code != 0:
             raise RequestError("action-failed", "guarded VM snapshot helper rejected the action")
         return response(request["request_id"], "succeeded", replayed=False)
-    if request["action"] in {"vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough"}:
+    if request["action"] in {"vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough", "image-convert"}:
         completed_code = execute_vm_admin(request, details, settings, helper_environment)
         result_entry["status"] = "succeeded" if completed_code == 0 else "failed"
         save_state(settings["state"], state)

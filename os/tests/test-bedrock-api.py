@@ -217,6 +217,7 @@ def main() -> None:
             "BEDROCK_ACTION_BROKER_RESOURCE_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_CREATE_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_IMAGE_ATTACHMENT_HELPER": str(admin_action_helper),
+            "BEDROCK_ACTION_BROKER_IMAGE_CONVERSION_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_NETWORK_ATTACHMENT_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_PASSTHROUGH_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_REMOTE_DEVICE_HELPER": str(admin_action_helper),
@@ -249,7 +250,7 @@ def main() -> None:
             assert request(socket_path, "GET", "/api/v1/health")[0] == 200
             schema_status, schema_body = request(socket_path, "GET", "/api/v1/openapi.json")
             assert schema_status == 200 and schema_body["openapi"] == "3.1.0"
-            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/backups", "/api/v1/hardware", "/api/v1/images", "/api/v1/remote/devices", "/api/v1/remote/devices/{id}", "/api/v1/remote/pairings/{id}/approve", "/api/v1/settings", "/api/v1/storage", "/api/v1/users", "/api/v1/virtualization/capabilities", "/api/v1/virtualization/passthrough-candidates", "/api/v1/vms", "/api/v1/vms/{name}", "/api/v1/vms/{name}/clone", "/api/v1/vms/{name}/images", "/api/v1/vms/{name}/networks", "/api/v1/vms/{name}/passthrough", "/api/v1/vms/{name}/power", "/api/v1/vms/{name}/resources", "/api/v1/vms/{name}/snapshots"}
+            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/backups", "/api/v1/hardware", "/api/v1/images", "/api/v1/images/{name}/convert", "/api/v1/remote/devices", "/api/v1/remote/devices/{id}", "/api/v1/remote/pairings/{id}/approve", "/api/v1/settings", "/api/v1/storage", "/api/v1/users", "/api/v1/virtualization/capabilities", "/api/v1/virtualization/passthrough-candidates", "/api/v1/vms", "/api/v1/vms/{name}", "/api/v1/vms/{name}/clone", "/api/v1/vms/{name}/images", "/api/v1/vms/{name}/networks", "/api/v1/vms/{name}/passthrough", "/api/v1/vms/{name}/power", "/api/v1/vms/{name}/resources", "/api/v1/vms/{name}/snapshots"}
             assert schema_body["security"] == [{"bearerAuth": []}]
             assert set(schema_body["paths"]["/api/v1/settings"]) == {"get", "put"}
             concrete = lambda path: path.replace("{name}", "test-vm").replace("{id}", "12345678-1234-4123-8123-123456789abc")
@@ -373,6 +374,16 @@ def main() -> None:
             assert request(socket_path, "POST", f"/api/v1/remote/pairings/{pairing_id}/approve", body={"schema": 1, "confirmation": "APPROVE REMOTE DEVICE wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[8] == {"schema": 1, "id": pairing_id, "confirmation": f"APPROVE REMOTE DEVICE {pairing_id}"}
+            conversion_id = str(uuid.uuid4())
+            source_hash = "c" * 64
+            conversion_body = {"schema": 1, "target": "converted", "target_type": "qcow2", "source_sha256": source_hash,
+                               "confirmation": f"CONVERT IMAGE installer {source_hash} TO QCOW2 converted"}
+            conversion_headers = {"Content-Type": "application/json", "Idempotency-Key": conversion_id}
+            assert request(socket_path, "POST", "/api/v1/images/installer/convert", body=conversion_body, extra_headers=conversion_headers)[0] == 200
+            assert request(socket_path, "POST", "/api/v1/images/installer/convert", body=conversion_body, extra_headers=conversion_headers)[1]["replayed"] is True
+            assert request(socket_path, "POST", "/api/v1/images/installer/convert", body=conversion_body | {"confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
+            assert admin_requests[9] == {"schema": 1, "source": "installer", "source_sha256": source_hash, "target": "converted", "target_type": "qcow2", "confirmation": f"CONVERT IMAGE installer {source_hash} TO QCOW2 converted"}
             image_status, image_body = request(socket_path, "GET", "/api/v1/images")
             assert image_status == 200 and image_body["images"][0]["sha256"] == "c" * 64 and "path" not in json.dumps(image_body)
             storage_status, storage_body = request(socket_path, "GET", "/api/v1/storage")

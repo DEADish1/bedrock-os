@@ -4,6 +4,8 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Added authenticated idempotent managed-image conversion and matching Image Library controls, backed by source SHA-256 binding, exact confirmation, guarded root execution, verified output publication, task/audit state, and no browser-visible host paths.
+- Added previously omitted top-level execution of passthrough-change, remote-device-change, remote-pairing-approval, and image-change wrapper tests so the Linux validation gate now exercises every guarded mutation layer.
 - Added recursive OpenAPI response-conformance tests and missing/invalid bearer authorization checks for every documented API operation, including strict objects, references, alternatives, formats, patterns, bounds, and collection invariants.
 - Added a privacy-bounded pending remote-pairing feed and authenticated, idempotent server approval through the management interface and API, with exact confirmation, root-only execution, immediate status refresh, and no exposure of client keys, fingerprints, or one-time codes.
 - Added live trusted-device rename, expiry, and revocation controls backed by authenticated idempotent mutations and a strict root wrapper, including exact confirmation for expiry/revocation, immediate session termination on revoke, server-confirmed refresh, and task/audit publication.

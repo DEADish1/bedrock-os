@@ -1,0 +1,37 @@
+#!/bin/sh
+set -eu
+
+[ ! -x /usr/lib/bedrock/require-normal-mode ] || /usr/lib/bedrock/require-normal-mode
+[ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
+request=$1
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+[ -f "$request" ] && [ ! -L "$request" ] || fail "image conversion request is missing or indirect"
+command -v jq >/dev/null 2>&1 || fail "jq is required"
+jq -e '
+  (keys|sort)==(["confirmation","schema","source","source_sha256","target","target_type"]|sort) and .schema==1 and
+  (.source|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+  (.target|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and .target!=.source and
+  (.target_type=="qcow2" or .target_type=="img") and
+  (.source_sha256|type=="string" and test("^[0-9a-f]{64}$")) and
+  .confirmation==("CONVERT IMAGE "+.source+" "+.source_sha256+" TO "+(.target_type|ascii_upcase)+" "+.target)
+' "$request" >/dev/null || fail "image conversion request or confirmation is invalid"
+source=$(jq -r .source "$request" | tr -d '\r'); target=$(jq -r .target "$request" | tr -d '\r')
+if [ "${BEDROCK_IMAGE_ACTION_TEST_MODE:-0}" = 1 ]; then
+  converter=${BEDROCK_IMAGE_ACTION_CONVERTER:?test mode requires BEDROCK_IMAGE_ACTION_CONVERTER}
+else
+  [ "$(id -u)" -eq 0 ] || fail "image conversion requires root"
+  [ "$request" = "/var/lib/bedrock/virtualization/requests/convert-$source-to-$target.json" ] || fail "image conversion request path is not identity-bound"
+  converter=/usr/lib/bedrock/convert-vm-image
+fi
+[ -x "$converter" ] && [ ! -L "$converter" ] || fail "image converter is unavailable or indirect"
+task_writer=${BEDROCK_RECORD_API_TASK:-$(dirname "$0")/record-api-task}
+[ -x "$task_writer" ] && [ ! -L "$task_writer" ] || fail "task recorder is unavailable or indirect"
+created=$(date +%s); task_id="image-convert-$$"; active=0; done=0
+cleanup() { status=$?; if [ "$active" -eq 1 ] && [ "$done" -eq 0 ]; then "$task_writer" "$task_id" image-convert failed "$created" 0 1 steps >/dev/null 2>&1 || true; fi; exit "$status"; }
+trap cleanup EXIT INT TERM
+"$task_writer" "$task_id" image-convert queued "$created" 0 1 steps
+active=1
+"$converter" "$request"
+"$task_writer" "$task_id" image-convert succeeded "$created" 1 1 steps
+done=1
+trap - EXIT INT TERM

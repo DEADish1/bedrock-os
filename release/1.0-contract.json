@@ -24,6 +24,7 @@
       "/api/v1/hardware",
       "/api/v1/health",
       "/api/v1/images",
+      "/api/v1/images/{name}/convert",
       "/api/v1/openapi.json",
       "/api/v1/remote/devices",
       "/api/v1/remote/devices/{id}",

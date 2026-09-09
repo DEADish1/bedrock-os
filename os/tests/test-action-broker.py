@@ -92,6 +92,13 @@ def pairing_approval_request(request_id):
             "confirmation": f"APPROVE REMOTE DEVICE {pairing_id}"}
 
 
+def image_conversion_request(request_id):
+    source_hash = "c" * 64
+    return {"schema": 1, "request_id": request_id, "action": "image-convert", "source": "source",
+            "source_sha256": source_hash, "target": "converted", "target_type": "qcow2",
+            "confirmation": f"CONVERT IMAGE source {source_hash} TO QCOW2 converted"}
+
+
 def main():
     if not hasattr(socket, "SO_PEERCRED"):
         raise SystemExit("SO_PEERCRED support is required")
@@ -133,6 +140,7 @@ def main():
             "BEDROCK_ACTION_BROKER_IMAGE_ATTACHMENT_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_NETWORK_ATTACHMENT_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_PASSTHROUGH_HELPER": str(admin_helper),
+            "BEDROCK_ACTION_BROKER_IMAGE_CONVERSION_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_REMOTE_DEVICE_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_REMOTE_PAIRING_APPROVAL_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_REMOTE_REQUESTS": str(vm_requests),
@@ -230,6 +238,10 @@ def main():
             assert exchange(socket_path, pairing_approval_request(approval_id))["status"] == "succeeded"
             assert exchange(socket_path, pairing_approval_request(approval_id))["replayed"] is True
             assert exchange(socket_path, pairing_approval_request(str(uuid.uuid4())) | {"confirmation": "APPROVE REMOTE DEVICE wrong"})["error"]["code"] == "invalid-remote-pairing-approval"
+            conversion_id = str(uuid.uuid4())
+            assert exchange(socket_path, image_conversion_request(conversion_id))["status"] == "succeeded"
+            assert exchange(socket_path, image_conversion_request(conversion_id))["replayed"] is True
+            assert exchange(socket_path, image_conversion_request(str(uuid.uuid4())) | {"target": "source"})["error"]["code"] == "invalid-image-conversion"
             admin_requests = [json.loads(line) for line in admin_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[3]["name"] == "new-vm" and admin_requests[3]["disk_size_gib"] == 64
             assert admin_requests[4] == {"schema": 1, "vm": "test-vm", "image": "installer", "action": "attach", "confirmation": "ATTACH IMAGE installer TO VM test-vm"}
@@ -237,10 +249,11 @@ def main():
             assert admin_requests[6] == {"schema": 1, "vm": "test-vm", "kind": "usb", "devices": ["1-2"], "action": "assign", "review_confirmation": "REVIEW USB PASSTHROUGH VM test-vm DEVICES 1-2", "confirmation": "ASSIGN USB PASSTHROUGH VM test-vm DEVICES 1-2"}
             assert admin_requests[7] == {"schema": 1, "operation": "revoke", "id": "42345678-1234-4123-8123-123456789abc", "confirmation": "REVOKE REMOTE DEVICE 42345678-1234-4123-8123-123456789abc"}
             assert admin_requests[8] == {"schema": 1, "id": "12345678-1234-4123-8123-123456789abc", "confirmation": "APPROVE REMOTE DEVICE 12345678-1234-4123-8123-123456789abc"}
+            assert admin_requests[9] == {"schema": 1, "source": "source", "source_sha256": "c" * 64, "target": "converted", "target_type": "qcow2", "confirmation": f"CONVERT IMAGE source {'c' * 64} TO QCOW2 converted"}
             assert not any(vm_requests.iterdir())
 
             ledger = json.loads(state.read_text(encoding="utf-8"))
-            assert ledger["schema"] == 1 and len(ledger["results"]) == 15
+            assert ledger["schema"] == 1 and len(ledger["results"]) == 16
             serialized = state.read_text(encoding="utf-8")
             assert "I_ACCEPT" not in serialized and "automatic_checks" not in serialized
             assert state.stat().st_mode & 0o777 == 0o600
