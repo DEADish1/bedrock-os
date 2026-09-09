@@ -1,0 +1,42 @@
+#!/bin/sh
+set -eu
+
+[ ! -x /usr/lib/bedrock/require-normal-mode ] || /usr/lib/bedrock/require-normal-mode
+[ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
+request=$1
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+[ -f "$request" ] && [ ! -L "$request" ] || fail "storage request is missing or indirect"
+command -v jq >/dev/null 2>&1 || fail "jq is required"
+jq -e '
+  (keys|sort)==(["confirmation","id","operation","schema"]|sort) and .schema==1 and
+  .operation=="scrub" and (.id|type=="string" and test("^[a-z][a-z0-9_-]{0,31}$")) and
+  .confirmation==("SCRUB STORAGE "+.id)
+' "$request" >/dev/null || fail "storage request or exact confirmation is invalid"
+id=$(jq -r .id "$request" | tr -d '\r')
+if [ "${BEDROCK_STORAGE_ACTION_TEST_MODE:-0}" = 1 ]; then
+  manager=${BEDROCK_STORAGE_ACTION_MANAGER:?test mode requires BEDROCK_STORAGE_ACTION_MANAGER}
+  state=${BEDROCK_STORAGE_ACTION_STATE:?test mode requires BEDROCK_STORAGE_ACTION_STATE}
+  output=${BEDROCK_STORAGE_ACTION_OUTPUT:?test mode requires BEDROCK_STORAGE_ACTION_OUTPUT}
+else
+  [ "$(id -u)" -eq 0 ] || fail "storage action requires root"
+  [ "$request" = "/var/lib/bedrock/storage/requests/$id-scrub.json" ] || fail "storage request path is not identity-bound"
+  manager=/usr/sbin/bedrock-storage
+  state=/var/lib/bedrock/storage/resources.json
+  output=/var/lib/bedrock/storage/requests/$id-scrub-operation.json
+fi
+[ -x "$manager" ] && [ ! -L "$manager" ] || fail "storage manager is unavailable or indirect"
+[ -s "$state" ] && [ ! -L "$state" ] || fail "managed storage state is unavailable or indirect"
+jq -e --arg id "$id" '
+  .schema==1 and (.pools|type=="array") and
+  ([.pools[]|select(.name==$id and (.backend=="zfs" or .backend=="mdraid") and (.layout|type=="string" and length<=16))]|length)==1
+' "$state" >/dev/null || fail "managed storage identity is unavailable"
+[ ! -e "$output" ] && [ ! -L "$output" ] || fail "storage operation request already exists"
+temporary=$(mktemp "$(dirname "$output")/.storage-scrub.XXXXXX")
+cleanup() { rm -f "$temporary" "$output"; }
+trap cleanup EXIT INT TERM
+jq -S -n --arg id "$id" --arg backend "$(jq -r --arg id "$id" '.pools[]|select(.name==$id)|.backend' "$state")" \
+  --arg layout "$(jq -r --arg id "$id" '.pools[]|select(.name==$id)|.layout' "$state")" \
+  '{schema:1,action:"scrub",backend:$backend,name:$id,pool:$id,layout:$layout,devices:[],confirmation:("SCRUB — "+$id)}' > "$temporary"
+chmod 0600 "$temporary"; mv "$temporary" "$output"; temporary=
+if [ "${BEDROCK_STORAGE_ACTION_TEST_MODE:-0}" = 1 ]; then "$manager" "$output"; else "$manager" apply "$output"; fi
+trap - EXIT INT TERM; rm -f "$output"

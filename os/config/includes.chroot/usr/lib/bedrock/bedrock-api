@@ -267,6 +267,12 @@ def backup_create_action(request_id: str, backup_id: str, body: object) -> dict:
     return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "backup-create", "id": backup_id,
                          "confirmation": body["confirmation"]})
 
+def storage_scrub_action(request_id: str, storage_id: str, body: object) -> dict:
+    if not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", storage_id) or not isinstance(body, dict) or set(body) != {"schema", "confirmation"} or body.get("schema") != 1 or not isinstance(body["confirmation"], str) or not hmac.compare_digest(body["confirmation"], f"SCRUB STORAGE {storage_id}"):
+        raise ValueError("invalid storage scrub")
+    return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "storage-scrub", "id": storage_id,
+                         "confirmation": body["confirmation"]})
+
 def app_control_action(request_id: str, app_id: str, body: object, forced_operation: str | None = None) -> dict:
     expected_fields = {"schema", "confirmation"} if forced_operation else {"schema", "operation", "confirmation"}
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", app_id) or not isinstance(body, dict) or set(body) != expected_fields or body.get("schema") != 1:
@@ -778,10 +784,11 @@ class Handler(BaseHTTPRequestHandler):
         backup_run = re.fullmatch(r"/api/v1/backups/([a-z][a-z0-9-]{0,31})/run", self.path)
         backup_restore_latest = re.fullmatch(r"/api/v1/backups/([a-z][a-z0-9-]{0,31})/restore-latest", self.path)
         backup_create = re.fullmatch(r"/api/v1/backups/([a-z][a-z0-9-]{0,31})/create", self.path)
+        storage_scrub = re.fullmatch(r"/api/v1/storage/([a-z][a-z0-9_-]{0,31})/scrub", self.path)
         app_control = re.fullmatch(r"/api/v1/apps/([a-z][a-z0-9-]{0,31})/power", self.path)
         app_update = re.fullmatch(r"/api/v1/apps/([a-z][a-z0-9-]{0,31})/update", self.path)
         app_install = re.fullmatch(r"/api/v1/apps/([a-z][a-z0-9-]{0,31})/install", self.path)
-        if not create and not power and not snapshots and not clone and not resources and not images and not networks and not passthrough and not remote_device and not pairing_approval and not image_conversion and not backup_run and not backup_restore_latest and not backup_create and not app_control and not app_update and not app_install:
+        if not create and not power and not snapshots and not clone and not resources and not images and not networks and not passthrough and not remote_device and not pairing_approval and not image_conversion and not backup_run and not backup_restore_latest and not backup_create and not storage_scrub and not app_control and not app_update and not app_install:
             self.send_json(405, {"schema": 1, "error": "method-not-allowed"})
             return
         if self.headers.get("Transfer-Encoding") is not None or self.headers.get("Content-Type") != "application/json":
@@ -811,6 +818,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = backup_restore_latest_action(self.headers.get("Idempotency-Key", ""), backup_restore_latest.group(1), body)
             elif backup_create:
                 result = backup_create_action(self.headers.get("Idempotency-Key", ""), backup_create.group(1), body)
+            elif storage_scrub:
+                result = storage_scrub_action(self.headers.get("Idempotency-Key", ""), storage_scrub.group(1), body)
             elif app_control:
                 result = app_control_action(self.headers.get("Idempotency-Key", ""), app_control.group(1), body)
             elif app_update:

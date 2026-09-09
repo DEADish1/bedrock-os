@@ -4,6 +4,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Added authenticated, idempotent ZFS and Linux RAID integrity-scrub controls that resolve protected topology at the root boundary and never expose or accept device paths through the API.
 - Added explicit offline and reconnecting management states with last-confirmed data, paused controls, in-memory credential retention across transient failures, automatic visible-page refresh, and credential clearing after authorization rejection.
 - Added privacy-safe root-staged encrypted backup creation with exact confirmation, authenticated idempotent API execution, and a safe management-interface candidate summary that never exposes sources, repositories, passwords, or initialization choices.
 - Added authenticated idempotent installation of root-staged digest-pinned applications, exposing only safe resource/network summaries and keeping registry locations and image digests outside the browser and API boundary.
