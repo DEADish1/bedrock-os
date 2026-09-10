@@ -257,7 +257,7 @@ def main() -> None:
             assert request(socket_path, "GET", "/api/v1/health")[0] == 200
             schema_status, schema_body = request(socket_path, "GET", "/api/v1/openapi.json")
             assert schema_status == 200 and schema_body["openapi"] == "3.1.0"
-            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/apps/{id}", "/api/v1/apps/{id}/install", "/api/v1/apps/{id}/power", "/api/v1/apps/{id}/update", "/api/v1/backups", "/api/v1/backups/{id}/create", "/api/v1/backups/{id}/restore-latest", "/api/v1/backups/{id}/run", "/api/v1/hardware", "/api/v1/images", "/api/v1/images/{name}/convert", "/api/v1/remote/devices", "/api/v1/remote/devices/{id}", "/api/v1/remote/pairings/{id}/approve", "/api/v1/settings", "/api/v1/storage", "/api/v1/storage/{id}/scrub", "/api/v1/users", "/api/v1/virtualization/capabilities", "/api/v1/virtualization/passthrough-candidates", "/api/v1/vms", "/api/v1/vms/{name}", "/api/v1/vms/{name}/clone", "/api/v1/vms/{name}/images", "/api/v1/vms/{name}/networks", "/api/v1/vms/{name}/passthrough", "/api/v1/vms/{name}/power", "/api/v1/vms/{name}/resources", "/api/v1/vms/{name}/snapshots"}
+            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/apps/{id}", "/api/v1/apps/{id}/install", "/api/v1/apps/{id}/power", "/api/v1/apps/{id}/update", "/api/v1/backups", "/api/v1/backups/{id}/create", "/api/v1/backups/{id}/restore-latest", "/api/v1/backups/{id}/run", "/api/v1/groups/{id}/members", "/api/v1/hardware", "/api/v1/images", "/api/v1/images/{name}/convert", "/api/v1/remote/devices", "/api/v1/remote/devices/{id}", "/api/v1/remote/pairings/{id}/approve", "/api/v1/settings", "/api/v1/storage", "/api/v1/storage/{id}/scrub", "/api/v1/users", "/api/v1/virtualization/capabilities", "/api/v1/virtualization/passthrough-candidates", "/api/v1/vms", "/api/v1/vms/{name}", "/api/v1/vms/{name}/clone", "/api/v1/vms/{name}/images", "/api/v1/vms/{name}/networks", "/api/v1/vms/{name}/passthrough", "/api/v1/vms/{name}/power", "/api/v1/vms/{name}/resources", "/api/v1/vms/{name}/snapshots"}
             assert schema_body["security"] == [{"bearerAuth": []}]
             assert set(schema_body["paths"]["/api/v1/settings"]) == {"get", "put"}
             assert set(schema_body["paths"]["/api/v1/users"]) == {"get", "post"}
@@ -432,6 +432,14 @@ def main() -> None:
             assert request(socket_path, "POST", "/api/v1/users", body=nas_identity_body | {"confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[14] == {"schema": 1, "id": "bob", "operation": "create-user", "confirmation": "CREATE NAS USER bob"}
+            membership_id = str(uuid.uuid4())
+            membership_body = {"schema": 1, "user": "alice", "confirmation": "ADD NAS USER alice TO GROUP family"}
+            membership_headers = {"Content-Type": "application/json", "Idempotency-Key": membership_id}
+            assert request(socket_path, "POST", "/api/v1/groups/family/members", body=membership_body, extra_headers=membership_headers)[0] == 200
+            assert request(socket_path, "POST", "/api/v1/groups/family/members", body=membership_body, extra_headers=membership_headers)[1]["replayed"] is True
+            assert request(socket_path, "POST", "/api/v1/groups/family/members", body=membership_body | {"confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
+            assert admin_requests[15] == {"schema": 1, "id": "family", "subject": "alice", "operation": "add-member", "confirmation": "ADD NAS USER alice TO GROUP family"}
             app_control_id = str(uuid.uuid4())
             app_control_body = {"schema": 1, "operation": "stop", "confirmation": "STOP APPLICATION media"}
             app_control_headers = {"Content-Type": "application/json", "Idempotency-Key": app_control_id}
@@ -439,7 +447,7 @@ def main() -> None:
             assert request(socket_path, "POST", "/api/v1/apps/media/power", body=app_control_body, extra_headers=app_control_headers)[1]["replayed"] is True
             assert request(socket_path, "POST", "/api/v1/apps/media/power", body=app_control_body | {"confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
-            assert admin_requests[15] == {"schema": 1, "id": "media", "operation": "stop", "confirmation": "STOP APPLICATION media"}
+            assert admin_requests[16] == {"schema": 1, "id": "media", "operation": "stop", "confirmation": "STOP APPLICATION media"}
             app_remove_id = str(uuid.uuid4())
             app_remove_body = {"schema": 1, "confirmation": "REMOVE APPLICATION media"}
             app_remove_headers = {"Content-Type": "application/json", "Idempotency-Key": app_remove_id}
@@ -447,7 +455,7 @@ def main() -> None:
             assert request(socket_path, "DELETE", "/api/v1/apps/media", body=app_remove_body, extra_headers=app_remove_headers)[1]["replayed"] is True
             assert request(socket_path, "DELETE", "/api/v1/apps/media", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
-            assert admin_requests[16] == {"schema": 1, "id": "media", "operation": "remove", "confirmation": "REMOVE APPLICATION media"}
+            assert admin_requests[17] == {"schema": 1, "id": "media", "operation": "remove", "confirmation": "REMOVE APPLICATION media"}
             app_update_id = str(uuid.uuid4())
             app_update_body = {"schema": 1, "confirmation": "UPDATE APPLICATION media"}
             app_update_headers = {"Content-Type": "application/json", "Idempotency-Key": app_update_id}
@@ -455,7 +463,7 @@ def main() -> None:
             assert request(socket_path, "POST", "/api/v1/apps/media/update", body=app_update_body, extra_headers=app_update_headers)[1]["replayed"] is True
             assert request(socket_path, "POST", "/api/v1/apps/media/update", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
-            assert admin_requests[17] == {"schema": 1, "id": "media", "operation": "update-latest", "confirmation": "UPDATE APPLICATION media"}
+            assert admin_requests[18] == {"schema": 1, "id": "media", "operation": "update-latest", "confirmation": "UPDATE APPLICATION media"}
             app_install_id = str(uuid.uuid4())
             app_install_body = {"schema": 1, "confirmation": "INSTALL APPLICATION notes"}
             app_install_headers = {"Content-Type": "application/json", "Idempotency-Key": app_install_id}
@@ -463,7 +471,7 @@ def main() -> None:
             assert request(socket_path, "POST", "/api/v1/apps/notes/install", body=app_install_body, extra_headers=app_install_headers)[1]["replayed"] is True
             assert request(socket_path, "POST", "/api/v1/apps/notes/install", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
-            assert admin_requests[18] == {"schema": 1, "id": "notes", "operation": "install-staged", "confirmation": "INSTALL APPLICATION notes"}
+            assert admin_requests[19] == {"schema": 1, "id": "notes", "operation": "install-staged", "confirmation": "INSTALL APPLICATION notes"}
             image_status, image_body = request(socket_path, "GET", "/api/v1/images")
             assert image_status == 200 and image_body["images"][0]["sha256"] == "c" * 64 and "path" not in json.dumps(image_body)
             storage_status, storage_body = request(socket_path, "GET", "/api/v1/storage")

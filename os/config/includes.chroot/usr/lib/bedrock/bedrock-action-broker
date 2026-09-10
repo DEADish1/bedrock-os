@@ -221,6 +221,13 @@ def parse_request(raw):
         if not isinstance(identity, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", identity) or not label or confirmation != f"CREATE NAS {label} {identity}":
             raise RequestError("invalid-nas-identity-create", "NAS identity or exact confirmation is invalid")
         details = {"schema": 1, "id": identity, "operation": operation, "confirmation": confirmation}
+    elif request.get("action") == "nas-membership-add":
+        if set(request) != {"schema", "request_id", "action", "id", "subject", "confirmation"}:
+            raise RequestError("invalid-request", "request fields do not match the NAS membership schema")
+        group, subject, confirmation = request["id"], request["subject"], request["confirmation"]
+        if not all(isinstance(value, str) and re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", value) for value in (group, subject)) or confirmation != f"ADD NAS USER {subject} TO GROUP {group}":
+            raise RequestError("invalid-nas-membership-add", "NAS membership or exact confirmation is invalid")
+        details = {"schema": 1, "id": group, "subject": subject, "operation": "add-member", "confirmation": confirmation}
     elif request.get("action") == "app-control":
         if set(request) != {"schema", "request_id", "action", "id", "operation", "confirmation"}:
             raise RequestError("invalid-request", "request fields do not match the application control schema")
@@ -272,7 +279,7 @@ def load_state(path):
         if fields not in ({"request_id", "request_sha256", "action", "status"},
                           {"request_id", "request_sha256", "action", "status", "created_unix"}):
             raise RuntimeError("action result state contains an invalid result")
-        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough", "image-convert", "backup-run", "backup-restore-latest", "backup-create", "storage-scrub", "nas-identity-create", "app-control", "remote-device", "remote-pairing-approve"} or item["status"] not in {"pending", "succeeded", "failed"}:
+        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough", "image-convert", "backup-run", "backup-restore-latest", "backup-create", "storage-scrub", "nas-identity-create", "nas-membership-add", "app-control", "remote-device", "remote-pairing-approve"} or item["status"] not in {"pending", "succeeded", "failed"}:
             raise RuntimeError("action result state contains an unsupported result")
         if item["status"] != "succeeded" and "created_unix" not in item:
             raise RuntimeError("incomplete action result lacks a creation time")
@@ -491,7 +498,7 @@ def execute_nas_identity(request, request_file, settings, helper_environment):
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     if directory.is_symlink() or not directory.is_dir():
         raise RuntimeError("NAS identity request directory is unsafe")
-    path = directory / f"{request['id']}-{request['operation']}.json"
+    path = directory / f"{request['id']}-{request_file['operation']}.json"
     if path.exists() or path.is_symlink():
         raise RuntimeError("NAS identity request path already exists")
     descriptor, temporary = tempfile.mkstemp(prefix=".nas-identity-action.", dir=directory)
@@ -596,7 +603,7 @@ def execute(raw, settings):
         if completed_code != 0:
             raise RequestError("action-failed", "guarded storage helper rejected the action")
         return response(request["request_id"], "succeeded", replayed=False)
-    if request["action"] == "nas-identity-create":
+    if request["action"] in {"nas-identity-create", "nas-membership-add"}:
         completed_code = execute_nas_identity(request, details, settings, helper_environment)
         result_entry["status"] = "succeeded" if completed_code == 0 else "failed"
         save_state(settings["state"], state)

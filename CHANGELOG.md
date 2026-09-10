@@ -4,6 +4,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Added authenticated, idempotent NAS group-membership controls for existing managed users and groups, with identity-bound exact confirmation, root-side revalidation, refreshed member counts, and no exposure of membership identities.
 - Added authenticated, idempotent creation of fixed-policy NAS users and groups through a strict root wrapper that does not accept passwords, shells, home paths, numeric IDs, or arbitrary account options.
 - Added authenticated, idempotent ZFS and Linux RAID integrity-scrub controls that resolve protected topology at the root boundary and never expose or accept device paths through the API.
 - Added explicit offline and reconnecting management states with last-confirmed data, paused controls, in-memory credential retention across transient failures, automatic visible-page refresh, and credential clearing after authorization rejection.

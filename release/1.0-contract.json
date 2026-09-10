@@ -28,6 +28,7 @@
       "/api/v1/backups/{id}/restore-latest",
       "/api/v1/backups/{id}/run",
       "/api/v1/dashboard",
+      "/api/v1/groups/{id}/members",
       "/api/v1/hardware",
       "/api/v1/health",
       "/api/v1/images",

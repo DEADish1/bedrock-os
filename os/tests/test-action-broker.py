@@ -120,6 +120,10 @@ def nas_identity_request(request_id, kind="user"):
     return {"schema": 1, "request_id": request_id, "action": "nas-identity-create", "id": identity,
             "operation": f"create-{kind}", "confirmation": f"CREATE NAS {kind.upper()} {identity}"}
 
+def nas_membership_request(request_id):
+    return {"schema": 1, "request_id": request_id, "action": "nas-membership-add", "id": "family",
+            "subject": "alice", "confirmation": "ADD NAS USER alice TO GROUP family"}
+
 def app_control_request(request_id, operation="stop"):
     return {"schema": 1, "request_id": request_id, "action": "app-control", "id": "photos", "operation": operation,
             "confirmation": f"{operation.upper()} APPLICATION photos"}
@@ -295,6 +299,10 @@ def main():
             assert exchange(socket_path, nas_identity_request(nas_id))["status"] == "succeeded"
             assert exchange(socket_path, nas_identity_request(nas_id))["replayed"] is True
             assert exchange(socket_path, nas_identity_request(str(uuid.uuid4())) | {"confirmation": "wrong"})["error"]["code"] == "invalid-nas-identity-create"
+            membership_id = str(uuid.uuid4())
+            assert exchange(socket_path, nas_membership_request(membership_id))["status"] == "succeeded"
+            assert exchange(socket_path, nas_membership_request(membership_id))["replayed"] is True
+            assert exchange(socket_path, nas_membership_request(str(uuid.uuid4())) | {"confirmation": "wrong"})["error"]["code"] == "invalid-nas-membership-add"
             app_id = str(uuid.uuid4())
             assert exchange(socket_path, app_control_request(app_id))["status"] == "succeeded"
             assert exchange(socket_path, app_control_request(app_id))["replayed"] is True
@@ -320,14 +328,15 @@ def main():
             assert admin_requests[12] == {"schema": 1, "id": "archive", "operation": "create-staged", "confirmation": "CREATE ENCRYPTED BACKUP archive"}
             assert admin_requests[13] == {"schema": 1, "id": "vault", "operation": "scrub", "confirmation": "SCRUB STORAGE vault"}
             assert admin_requests[14] == {"schema": 1, "id": "alice", "operation": "create-user", "confirmation": "CREATE NAS USER alice"}
-            assert admin_requests[15] == {"schema": 1, "id": "photos", "operation": "stop", "confirmation": "STOP APPLICATION photos"}
-            assert admin_requests[16] == {"schema": 1, "id": "photos", "operation": "remove", "confirmation": "REMOVE APPLICATION photos"}
-            assert admin_requests[17] == {"schema": 1, "id": "photos", "operation": "update-latest", "confirmation": "UPDATE APPLICATION photos"}
-            assert admin_requests[18] == {"schema": 1, "id": "photos", "operation": "install-staged", "confirmation": "INSTALL APPLICATION photos"}
+            assert admin_requests[15] == {"schema": 1, "id": "family", "subject": "alice", "operation": "add-member", "confirmation": "ADD NAS USER alice TO GROUP family"}
+            assert admin_requests[16] == {"schema": 1, "id": "photos", "operation": "stop", "confirmation": "STOP APPLICATION photos"}
+            assert admin_requests[17] == {"schema": 1, "id": "photos", "operation": "remove", "confirmation": "REMOVE APPLICATION photos"}
+            assert admin_requests[18] == {"schema": 1, "id": "photos", "operation": "update-latest", "confirmation": "UPDATE APPLICATION photos"}
+            assert admin_requests[19] == {"schema": 1, "id": "photos", "operation": "install-staged", "confirmation": "INSTALL APPLICATION photos"}
             assert not any(vm_requests.iterdir())
 
             ledger = json.loads(state.read_text(encoding="utf-8"))
-            assert ledger["schema"] == 1 and len(ledger["results"]) == 25
+            assert ledger["schema"] == 1 and len(ledger["results"]) == 26
             serialized = state.read_text(encoding="utf-8")
             assert "I_ACCEPT" not in serialized and "automatic_checks" not in serialized
             assert state.stat().st_mode & 0o777 == 0o600

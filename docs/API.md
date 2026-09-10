@@ -47,6 +47,7 @@ Send the token as `Authorization: Bearer TOKEN`. Missing, malformed, unknown, or
 - `PUT /api/v1/settings` changes exactly one update-policy field. It requires a canonical UUID v4 `Idempotency-Key`, a strict JSON body, and explicit acknowledgement for the beta channel; identical retries are replayed and conflicting key reuse returns `409`.
 - `GET /api/v1/users` returns managed NAS account names, credential-rotation generation/timestamps, and group names with member counts. Passwords, hashes, member identities, datasets, ACLs, share paths, and snapshot names remain inaccessible to clients.
 - `POST /api/v1/users` creates a local NAS user or group after exact confirmation. The strict root wrapper builds the full fixed NAS request and accepts no password, shell, numeric identity, home path, or arbitrary account option from the API.
+- `POST /api/v1/groups/{id}/members` adds one existing managed NAS user to an existing access group after an identity-bound exact confirmation. The API exposes group member counts, not membership identities.
 
 Malformed, oversized, indirect, or unavailable task, alert, audit, remote-device, application, backup, hardware, VM, image, storage, settings, and user sources fail independently with `503`; the API never returns partially validated records.
 

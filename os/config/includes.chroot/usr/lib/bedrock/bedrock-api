@@ -282,6 +282,15 @@ def nas_identity_create_action(request_id: str, body: object) -> dict:
     return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "nas-identity-create", "id": body["name"],
                          "operation": f"create-{body['kind']}", "confirmation": body["confirmation"]})
 
+def nas_membership_add_action(request_id: str, group: str, body: object) -> dict:
+    if not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", group) or not isinstance(body, dict) or set(body) != {"schema", "user", "confirmation"} or body.get("schema") != 1 or not isinstance(body.get("user"), str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", body["user"]):
+        raise ValueError("invalid NAS membership")
+    expected = f"ADD NAS USER {body['user']} TO GROUP {group}"
+    if not isinstance(body.get("confirmation"), str) or not hmac.compare_digest(body["confirmation"], expected):
+        raise ValueError("invalid NAS membership")
+    return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "nas-membership-add", "id": group,
+                         "subject": body["user"], "confirmation": body["confirmation"]})
+
 def app_control_action(request_id: str, app_id: str, body: object, forced_operation: str | None = None) -> dict:
     expected_fields = {"schema", "confirmation"} if forced_operation else {"schema", "operation", "confirmation"}
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", app_id) or not isinstance(body, dict) or set(body) != expected_fields or body.get("schema") != 1:
@@ -795,10 +804,11 @@ class Handler(BaseHTTPRequestHandler):
         backup_restore_latest = re.fullmatch(r"/api/v1/backups/([a-z][a-z0-9-]{0,31})/restore-latest", self.path)
         backup_create = re.fullmatch(r"/api/v1/backups/([a-z][a-z0-9-]{0,31})/create", self.path)
         storage_scrub = re.fullmatch(r"/api/v1/storage/([a-z][a-z0-9_-]{0,31})/scrub", self.path)
+        nas_membership_add = re.fullmatch(r"/api/v1/groups/([a-z][a-z0-9_-]{0,31})/members", self.path)
         app_control = re.fullmatch(r"/api/v1/apps/([a-z][a-z0-9-]{0,31})/power", self.path)
         app_update = re.fullmatch(r"/api/v1/apps/([a-z][a-z0-9-]{0,31})/update", self.path)
         app_install = re.fullmatch(r"/api/v1/apps/([a-z][a-z0-9-]{0,31})/install", self.path)
-        if not create and not nas_identity_create and not power and not snapshots and not clone and not resources and not images and not networks and not passthrough and not remote_device and not pairing_approval and not image_conversion and not backup_run and not backup_restore_latest and not backup_create and not storage_scrub and not app_control and not app_update and not app_install:
+        if not create and not nas_identity_create and not power and not snapshots and not clone and not resources and not images and not networks and not passthrough and not remote_device and not pairing_approval and not image_conversion and not backup_run and not backup_restore_latest and not backup_create and not storage_scrub and not nas_membership_add and not app_control and not app_update and not app_install:
             self.send_json(405, {"schema": 1, "error": "method-not-allowed"})
             return
         if self.headers.get("Transfer-Encoding") is not None or self.headers.get("Content-Type") != "application/json":
@@ -813,6 +823,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = vm_create_action(self.headers.get("Idempotency-Key", ""), body)
             elif nas_identity_create:
                 result = nas_identity_create_action(self.headers.get("Idempotency-Key", ""), body)
+            elif nas_membership_add:
+                result = nas_membership_add_action(self.headers.get("Idempotency-Key", ""), nas_membership_add.group(1), body)
             elif images or networks:
                 target = (images or networks).group(1)
                 result = vm_attachment_action(self.headers.get("Idempotency-Key", ""), target, body, "image" if images else "network")
