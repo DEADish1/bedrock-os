@@ -14,31 +14,41 @@ jq -e '
     .confirmation==("CREATE NAS "+(if .operation=="create-user" then "USER " else "GROUP " end)+.id)) or
    ((keys|sort)==(["confirmation","id","operation","schema","subject"]|sort) and .operation=="add-member" and
     (.subject|type=="string" and test("^[a-z][a-z0-9_-]{0,31}$")) and
-    .confirmation==("ADD NAS USER "+.subject+" TO GROUP "+.id)))
+    .confirmation==("ADD NAS USER "+.subject+" TO GROUP "+.id)) or
+   ((keys|sort)==(["confirmation","id","operation","schema"]|sort) and .operation=="rotate-staged" and
+    .confirmation==("ROTATE NAS CREDENTIAL "+.id)))
 ' "$request" >/dev/null || fail "NAS identity request or exact confirmation is invalid"
 id=$(jq -r .id "$request" | tr -d '\r'); operation=$(jq -r .operation "$request" | tr -d '\r')
 subject=$(jq -r '.subject // ""' "$request" | tr -d '\r')
-case "$operation" in create-user) label=USER; task_kind=nas-user-create; native_confirmation="CREATE USER — $id" ;; create-group) label=GROUP; task_kind=nas-group-create; native_confirmation="CREATE GROUP — $id" ;; add-member) label=MEMBER; task_kind=nas-member-add; native_confirmation="ADD MEMBER — $subject — $id" ;; *) fail "NAS identity operation is unavailable" ;; esac
+case "$operation" in create-user) task_kind=nas-user-create; native_action=create-user; native_confirmation="CREATE USER — $id" ;; create-group) task_kind=nas-group-create; native_action=create-group; native_confirmation="CREATE GROUP — $id" ;; add-member) task_kind=nas-member-add; native_action=add-member; native_confirmation="ADD MEMBER — $subject — $id" ;; rotate-staged) task_kind=nas-credential-rotate; native_action=rotate-credential; native_confirmation="ROTATE CREDENTIAL — $id" ;; *) fail "NAS identity operation is unavailable" ;; esac
 if [ "${BEDROCK_NAS_ACTION_TEST_MODE:-0}" = 1 ]; then
   manager=${BEDROCK_NAS_ACTION_MANAGER:?test mode requires BEDROCK_NAS_ACTION_MANAGER}
   output=${BEDROCK_NAS_ACTION_OUTPUT:?test mode requires BEDROCK_NAS_ACTION_OUTPUT}
+  password_file=${BEDROCK_NAS_ACTION_PASSWORD_FILE:-}
 else
   [ "$(id -u)" -eq 0 ] || fail "NAS identity action requires root"
   [ "$request" = "/var/lib/bedrock/storage/requests/$id-$operation.json" ] || fail "NAS identity request path is not identity-bound"
   manager=/usr/sbin/bedrock-nas
   output=/var/lib/bedrock/storage/requests/$id-$operation-operation.json
+  password_file=/var/lib/bedrock/storage/credential-secrets/$id.password
 fi
 [ -x "$manager" ] && [ ! -L "$manager" ] || fail "NAS manager is unavailable or indirect"
 [ ! -e "$output" ] && [ ! -L "$output" ] || fail "NAS operation request already exists"
 temporary=$(mktemp "$(dirname "$output")/.nas-identity.XXXXXX")
 cleanup() { [ -z "$temporary" ] || rm -f "$temporary"; rm -f "$output"; }
 trap cleanup EXIT INT TERM
-jq -S -n --arg action "$operation" --arg name "$id" --arg subject "$subject" --arg confirmation "$native_confirmation" '{schema:1,action:$action,name:$name,pool:"",subject:$subject,quota_bytes:0,protocols:[],read_only:false,recycle:false,time_machine:false,confirmation:$confirmation}' > "$temporary"
+jq -S -n --arg action "$native_action" --arg name "$id" --arg subject "$subject" --arg confirmation "$native_confirmation" '{schema:1,action:$action,name:$name,pool:"",subject:$subject,quota_bytes:0,protocols:[],read_only:false,recycle:false,time_machine:false,confirmation:$confirmation}' > "$temporary"
 chmod 0600 "$temporary"; mv "$temporary" "$output"; temporary=
 task_writer=${BEDROCK_RECORD_API_TASK:-$(dirname "$0")/record-api-task}; created=$(date +%s); task_id="$task_kind-$$"; active=0; done=0
 cleanup_task() { status=$?; if [ "$active" -eq 1 ] && [ "$done" -eq 0 ]; then "$task_writer" "$task_id" "$task_kind" failed "$created" 0 1 steps >/dev/null 2>&1 || true; fi; cleanup; exit "$status"; }
 trap cleanup_task EXIT INT TERM
 "$task_writer" "$task_id" "$task_kind" queued "$created" 0 1 steps; active=1
-if [ "${BEDROCK_NAS_ACTION_TEST_MODE:-0}" = 1 ]; then "$manager" "$output"; else "$manager" apply "$output"; fi
+if [ "$operation" = rotate-staged ]; then
+  [ -n "$password_file" ] && [ -s "$password_file" ] && [ ! -L "$password_file" ] || fail "staged NAS credential is unavailable"
+  if [ "${BEDROCK_NAS_ACTION_TEST_MODE:-0}" = 1 ]; then BEDROCK_NAS_PASSWORD_FILE="$password_file" "$manager" "$output"; else BEDROCK_NAS_PASSWORD_FILE="$password_file" "$manager" apply "$output"; fi
+  rm -f "$password_file"
+else
+  if [ "${BEDROCK_NAS_ACTION_TEST_MODE:-0}" = 1 ]; then "$manager" "$output"; else "$manager" apply "$output"; fi
+fi
 "$task_writer" "$task_id" "$task_kind" succeeded "$created" 1 1 steps; done=1
 trap - EXIT INT TERM; rm -f "$output"

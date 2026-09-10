@@ -42,6 +42,7 @@
       "/api/v1/storage/{id}/scrub",
       "/api/v1/tasks",
       "/api/v1/users",
+      "/api/v1/users/{id}/rotate-credential",
       "/api/v1/virtualization/capabilities",
       "/api/v1/virtualization/passthrough-candidates",
       "/api/v1/vms",

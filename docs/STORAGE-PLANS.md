@@ -14,6 +14,8 @@ The planner rejects mixing direct disks with hardware RAID logical volumes and r
 
 `bedrock-nas` manages local NAS users, groups, group membership, password rotation, datasets, quotas, ACLs, shares, snapshots, and snapshot removal. Passwords travel only through a bounded direct file, are copied with root-only permissions, and never appear in a request, command argument, state file, or audit event.
 
+To make a new NAS password available to the management interface without exposing it to the browser or API, root runs `bedrock-stage-nas-credential USER PASSWORD_FILE "STAGE NAS CREDENTIAL — USER"`. Bedrock copies the one-line password into its owner-only credential store and publishes only a readiness flag. The interface then requires `ROTATE NAS CREDENTIAL USER`; successful rotation consumes the staged secret.
+
 OpenZFS datasets support byte quotas and manual snapshots. Samba/SMB is the primary file-sharing protocol; NFS is available only when explicitly selected. Shares can be read-only or writable, optionally preserve deleted files in a per-user recycle directory, and can be configured as quota-bounded SMB Time Machine targets. SMB2.1 is the minimum protocol and guest mapping is disabled.
 
 Because Bedrock's system image is immutable, `render-nas-services` writes Samba and NFS runtime configuration to persistent Bedrock state. Storage activation assembles and mounts managed Linux RAID arrays first, renders shares atomically, and then activates exports. Samba is ordered after that activation and reads the persistent generated configuration.

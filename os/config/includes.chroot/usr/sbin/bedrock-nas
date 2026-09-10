@@ -181,7 +181,7 @@ jq -S --arg action "$action" --arg name "$name" --arg pool "$pool" --arg subject
   if $action == "create-user" then .users += [{name:$name,credential_generation:0,created_unix:$now}]
   elif $action == "create-group" then .groups += [{name:$name,members:[],created_unix:$now}]
   elif $action == "add-member" then .groups |= map(if .name==$name then .members=([.members[],$subject]|unique) else . end)
-  elif $action == "rotate-credential" then .users |= map(if .name==$name then .credential_generation+=1 | .credential_rotated_unix=$now else . end)
+  elif $action == "rotate-credential" then .users |= map(if .name==$name then .credential_generation+=1 | .credential_rotated_unix=$now | .credential_candidate=false else . end)
   elif $action == "create-dataset" then .datasets += [{pool:$pool,name:$name,path:$path,quota_bytes:null,acl_subjects:[],created_unix:$now}]
   elif $action == "set-quota" then .datasets |= map(if .pool==$pool and .name==$name then .quota_bytes=$quota else . end)
   elif $action == "set-acl" then .datasets |= map(if .pool==$pool and .name==$name then .acl_subjects=([.acl_subjects[],$subject]|unique) else . end)

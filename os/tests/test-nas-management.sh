@@ -24,7 +24,7 @@ req set-acl family vault family 0 '[]' false false false 'SET ACL — vault/fami
 req create-share family vault family 0 '["smb","nfs"]' false true false 'CREATE SHARE — vault/family — smb,nfs — family' > "$work/share.json"; run 17 apply "$work/share.json" >/dev/null
 req snapshot family vault '' 0 '[]' false false false 'SNAPSHOT — vault/family' > "$work/snapshot.json"; run 18 apply "$work/snapshot.json" >/dev/null
 jq -e '
-  .users[0].credential_generation == 1 and .groups[0].members == ["alice"] and
+  .users[0].credential_generation == 1 and .users[0].credential_candidate == false and .groups[0].members == ["alice"] and
   .datasets[0].quota_bytes == 1000000000000 and .datasets[0].acl_subjects == ["family"] and
   .shares[0].protocols == ["smb","nfs"] and .shares[0].recycle == true and (.snapshots|length)==1
 ' "$state" >/dev/null

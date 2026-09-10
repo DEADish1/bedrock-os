@@ -19,6 +19,11 @@ jq -n '{schema:1,id:"family",operation:"create-group",confirmation:"CREATE NAS G
 jq -s -e '.[1].action=="create-group" and .[1].name=="family" and .[1].confirmation=="CREATE GROUP — family"' "$work/calls" >/dev/null
 jq -n '{schema:1,id:"family",subject:"alice",operation:"add-member",confirmation:"ADD NAS USER alice TO GROUP family"}' > "$work/request.json"; run
 jq -s -e '.[2].action=="add-member" and .[2].name=="family" and .[2].subject=="alice" and .[2].confirmation=="ADD MEMBER — alice — family"' "$work/calls" >/dev/null
-[ "$(grep -c ' succeeded ' "$work/task-calls")" -eq 3 ]
+printf '%s\n' 'correct horse battery staple' > "$work/password"
+jq -n '{schema:1,id:"alice",operation:"rotate-staged",confirmation:"ROTATE NAS CREDENTIAL alice"}' > "$work/request.json"
+BEDROCK_NAS_ACTION_PASSWORD_FILE="$work/password" run
+jq -s -e '.[3].action=="rotate-credential" and .[3].name=="alice" and .[3].confirmation=="ROTATE CREDENTIAL — alice"' "$work/calls" >/dev/null
+[ ! -e "$work/password" ]
+[ "$(grep -c ' succeeded ' "$work/task-calls")" -eq 4 ]
 jq '.confirmation="wrong"' "$work/request.json" > "$work/bad.json"; mv "$work/bad.json" "$work/request.json"; if run >/dev/null 2>&1; then printf 'error: invalid NAS identity action accepted\n' >&2; exit 1; fi
 printf 'NAS identity action wrapper tests passed.\n'
