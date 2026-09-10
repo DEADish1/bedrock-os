@@ -1,0 +1,40 @@
+#!/bin/sh
+set -eu
+
+[ ! -x /usr/lib/bedrock/require-normal-mode ] || /usr/lib/bedrock/require-normal-mode
+[ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
+request=$1
+fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+[ -f "$request" ] && [ ! -L "$request" ] || fail "NAS identity request is missing or indirect"
+command -v jq >/dev/null 2>&1 || fail "jq is required"
+jq -e '
+  (keys|sort)==(["confirmation","id","operation","schema"]|sort) and .schema==1 and
+  (.operation=="create-user" or .operation=="create-group") and
+  (.id|type=="string" and test("^[a-z][a-z0-9_-]{0,31}$")) and
+  .confirmation==("CREATE NAS "+(if .operation=="create-user" then "USER " else "GROUP " end)+.id)
+' "$request" >/dev/null || fail "NAS identity request or exact confirmation is invalid"
+id=$(jq -r .id "$request" | tr -d '\r'); operation=$(jq -r .operation "$request" | tr -d '\r')
+case "$operation" in create-user) label=USER; task_kind=nas-user-create ;; create-group) label=GROUP; task_kind=nas-group-create ;; *) fail "NAS identity operation is unavailable" ;; esac
+if [ "${BEDROCK_NAS_ACTION_TEST_MODE:-0}" = 1 ]; then
+  manager=${BEDROCK_NAS_ACTION_MANAGER:?test mode requires BEDROCK_NAS_ACTION_MANAGER}
+  output=${BEDROCK_NAS_ACTION_OUTPUT:?test mode requires BEDROCK_NAS_ACTION_OUTPUT}
+else
+  [ "$(id -u)" -eq 0 ] || fail "NAS identity action requires root"
+  [ "$request" = "/var/lib/bedrock/storage/requests/$id-$operation.json" ] || fail "NAS identity request path is not identity-bound"
+  manager=/usr/sbin/bedrock-nas
+  output=/var/lib/bedrock/storage/requests/$id-$operation-operation.json
+fi
+[ -x "$manager" ] && [ ! -L "$manager" ] || fail "NAS manager is unavailable or indirect"
+[ ! -e "$output" ] && [ ! -L "$output" ] || fail "NAS operation request already exists"
+temporary=$(mktemp "$(dirname "$output")/.nas-identity.XXXXXX")
+cleanup() { [ -z "$temporary" ] || rm -f "$temporary"; rm -f "$output"; }
+trap cleanup EXIT INT TERM
+jq -S -n --arg action "$operation" --arg name "$id" --arg confirmation "CREATE $label — $id" '{schema:1,action:$action,name:$name,pool:"",subject:"",quota_bytes:0,protocols:[],read_only:false,recycle:false,time_machine:false,confirmation:$confirmation}' > "$temporary"
+chmod 0600 "$temporary"; mv "$temporary" "$output"; temporary=
+task_writer=${BEDROCK_RECORD_API_TASK:-$(dirname "$0")/record-api-task}; created=$(date +%s); task_id="$task_kind-$$"; active=0; done=0
+cleanup_task() { status=$?; if [ "$active" -eq 1 ] && [ "$done" -eq 0 ]; then "$task_writer" "$task_id" "$task_kind" failed "$created" 0 1 steps >/dev/null 2>&1 || true; fi; cleanup; exit "$status"; }
+trap cleanup_task EXIT INT TERM
+"$task_writer" "$task_id" "$task_kind" queued "$created" 0 1 steps; active=1
+if [ "${BEDROCK_NAS_ACTION_TEST_MODE:-0}" = 1 ]; then "$manager" "$output"; else "$manager" apply "$output"; fi
+"$task_writer" "$task_id" "$task_kind" succeeded "$created" 1 1 steps; done=1
+trap - EXIT INT TERM; rm -f "$output"

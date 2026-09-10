@@ -273,6 +273,15 @@ def storage_scrub_action(request_id: str, storage_id: str, body: object) -> dict
     return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "storage-scrub", "id": storage_id,
                          "confirmation": body["confirmation"]})
 
+def nas_identity_create_action(request_id: str, body: object) -> dict:
+    if not isinstance(body, dict) or set(body) != {"schema", "kind", "name", "confirmation"} or body.get("schema") != 1 or body.get("kind") not in {"user", "group"} or not isinstance(body.get("name"), str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", body["name"]):
+        raise ValueError("invalid NAS identity create")
+    expected = f"CREATE NAS {body['kind'].upper()} {body['name']}"
+    if not isinstance(body.get("confirmation"), str) or not hmac.compare_digest(body["confirmation"], expected):
+        raise ValueError("invalid NAS identity create")
+    return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "nas-identity-create", "id": body["name"],
+                         "operation": f"create-{body['kind']}", "confirmation": body["confirmation"]})
+
 def app_control_action(request_id: str, app_id: str, body: object, forced_operation: str | None = None) -> dict:
     expected_fields = {"schema", "confirmation"} if forced_operation else {"schema", "operation", "confirmation"}
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", app_id) or not isinstance(body, dict) or set(body) != expected_fields or body.get("schema") != 1:
@@ -771,6 +780,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(401, {"schema": 1, "error": "unauthorized"})
             return
         create = self.path == "/api/v1/vms"
+        nas_identity_create = self.path == "/api/v1/users"
         power = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/power", self.path)
         snapshots = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/snapshots", self.path)
         clone = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/clone", self.path)
@@ -788,7 +798,7 @@ class Handler(BaseHTTPRequestHandler):
         app_control = re.fullmatch(r"/api/v1/apps/([a-z][a-z0-9-]{0,31})/power", self.path)
         app_update = re.fullmatch(r"/api/v1/apps/([a-z][a-z0-9-]{0,31})/update", self.path)
         app_install = re.fullmatch(r"/api/v1/apps/([a-z][a-z0-9-]{0,31})/install", self.path)
-        if not create and not power and not snapshots and not clone and not resources and not images and not networks and not passthrough and not remote_device and not pairing_approval and not image_conversion and not backup_run and not backup_restore_latest and not backup_create and not storage_scrub and not app_control and not app_update and not app_install:
+        if not create and not nas_identity_create and not power and not snapshots and not clone and not resources and not images and not networks and not passthrough and not remote_device and not pairing_approval and not image_conversion and not backup_run and not backup_restore_latest and not backup_create and not storage_scrub and not app_control and not app_update and not app_install:
             self.send_json(405, {"schema": 1, "error": "method-not-allowed"})
             return
         if self.headers.get("Transfer-Encoding") is not None or self.headers.get("Content-Type") != "application/json":
@@ -801,6 +811,8 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length).decode("utf-8"))
             if create:
                 result = vm_create_action(self.headers.get("Idempotency-Key", ""), body)
+            elif nas_identity_create:
+                result = nas_identity_create_action(self.headers.get("Idempotency-Key", ""), body)
             elif images or networks:
                 target = (images or networks).group(1)
                 result = vm_attachment_action(self.headers.get("Idempotency-Key", ""), target, body, "image" if images else "network")

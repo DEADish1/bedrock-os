@@ -43,6 +43,7 @@ def environment():
         "image_conversion_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_IMAGE_CONVERSION_HELPER", "/usr/lib/bedrock/change-vm-image")),
         "backup_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_BACKUP_HELPER", "/usr/lib/bedrock/change-backup")),
         "storage_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_STORAGE_HELPER", "/usr/lib/bedrock/change-storage")),
+        "nas_identity_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_NAS_IDENTITY_HELPER", "/usr/lib/bedrock/change-nas-identity")),
         "app_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_APP_HELPER", "/usr/lib/bedrock/change-app")),
         "remote_device_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_REMOTE_DEVICE_HELPER", "/usr/lib/bedrock/change-remote-device")),
         "remote_pairing_approval_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_REMOTE_PAIRING_APPROVAL_HELPER", "/usr/lib/bedrock/approve-remote-pairing")),
@@ -212,6 +213,14 @@ def parse_request(raw):
         if not isinstance(storage_id, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", storage_id) or confirmation != f"SCRUB STORAGE {storage_id}":
             raise RequestError("invalid-storage-scrub", "storage identity or exact confirmation is invalid")
         details = {"schema": 1, "id": storage_id, "operation": "scrub", "confirmation": confirmation}
+    elif request.get("action") == "nas-identity-create":
+        if set(request) != {"schema", "request_id", "action", "id", "operation", "confirmation"}:
+            raise RequestError("invalid-request", "request fields do not match the NAS identity schema")
+        identity, operation, confirmation = request["id"], request["operation"], request["confirmation"]
+        label = "USER" if operation == "create-user" else "GROUP" if operation == "create-group" else ""
+        if not isinstance(identity, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", identity) or not label or confirmation != f"CREATE NAS {label} {identity}":
+            raise RequestError("invalid-nas-identity-create", "NAS identity or exact confirmation is invalid")
+        details = {"schema": 1, "id": identity, "operation": operation, "confirmation": confirmation}
     elif request.get("action") == "app-control":
         if set(request) != {"schema", "request_id", "action", "id", "operation", "confirmation"}:
             raise RequestError("invalid-request", "request fields do not match the application control schema")
@@ -263,7 +272,7 @@ def load_state(path):
         if fields not in ({"request_id", "request_sha256", "action", "status"},
                           {"request_id", "request_sha256", "action", "status", "created_unix"}):
             raise RuntimeError("action result state contains an invalid result")
-        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough", "image-convert", "backup-run", "backup-restore-latest", "backup-create", "storage-scrub", "app-control", "remote-device", "remote-pairing-approve"} or item["status"] not in {"pending", "succeeded", "failed"}:
+        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough", "image-convert", "backup-run", "backup-restore-latest", "backup-create", "storage-scrub", "nas-identity-create", "app-control", "remote-device", "remote-pairing-approve"} or item["status"] not in {"pending", "succeeded", "failed"}:
             raise RuntimeError("action result state contains an unsupported result")
         if item["status"] != "succeeded" and "created_unix" not in item:
             raise RuntimeError("incomplete action result lacks a creation time")
@@ -477,6 +486,25 @@ def execute_storage(request, request_file, settings, helper_environment):
         if os.path.exists(temporary): os.unlink(temporary)
         if path.exists() and not path.is_symlink(): path.unlink()
 
+def execute_nas_identity(request, request_file, settings, helper_environment):
+    directory = settings["storage_requests"]
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if directory.is_symlink() or not directory.is_dir():
+        raise RuntimeError("NAS identity request directory is unsafe")
+    path = directory / f"{request['id']}-{request['operation']}.json"
+    if path.exists() or path.is_symlink():
+        raise RuntimeError("NAS identity request path already exists")
+    descriptor, temporary = tempfile.mkstemp(prefix=".nas-identity-action.", dir=directory)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(request_file, stream, sort_keys=True, separators=(",", ":")); stream.write("\n"); stream.flush(); os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        return subprocess.run([str(settings["nas_identity_helper"]), str(path)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120, env=helper_environment, close_fds=True).returncode
+    finally:
+        if os.path.exists(temporary): os.unlink(temporary)
+        if path.exists() and not path.is_symlink(): path.unlink()
+
 def execute_app(request, request_file, settings, helper_environment):
     directory = settings["app_requests"]
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -567,6 +595,13 @@ def execute(raw, settings):
         save_state(settings["state"], state)
         if completed_code != 0:
             raise RequestError("action-failed", "guarded storage helper rejected the action")
+        return response(request["request_id"], "succeeded", replayed=False)
+    if request["action"] == "nas-identity-create":
+        completed_code = execute_nas_identity(request, details, settings, helper_environment)
+        result_entry["status"] = "succeeded" if completed_code == 0 else "failed"
+        save_state(settings["state"], state)
+        if completed_code != 0:
+            raise RequestError("action-failed", "guarded NAS identity helper rejected the action")
         return response(request["request_id"], "succeeded", replayed=False)
     if request["action"] == "app-control":
         completed_code = execute_app(request, details, settings, helper_environment)
