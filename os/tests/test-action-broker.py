@@ -128,6 +128,10 @@ def nas_credential_request(request_id):
     return {"schema": 1, "request_id": request_id, "action": "nas-credential-rotate", "id": "alice",
             "confirmation": "ROTATE NAS CREDENTIAL alice"}
 
+def image_import_request(request_id):
+    return {"schema": 1, "request_id": request_id, "action": "image-import", "name": "debian", "type": "iso",
+            "sha256": "d" * 64, "size_bytes": 4096, "confirmation": f"IMPORT ISO debian {'d' * 64}"}
+
 def app_control_request(request_id, operation="stop"):
     return {"schema": 1, "request_id": request_id, "action": "app-control", "id": "photos", "operation": operation,
             "confirmation": f"{operation.upper()} APPLICATION photos"}
@@ -175,6 +179,7 @@ def main():
             "BEDROCK_ACTION_BROKER_NETWORK_ATTACHMENT_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_PASSTHROUGH_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_IMAGE_CONVERSION_HELPER": str(admin_helper),
+            "BEDROCK_ACTION_BROKER_IMAGE_IMPORT_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_BACKUP_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_STORAGE_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_NAS_IDENTITY_HELPER": str(admin_helper),
@@ -323,6 +328,10 @@ def main():
             install_request = app_control_request(app_install_id, "install-staged") | {"confirmation": "INSTALL APPLICATION photos"}
             assert exchange(socket_path, install_request)["status"] == "succeeded"
             assert exchange(socket_path, app_control_request(str(uuid.uuid4())) | {"confirmation": "wrong"})["error"]["code"] == "invalid-app-control"
+            image_import_id = str(uuid.uuid4())
+            assert exchange(socket_path, image_import_request(image_import_id))["status"] == "succeeded"
+            assert exchange(socket_path, image_import_request(image_import_id))["replayed"] is True
+            assert exchange(socket_path, image_import_request(str(uuid.uuid4())) | {"confirmation": "wrong"})["error"]["code"] == "invalid-image-import"
             admin_requests = [json.loads(line) for line in admin_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[3]["name"] == "new-vm" and admin_requests[3]["disk_size_gib"] == 64
             assert admin_requests[4] == {"schema": 1, "vm": "test-vm", "image": "installer", "action": "attach", "confirmation": "ATTACH IMAGE installer TO VM test-vm"}
@@ -342,10 +351,11 @@ def main():
             assert admin_requests[18] == {"schema": 1, "id": "photos", "operation": "remove", "confirmation": "REMOVE APPLICATION photos"}
             assert admin_requests[19] == {"schema": 1, "id": "photos", "operation": "update-latest", "confirmation": "UPDATE APPLICATION photos"}
             assert admin_requests[20] == {"schema": 1, "id": "photos", "operation": "install-staged", "confirmation": "INSTALL APPLICATION photos"}
+            assert admin_requests[21] == {"schema": 1, "name": "debian", "type": "iso", "sha256": "d" * 64, "size_bytes": 4096, "confirmation": f"IMPORT ISO debian {'d' * 64}"}
             assert not any(vm_requests.iterdir())
 
             ledger = json.loads(state.read_text(encoding="utf-8"))
-            assert ledger["schema"] == 1 and len(ledger["results"]) == 27
+            assert ledger["schema"] == 1 and len(ledger["results"]) == 28
             serialized = state.read_text(encoding="utf-8")
             assert "I_ACCEPT" not in serialized and "automatic_checks" not in serialized
             assert state.stat().st_mode & 0o777 == 0o600

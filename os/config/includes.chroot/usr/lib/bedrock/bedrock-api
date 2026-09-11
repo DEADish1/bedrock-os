@@ -8,6 +8,7 @@ import re
 import socket
 import socketserver
 import stat
+import tempfile
 from http.server import BaseHTTPRequestHandler
 
 SOCKET = pathlib.Path(os.environ.get("BEDROCK_API_SOCKET", "/run/bedrock-api/api.sock"))
@@ -26,6 +27,7 @@ REMOTE = pathlib.Path(os.environ.get("BEDROCK_API_REMOTE", "/var/lib/bedrock/rem
 APPS = pathlib.Path(os.environ.get("BEDROCK_API_APPS", "/var/lib/bedrock/api/sources/apps.json"))
 BACKUPS = pathlib.Path(os.environ.get("BEDROCK_API_BACKUPS", "/var/lib/bedrock/api/sources/backups.json"))
 IMAGES = pathlib.Path(os.environ.get("BEDROCK_API_IMAGES", "/var/lib/bedrock/api/sources/images.json"))
+UPLOADS = pathlib.Path(os.environ.get("BEDROCK_API_UPLOADS", "/var/lib/bedrock/virtualization/uploads"))
 UPDATE_POLICY = pathlib.Path(os.environ.get("BEDROCK_API_UPDATE_POLICY", "/var/lib/bedrock/settings/update-policy.json"))
 DEFAULT_UPDATE_POLICY = pathlib.Path(os.environ.get("BEDROCK_API_DEFAULT_UPDATE_POLICY", "/usr/share/bedrock/default-update-policy.json"))
 NAS = pathlib.Path(os.environ.get("BEDROCK_API_NAS", "/var/lib/bedrock/storage/nas.json"))
@@ -248,6 +250,81 @@ def image_conversion_action(request_id: str, source: str, body: object) -> dict:
         raise ValueError("invalid image conversion")
     return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "image-convert", "source": source,
                          "source_sha256": source_hash, "target": target, "target_type": target_type, "confirmation": confirmation})
+
+def upload_candidates() -> list[dict]:
+    if not UPLOADS.exists():
+        return []
+    if UPLOADS.is_symlink() or not UPLOADS.is_dir():
+        raise ValueError("unsafe upload directory")
+    candidates = []
+    for path in sorted(UPLOADS.glob("*.json")):
+        value = regular_json(path, 4096)
+        fields = {"schema", "name", "type", "sha256", "size_bytes"}
+        if not isinstance(value, dict) or set(value) != fields or value["schema"] != 1 or path.name != f"{value.get('name')}.json" or not VM_NAME.fullmatch(value["name"] if isinstance(value.get("name"), str) else "") or value.get("type") not in {"iso", "img", "qcow2", "vhdx", "vmdk"} or not SHA256.fullmatch(value["sha256"] if isinstance(value.get("sha256"), str) else "") or type(value.get("size_bytes")) is not int or not 1 <= value["size_bytes"] <= 4398046511104:
+            raise ValueError("invalid upload candidate")
+        source = UPLOADS / f"{value['name']}.{value['type']}"
+        descriptor = os.open(source, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode) or info.st_size != value["size_bytes"]:
+                raise ValueError("invalid staged upload")
+        finally:
+            os.close(descriptor)
+        candidates.append({key: value[key] for key in ("name", "type", "sha256", "size_bytes")})
+        if len(candidates) > 16:
+            raise ValueError("too many upload candidates")
+    return candidates
+
+def image_import_action(request_id: str, name: str, body: object) -> dict:
+    if not VM_NAME.fullmatch(name) or not isinstance(body, dict) or set(body) != {"schema", "confirmation"} or body.get("schema") != 1:
+        raise ValueError("invalid image import request")
+    matches = [item for item in upload_candidates() if item["name"] == name]
+    if len(matches) != 1:
+        raise ValueError("image upload candidate is unavailable")
+    item = matches[0]; expected = f"IMPORT {item['type'].upper()} {name} {item['sha256']}"
+    if not isinstance(body.get("confirmation"), str) or not hmac.compare_digest(body["confirmation"], expected):
+        raise ValueError("invalid image import confirmation")
+    return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "image-import", **item, "confirmation": body["confirmation"]})
+
+def stage_image_upload(stream, name: str, image_type: str, length: int) -> dict:
+    if not VM_NAME.fullmatch(name) or image_type not in {"iso", "img", "qcow2", "vhdx", "vmdk"} or not 1 <= length <= 4398046511104:
+        raise ValueError("invalid image upload")
+    current = regular_json(IMAGES, 524288)
+    if not isinstance(current, dict) or not isinstance(current.get("images"), list) or any(isinstance(item, dict) and item.get("name") == name for item in current["images"]):
+        raise FileExistsError("image name already exists")
+    UPLOADS.mkdir(mode=0o750, parents=True, exist_ok=True)
+    if UPLOADS.is_symlink() or not UPLOADS.is_dir():
+        raise ValueError("unsafe upload directory")
+    lock = UPLOADS / f".{name}.upload.lock"; lock_fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0), 0o600)
+    os.close(lock_fd); temporary = ""; metadata_temporary = ""; destination = UPLOADS / f"{name}.{image_type}"; metadata = UPLOADS / f"{name}.json"
+    try:
+        if any(UPLOADS.glob(f"{name}.*")):
+            raise FileExistsError("upload candidate already exists")
+        descriptor, temporary = tempfile.mkstemp(prefix=f".{name}.upload.", dir=UPLOADS)
+        digest = hashlib.sha256(); remaining = length
+        with os.fdopen(descriptor, "wb") as output:
+            os.fchmod(output.fileno(), 0o640)
+            while remaining:
+                chunk = stream.read(min(1048576, remaining))
+                if not chunk:
+                    raise ValueError("truncated image upload")
+                output.write(chunk); digest.update(chunk); remaining -= len(chunk)
+            output.flush(); os.fsync(output.fileno())
+        os.replace(temporary, destination); temporary = ""
+        descriptor, metadata_temporary = tempfile.mkstemp(prefix=f".{name}.metadata.", dir=UPLOADS)
+        value = {"schema": 1, "name": name, "type": image_type, "sha256": digest.hexdigest(), "size_bytes": length}
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            os.fchmod(output.fileno(), 0o640); json.dump(value, output, sort_keys=True, separators=(",", ":")); output.write("\n"); output.flush(); os.fsync(output.fileno())
+        os.replace(metadata_temporary, metadata); metadata_temporary = ""
+        return {key: value[key] for key in ("name", "type", "sha256", "size_bytes")}
+    except Exception:
+        if destination.exists() and not destination.is_symlink() and not metadata.exists():
+            destination.unlink()
+        raise
+    finally:
+        if temporary and os.path.exists(temporary): os.unlink(temporary)
+        if metadata_temporary and os.path.exists(metadata_temporary): os.unlink(metadata_temporary)
+        if lock.exists() and not lock.is_symlink(): lock.unlink()
 
 def backup_run_action(request_id: str, backup_id: str, body: object) -> dict:
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", backup_id) or not isinstance(body, dict) or set(body) != {"schema", "confirmation"} or body.get("schema") != 1 or not isinstance(body["confirmation"], str) or not hmac.compare_digest(body["confirmation"], f"RUN ENCRYPTED BACKUP {backup_id}"):
@@ -566,7 +643,7 @@ def image_feed() -> dict:
             raise ValueError("invalid image")
     if len({item["name"] for item in value["images"]}) != len(value["images"]):
         raise ValueError("duplicate image")
-    return value
+    return {"schema": 1, "images": value["images"], "upload_candidates": upload_candidates()}
 
 def storage_feed() -> dict:
     value = regular_json(STORAGE, 1048576)
@@ -810,6 +887,7 @@ class Handler(BaseHTTPRequestHandler):
         remote_device = re.fullmatch(r"/api/v1/remote/devices/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})", self.path)
         pairing_approval = re.fullmatch(r"/api/v1/remote/pairings/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})/approve", self.path)
         image_conversion = re.fullmatch(r"/api/v1/images/([a-z][a-z0-9-]{0,30}[a-z0-9])/convert", self.path)
+        image_import = re.fullmatch(r"/api/v1/images/([a-z][a-z0-9-]{0,30}[a-z0-9])/import", self.path)
         backup_run = re.fullmatch(r"/api/v1/backups/([a-z][a-z0-9-]{0,31})/run", self.path)
         backup_restore_latest = re.fullmatch(r"/api/v1/backups/([a-z][a-z0-9-]{0,31})/restore-latest", self.path)
         backup_create = re.fullmatch(r"/api/v1/backups/([a-z][a-z0-9-]{0,31})/create", self.path)
@@ -819,7 +897,7 @@ class Handler(BaseHTTPRequestHandler):
         app_control = re.fullmatch(r"/api/v1/apps/([a-z][a-z0-9-]{0,31})/power", self.path)
         app_update = re.fullmatch(r"/api/v1/apps/([a-z][a-z0-9-]{0,31})/update", self.path)
         app_install = re.fullmatch(r"/api/v1/apps/([a-z][a-z0-9-]{0,31})/install", self.path)
-        if not create and not nas_identity_create and not power and not snapshots and not clone and not resources and not images and not networks and not passthrough and not remote_device and not pairing_approval and not image_conversion and not backup_run and not backup_restore_latest and not backup_create and not storage_scrub and not nas_membership_add and not nas_credential_rotate and not app_control and not app_update and not app_install:
+        if not create and not nas_identity_create and not power and not snapshots and not clone and not resources and not images and not networks and not passthrough and not remote_device and not pairing_approval and not image_conversion and not image_import and not backup_run and not backup_restore_latest and not backup_create and not storage_scrub and not nas_membership_add and not nas_credential_rotate and not app_control and not app_update and not app_install:
             self.send_json(405, {"schema": 1, "error": "method-not-allowed"})
             return
         if self.headers.get("Transfer-Encoding") is not None or self.headers.get("Content-Type") != "application/json":
@@ -849,6 +927,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = remote_pairing_approval_action(self.headers.get("Idempotency-Key", ""), pairing_approval.group(1), body)
             elif image_conversion:
                 result = image_conversion_action(self.headers.get("Idempotency-Key", ""), image_conversion.group(1), body)
+            elif image_import:
+                result = image_import_action(self.headers.get("Idempotency-Key", ""), image_import.group(1), body)
             elif backup_run:
                 result = backup_run_action(self.headers.get("Idempotency-Key", ""), backup_run.group(1), body)
             elif backup_restore_latest:
@@ -919,6 +999,18 @@ class Handler(BaseHTTPRequestHandler):
         if not authorized(self.headers.get("Authorization")):
             self.send_json(401, {"schema": 1, "error": "unauthorized"})
             return
+        upload = re.fullmatch(r"/api/v1/images/([a-z][a-z0-9-]{0,30}[a-z0-9])/upload", self.path)
+        if upload:
+            if self.headers.get("Transfer-Encoding") is not None or self.headers.get("Content-Type") != "application/octet-stream":
+                self.send_json(400, {"schema": 1, "error": "invalid-request"}); return
+            try:
+                length = int(self.headers.get("Content-Length", ""))
+                candidate = stage_image_upload(self.rfile, upload.group(1), self.headers.get("X-Bedrock-Image-Type", ""), length)
+            except FileExistsError:
+                self.send_json(409, {"schema": 1, "error": "upload-conflict"}); return
+            except (OSError, ValueError):
+                self.send_json(400, {"schema": 1, "error": "invalid-request"}); return
+            self.send_json(200, {"schema": 1, "candidate": candidate}); return
         if self.path != "/api/v1/settings":
             self.send_json(405, {"schema": 1, "error": "method-not-allowed"})
             return

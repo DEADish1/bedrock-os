@@ -105,7 +105,7 @@ def request(socket_path: pathlib.Path, method: str, path: str, token: str | None
     headers = {} if token is None else {"Authorization": f"Bearer {token}"}
     if extra_headers:
         headers.update(extra_headers)
-    payload = None if body is None else json.dumps(body).encode("utf-8")
+    payload = None if body is None else body if isinstance(body, bytes) else json.dumps(body).encode("utf-8")
     connection.request(method, path, body=payload, headers=headers)
     response = connection.getresponse()
     body = json.loads(response.read())
@@ -133,6 +133,8 @@ def main() -> None:
         apps = work / "apps.json"
         backups = work / "backups.json"
         images = work / "images.json"
+        uploads = work / "uploads"
+        uploads.mkdir()
         update_policy = work / "update-policy.json"
         default_update_policy = work / "default-update-policy.json"
         nas = work / "nas.json"
@@ -193,6 +195,7 @@ def main() -> None:
             "BEDROCK_API_REMOTE": str(remote),
             "BEDROCK_API_APPS": str(apps), "BEDROCK_API_BACKUPS": str(backups),
             "BEDROCK_API_IMAGES": str(images),
+            "BEDROCK_API_UPLOADS": str(uploads),
             "BEDROCK_API_UPDATE_POLICY": str(update_policy),
             "BEDROCK_API_DEFAULT_UPDATE_POLICY": str(default_update_policy),
             "BEDROCK_API_NAS": str(nas),
@@ -218,6 +221,7 @@ def main() -> None:
             "BEDROCK_ACTION_BROKER_CREATE_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_IMAGE_ATTACHMENT_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_IMAGE_CONVERSION_HELPER": str(admin_action_helper),
+            "BEDROCK_ACTION_BROKER_IMAGE_IMPORT_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_BACKUP_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_STORAGE_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_NAS_IDENTITY_HELPER": str(admin_action_helper),
@@ -257,7 +261,7 @@ def main() -> None:
             assert request(socket_path, "GET", "/api/v1/health")[0] == 200
             schema_status, schema_body = request(socket_path, "GET", "/api/v1/openapi.json")
             assert schema_status == 200 and schema_body["openapi"] == "3.1.0"
-            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/apps/{id}", "/api/v1/apps/{id}/install", "/api/v1/apps/{id}/power", "/api/v1/apps/{id}/update", "/api/v1/backups", "/api/v1/backups/{id}/create", "/api/v1/backups/{id}/restore-latest", "/api/v1/backups/{id}/run", "/api/v1/groups/{id}/members", "/api/v1/hardware", "/api/v1/images", "/api/v1/images/{name}/convert", "/api/v1/remote/devices", "/api/v1/remote/devices/{id}", "/api/v1/remote/pairings/{id}/approve", "/api/v1/settings", "/api/v1/storage", "/api/v1/storage/{id}/scrub", "/api/v1/users", "/api/v1/users/{id}/rotate-credential", "/api/v1/virtualization/capabilities", "/api/v1/virtualization/passthrough-candidates", "/api/v1/vms", "/api/v1/vms/{name}", "/api/v1/vms/{name}/clone", "/api/v1/vms/{name}/images", "/api/v1/vms/{name}/networks", "/api/v1/vms/{name}/passthrough", "/api/v1/vms/{name}/power", "/api/v1/vms/{name}/resources", "/api/v1/vms/{name}/snapshots"}
+            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/apps/{id}", "/api/v1/apps/{id}/install", "/api/v1/apps/{id}/power", "/api/v1/apps/{id}/update", "/api/v1/backups", "/api/v1/backups/{id}/create", "/api/v1/backups/{id}/restore-latest", "/api/v1/backups/{id}/run", "/api/v1/groups/{id}/members", "/api/v1/hardware", "/api/v1/images", "/api/v1/images/{name}/convert", "/api/v1/images/{name}/import", "/api/v1/images/{name}/upload", "/api/v1/remote/devices", "/api/v1/remote/devices/{id}", "/api/v1/remote/pairings/{id}/approve", "/api/v1/settings", "/api/v1/storage", "/api/v1/storage/{id}/scrub", "/api/v1/users", "/api/v1/users/{id}/rotate-credential", "/api/v1/virtualization/capabilities", "/api/v1/virtualization/passthrough-candidates", "/api/v1/vms", "/api/v1/vms/{name}", "/api/v1/vms/{name}/clone", "/api/v1/vms/{name}/images", "/api/v1/vms/{name}/networks", "/api/v1/vms/{name}/passthrough", "/api/v1/vms/{name}/power", "/api/v1/vms/{name}/resources", "/api/v1/vms/{name}/snapshots"}
             assert schema_body["security"] == [{"bearerAuth": []}]
             assert set(schema_body["paths"]["/api/v1/settings"]) == {"get", "put"}
             assert set(schema_body["paths"]["/api/v1/users"]) == {"get", "post"}
@@ -480,6 +484,21 @@ def main() -> None:
             assert request(socket_path, "POST", "/api/v1/apps/notes/install", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[20] == {"schema": 1, "id": "notes", "operation": "install-staged", "confirmation": "INSTALL APPLICATION notes"}
+            upload_bytes = b"browser-upload-fixture"
+            upload_hash = hashlib.sha256(upload_bytes).hexdigest()
+            upload_headers = {"Content-Type": "application/octet-stream", "X-Bedrock-Image-Type": "iso"}
+            upload_status, upload_body = request(socket_path, "PUT", "/api/v1/images/debian/upload", body=upload_bytes, extra_headers=upload_headers)
+            assert upload_status == 200 and upload_body["candidate"] == {"name": "debian", "type": "iso", "sha256": upload_hash, "size_bytes": len(upload_bytes)}
+            assert request(socket_path, "PUT", "/api/v1/images/debian/upload", body=upload_bytes, extra_headers=upload_headers)[0] == 409
+            staged_status, staged_body = request(socket_path, "GET", "/api/v1/images")
+            assert staged_status == 200 and staged_body["upload_candidates"] == [upload_body["candidate"]]
+            import_id = str(uuid.uuid4()); import_confirmation = f"IMPORT ISO debian {upload_hash}"
+            import_body = {"schema": 1, "confirmation": import_confirmation}; import_headers = {"Content-Type": "application/json", "Idempotency-Key": import_id}
+            assert request(socket_path, "POST", "/api/v1/images/debian/import", body=import_body, extra_headers=import_headers)[0] == 200
+            assert request(socket_path, "POST", "/api/v1/images/debian/import", body=import_body, extra_headers=import_headers)[1]["replayed"] is True
+            assert request(socket_path, "POST", "/api/v1/images/debian/import", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
+            assert admin_requests[21] == {"schema": 1, "name": "debian", "type": "iso", "sha256": upload_hash, "size_bytes": len(upload_bytes), "confirmation": import_confirmation}
             image_status, image_body = request(socket_path, "GET", "/api/v1/images")
             assert image_status == 200 and image_body["images"][0]["sha256"] == "c" * 64 and "path" not in json.dumps(image_body)
             storage_status, storage_body = request(socket_path, "GET", "/api/v1/storage")

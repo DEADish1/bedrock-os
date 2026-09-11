@@ -41,6 +41,7 @@ def environment():
         "network_attachment_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_NETWORK_ATTACHMENT_HELPER", "/usr/lib/bedrock/manage-vm-network-attachment")),
         "passthrough_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_PASSTHROUGH_HELPER", "/usr/lib/bedrock/change-vm-passthrough")),
         "image_conversion_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_IMAGE_CONVERSION_HELPER", "/usr/lib/bedrock/change-vm-image")),
+        "image_import_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_IMAGE_IMPORT_HELPER", "/usr/lib/bedrock/import-uploaded-vm-image")),
         "backup_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_BACKUP_HELPER", "/usr/lib/bedrock/change-backup")),
         "storage_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_STORAGE_HELPER", "/usr/lib/bedrock/change-storage")),
         "nas_identity_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_NAS_IDENTITY_HELPER", "/usr/lib/bedrock/change-nas-identity")),
@@ -185,6 +186,14 @@ def parse_request(raw):
             raise RequestError("invalid-image-conversion", "image identities, type, hash, or exact confirmation are invalid")
         details = {"schema": 1, "source": source, "source_sha256": source_hash, "target": target,
                    "target_type": target_type, "confirmation": request["confirmation"]}
+    elif request.get("action") == "image-import":
+        if set(request) != {"schema", "request_id", "action", "name", "type", "sha256", "size_bytes", "confirmation"}:
+            raise RequestError("invalid-request", "request fields do not match the image import schema")
+        name, image_type, digest, size, confirmation = request["name"], request["type"], request["sha256"], request["size_bytes"], request["confirmation"]
+        valid_name = isinstance(name, str) and re.fullmatch(r"[a-z][a-z0-9-]{0,30}[a-z0-9]", name)
+        if not valid_name or image_type not in {"iso", "img", "qcow2", "vhdx", "vmdk"} or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest) or type(size) is not int or not 1 <= size <= 4398046511104 or confirmation != f"IMPORT {image_type.upper()} {name} {digest}":
+            raise RequestError("invalid-image-import", "image import request or exact confirmation is invalid")
+        details = {"schema": 1, "name": name, "type": image_type, "sha256": digest, "size_bytes": size, "confirmation": confirmation}
     elif request.get("action") == "backup-run":
         if set(request) != {"schema", "request_id", "action", "id", "confirmation"}:
             raise RequestError("invalid-request", "request fields do not match the backup run schema")
@@ -286,7 +295,7 @@ def load_state(path):
         if fields not in ({"request_id", "request_sha256", "action", "status"},
                           {"request_id", "request_sha256", "action", "status", "created_unix"}):
             raise RuntimeError("action result state contains an invalid result")
-        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough", "image-convert", "backup-run", "backup-restore-latest", "backup-create", "storage-scrub", "nas-identity-create", "nas-membership-add", "nas-credential-rotate", "app-control", "remote-device", "remote-pairing-approve"} or item["status"] not in {"pending", "succeeded", "failed"}:
+        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough", "image-convert", "image-import", "backup-run", "backup-restore-latest", "backup-create", "storage-scrub", "nas-identity-create", "nas-membership-add", "nas-credential-rotate", "app-control", "remote-device", "remote-pairing-approve"} or item["status"] not in {"pending", "succeeded", "failed"}:
             raise RuntimeError("action result state contains an unsupported result")
         if item["status"] != "succeeded" and "created_unix" not in item:
             raise RuntimeError("incomplete action result lacks a creation time")
@@ -414,6 +423,9 @@ def execute_vm_admin(request, request_file, settings, helper_environment):
     elif request["action"] == "image-convert":
         path = request_directory / f"convert-{request['source']}-to-{request['target']}.json"
         helper = settings["image_conversion_helper"]
+    elif request["action"] == "image-import":
+        path = request_directory / f"import-{request['name']}.json"
+        helper = settings["image_import_helper"]
     else:
         path = request_directory / f"{request['name']}-resources.json"
         helper = settings["resource_helper"]
@@ -582,7 +594,7 @@ def execute(raw, settings):
         if completed_code != 0:
             raise RequestError("action-failed", "guarded VM snapshot helper rejected the action")
         return response(request["request_id"], "succeeded", replayed=False)
-    if request["action"] in {"vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough", "image-convert"}:
+    if request["action"] in {"vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough", "image-convert", "image-import"}:
         completed_code = execute_vm_admin(request, details, settings, helper_environment)
         result_entry["status"] = "succeeded" if completed_code == 0 else "failed"
         save_state(settings["state"], state)

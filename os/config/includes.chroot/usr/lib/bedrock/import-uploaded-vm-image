@@ -1,0 +1,27 @@
+#!/bin/sh
+set -eu
+[ ! -x /usr/lib/bedrock/require-normal-mode ] || /usr/lib/bedrock/require-normal-mode
+[ "$#" -eq 1 ] || { printf 'usage: %s REQUEST.json\n' "$0" >&2; exit 2; }
+request=$1; fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
+[ -f "$request" ] && [ ! -L "$request" ] || fail "image import request is missing or indirect"
+command -v jq >/dev/null 2>&1 || fail "jq is required"
+jq -e '(keys|sort)==(["confirmation","name","schema","sha256","size_bytes","type"]|sort) and .schema==1 and (.name|type=="string" and test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and (.type|IN("iso","img","qcow2","vhdx","vmdk")) and (.sha256|type=="string" and test("^[0-9a-f]{64}$")) and (.size_bytes|type=="number" and floor==. and .>=1 and .<=4398046511104) and .confirmation==("IMPORT "+(.type|ascii_upcase)+" "+.name+" "+.sha256)' "$request" >/dev/null || fail "image import request or exact confirmation is invalid"
+name=$(jq -r .name "$request"); type=$(jq -r .type "$request")
+if [ "${BEDROCK_IMAGE_IMPORT_ACTION_TEST_MODE:-0}" = 1 ]; then
+  importer=${BEDROCK_IMAGE_IMPORT_ACTION_IMPORTER:?test mode requires importer}; upload=${BEDROCK_IMAGE_IMPORT_ACTION_UPLOAD:?test mode requires upload}; manifest=${BEDROCK_IMAGE_IMPORT_ACTION_MANIFEST:-}
+else
+  [ "$(id -u)" -eq 0 ] || fail "image import requires root"
+  [ "$request" = "/var/lib/bedrock/virtualization/requests/import-$name.json" ] || fail "image import request path is not name-bound"
+  importer=/usr/lib/bedrock/import-vm-image; upload=/var/lib/bedrock/virtualization/uploads/$name.$type; manifest=/var/lib/bedrock/virtualization/uploads/$name.json
+fi
+[ -x "$importer" ] && [ ! -L "$importer" ] || fail "image importer is unavailable or indirect"
+[ -f "$upload" ] && [ ! -L "$upload" ] || fail "uploaded image is unavailable or indirect"
+task_writer=${BEDROCK_RECORD_API_TASK:-$(dirname "$0")/record-api-task}; created=$(date +%s); task_id="image-import-$$"; active=0; done=0
+[ -x "$task_writer" ] && [ ! -L "$task_writer" ] || fail "task recorder is unavailable or indirect"
+cleanup() { status=$?; if [ "$active" -eq 1 ] && [ "$done" -eq 0 ]; then "$task_writer" "$task_id" image-import failed "$created" 0 1 steps >/dev/null 2>&1 || true; fi; exit "$status"; }
+trap cleanup EXIT INT TERM
+"$task_writer" "$task_id" image-import queued "$created" 0 1 steps; active=1
+"$importer" "$request" "$upload"
+rm -f "$upload"; [ -z "$manifest" ] || rm -f "$manifest"
+"$task_writer" "$task_id" image-import succeeded "$created" 1 1 steps; done=1
+trap - EXIT INT TERM
