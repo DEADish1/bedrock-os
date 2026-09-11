@@ -286,6 +286,38 @@ def image_import_action(request_id: str, name: str, body: object) -> dict:
         raise ValueError("invalid image import confirmation")
     return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "image-import", **item, "confirmation": body["confirmation"]})
 
+def discard_image_upload(name: str, body: object) -> dict:
+    if not VM_NAME.fullmatch(name) or not isinstance(body, dict) or set(body) != {"schema", "sha256", "confirmation"} or body.get("schema") != 1:
+        raise ValueError("invalid image upload discard request")
+    source_hash, confirmation = body.get("sha256"), body.get("confirmation")
+    if not isinstance(source_hash, str) or not SHA256.fullmatch(source_hash) or not isinstance(confirmation, str) or not hmac.compare_digest(confirmation, f"DISCARD IMAGE UPLOAD {name} {source_hash}"):
+        raise ValueError("invalid image upload discard confirmation")
+    if not UPLOADS.exists() or UPLOADS.is_symlink() or not UPLOADS.is_dir():
+        raise ValueError("unsafe or unavailable upload directory")
+    lock = UPLOADS / f".{name}.import.lock"
+    lock_fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0), 0o600)
+    os.close(lock_fd)
+    try:
+        matches = [item for item in upload_candidates() if item["name"] == name and item["sha256"] == source_hash]
+        if len(matches) != 1:
+            raise ValueError("image upload candidate changed or is unavailable")
+        item = matches[0]
+        source = UPLOADS / f"{name}.{item['type']}"; metadata = UPLOADS / f"{name}.json"
+        discarded_source = UPLOADS / f".{name}.discard.data"; discarded_metadata = UPLOADS / f".{name}.discard.json"
+        if discarded_source.exists() or discarded_source.is_symlink() or discarded_metadata.exists() or discarded_metadata.is_symlink():
+            raise ValueError("unsafe image upload discard state")
+        os.replace(source, discarded_source)
+        try:
+            os.replace(metadata, discarded_metadata)
+        except Exception:
+            os.replace(discarded_source, source)
+            raise
+        discarded_source.unlink(); discarded_metadata.unlink()
+        return {"schema": 1, "name": name, "discarded": True}
+    finally:
+        if lock.exists() and not lock.is_symlink():
+            lock.unlink()
+
 def stage_image_upload(stream, name: str, image_type: str, length: int) -> dict:
     if not VM_NAME.fullmatch(name) or image_type not in {"iso", "img", "qcow2", "vhdx", "vmdk"} or not 1 <= length <= 4398046511104:
         raise ValueError("invalid image upload")
@@ -968,7 +1000,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         target = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])", self.path)
         app_target = re.fullmatch(r"/api/v1/apps/([a-z][a-z0-9-]{0,31})", self.path)
-        if not target and not app_target:
+        image_upload = re.fullmatch(r"/api/v1/images/([a-z][a-z0-9-]{0,30}[a-z0-9])/upload", self.path)
+        if not target and not app_target and not image_upload:
             self.send_json(405, {"schema": 1, "error": "method-not-allowed"})
             return
         if self.headers.get("Transfer-Encoding") is not None or self.headers.get("Content-Type") != "application/json":
@@ -979,14 +1012,22 @@ class Handler(BaseHTTPRequestHandler):
             if not 1 <= length <= 4096:
                 raise ValueError("invalid body length")
             body = json.loads(self.rfile.read(length).decode("utf-8"))
-            result = app_control_action(self.headers.get("Idempotency-Key", ""), app_target.group(1), body, "remove") if app_target else vm_delete_action(self.headers.get("Idempotency-Key", ""), target.group(1), body)
+            if image_upload:
+                result = discard_image_upload(image_upload.group(1), body)
+            else:
+                result = app_control_action(self.headers.get("Idempotency-Key", ""), app_target.group(1), body, "remove") if app_target else vm_delete_action(self.headers.get("Idempotency-Key", ""), target.group(1), body)
+        except FileExistsError:
+            self.send_json(409, {"schema": 1, "error": "upload-busy"})
+            return
         except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
             self.send_json(400, {"schema": 1, "error": "invalid-request"})
             return
         except (OSError, socket.timeout):
             self.send_json(503, {"schema": 1, "error": "action-broker-unavailable"})
             return
-        if result["status"] == "succeeded":
+        if image_upload:
+            self.send_json(200, result)
+        elif result["status"] == "succeeded":
             self.send_json(200, result)
         elif result["error"]["code"] == "idempotency-conflict":
             self.send_json(409, result)

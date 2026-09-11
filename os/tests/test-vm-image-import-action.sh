@@ -13,5 +13,10 @@ EOF
 chmod +x "$work/importer" "$work/recorder"
 jq -n --arg hash "$hash" '{schema:1,name:"debian",type:"iso",sha256:$hash,size_bytes:6,confirmation:("IMPORT ISO debian "+$hash)}' > "$work/request.json"
 BEDROCK_IMAGE_IMPORT_ACTION_TEST_MODE=1 BEDROCK_IMAGE_IMPORT_ACTION_IMPORTER="$work/importer" BEDROCK_IMAGE_IMPORT_ACTION_UPLOAD="$work/upload.iso" BEDROCK_IMAGE_IMPORT_ACTION_MANIFEST="$work/upload.json" BEDROCK_RECORD_API_TASK="$work/recorder" BEDROCK_TEST_IMAGE_CALLS="$work/image-calls" BEDROCK_TEST_UPLOAD_CALLS="$work/upload-calls" BEDROCK_TEST_TASK_CALLS="$work/task-calls" "$wrapper" "$work/request.json"
-[ ! -e "$work/upload.iso" ]; jq -e '.name=="debian" and .type=="iso"' "$work/image-calls" >/dev/null; grep -q ' succeeded ' "$work/task-calls"
+[ ! -e "$work/upload.iso" ]; [ ! -e "$work/.debian.import.lock" ]; jq -e '.name=="debian" and .type=="iso"' "$work/image-calls" >/dev/null; grep -q ' succeeded ' "$work/task-calls"
+printf source > "$work/upload.iso"; : > "$work/.debian.import.lock"
+if BEDROCK_IMAGE_IMPORT_ACTION_TEST_MODE=1 BEDROCK_IMAGE_IMPORT_ACTION_IMPORTER="$work/importer" BEDROCK_IMAGE_IMPORT_ACTION_UPLOAD="$work/upload.iso" BEDROCK_IMAGE_IMPORT_ACTION_MANIFEST="$work/upload.json" BEDROCK_RECORD_API_TASK="$work/recorder" BEDROCK_TEST_IMAGE_CALLS="$work/image-calls" BEDROCK_TEST_UPLOAD_CALLS="$work/upload-calls" BEDROCK_TEST_TASK_CALLS="$work/task-calls" "$wrapper" "$work/request.json" 2>/dev/null; then
+  printf 'busy import unexpectedly succeeded\n' >&2; exit 1
+fi
+[ -f "$work/upload.iso" ]; [ -f "$work/.debian.import.lock" ]
 printf 'Uploaded image import action tests passed.\n'

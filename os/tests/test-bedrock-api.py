@@ -487,6 +487,13 @@ def main() -> None:
             upload_bytes = b"browser-upload-fixture"
             upload_hash = hashlib.sha256(upload_bytes).hexdigest()
             upload_headers = {"Content-Type": "application/octet-stream", "X-Bedrock-Image-Type": "iso"}
+            discard_status, discard_upload = request(socket_path, "PUT", "/api/v1/images/discardme/upload", body=upload_bytes, extra_headers=upload_headers)
+            assert discard_status == 200
+            discard_hash = discard_upload["candidate"]["sha256"]
+            discard_body = {"schema": 1, "sha256": discard_hash, "confirmation": f"DISCARD IMAGE UPLOAD discardme {discard_hash}"}
+            assert request(socket_path, "DELETE", "/api/v1/images/discardme/upload", body=discard_body, extra_headers={"Content-Type": "application/json"}) == (200, {"schema": 1, "name": "discardme", "discarded": True})
+            assert request(socket_path, "DELETE", "/api/v1/images/discardme/upload", body=discard_body, extra_headers={"Content-Type": "application/json"})[0] == 400
+            assert request(socket_path, "GET", "/api/v1/images")[1]["upload_candidates"] == []
             upload_status, upload_body = request(socket_path, "PUT", "/api/v1/images/debian/upload", body=upload_bytes, extra_headers=upload_headers)
             assert upload_status == 200 and upload_body["candidate"] == {"name": "debian", "type": "iso", "sha256": upload_hash, "size_bytes": len(upload_bytes)}
             assert request(socket_path, "PUT", "/api/v1/images/debian/upload", body=upload_bytes, extra_headers=upload_headers)[0] == 409

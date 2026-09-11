@@ -14,14 +14,17 @@ else
   [ "$request" = "/var/lib/bedrock/virtualization/requests/import-$name.json" ] || fail "image import request path is not name-bound"
   importer=/usr/lib/bedrock/import-vm-image; upload=/var/lib/bedrock/virtualization/uploads/$name.$type; manifest=/var/lib/bedrock/virtualization/uploads/$name.json
 fi
+task_writer=${BEDROCK_RECORD_API_TASK:-$(dirname "$0")/record-api-task}; created=$(date +%s); task_id="image-import-$$"; active=0; done=0
+lock=$(dirname "$upload")/.$name.import.lock
+(set -C; umask 077; : > "$lock") 2>/dev/null || fail "uploaded image is busy"
+cleanup() { status=$?; rm -f "$lock"; if [ "$active" -eq 1 ] && [ "$done" -eq 0 ]; then "$task_writer" "$task_id" image-import failed "$created" 0 1 steps >/dev/null 2>&1 || true; fi; exit "$status"; }
+trap cleanup EXIT INT TERM
 [ -x "$importer" ] && [ ! -L "$importer" ] || fail "image importer is unavailable or indirect"
 [ -f "$upload" ] && [ ! -L "$upload" ] || fail "uploaded image is unavailable or indirect"
-task_writer=${BEDROCK_RECORD_API_TASK:-$(dirname "$0")/record-api-task}; created=$(date +%s); task_id="image-import-$$"; active=0; done=0
 [ -x "$task_writer" ] && [ ! -L "$task_writer" ] || fail "task recorder is unavailable or indirect"
-cleanup() { status=$?; if [ "$active" -eq 1 ] && [ "$done" -eq 0 ]; then "$task_writer" "$task_id" image-import failed "$created" 0 1 steps >/dev/null 2>&1 || true; fi; exit "$status"; }
-trap cleanup EXIT INT TERM
 "$task_writer" "$task_id" image-import queued "$created" 0 1 steps; active=1
 "$importer" "$request" "$upload"
 rm -f "$upload"; [ -z "$manifest" ] || rm -f "$manifest"
 "$task_writer" "$task_id" image-import succeeded "$created" 1 1 steps; done=1
+rm -f "$lock"
 trap - EXIT INT TERM

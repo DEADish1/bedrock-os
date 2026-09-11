@@ -4,6 +4,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Added authenticated, SHA-256-bound discard controls for staged browser image uploads, including exact confirmation and an import/discard lock that prevents cleanup from racing privileged validation.
 - Added authenticated browser image uploads with bounded streaming into an unprivileged staging directory, server-side SHA-256 review, exact hash-bound confirmation, guarded root format/checksum validation, post-import cleanup, and live Image Library controls for ISO, IMG, QCOW2, VHDX, and VMDK.
 - Added root-staged NAS credential rotation with owner-only secret transport, a privacy-safe readiness flag, authenticated idempotent execution, exact confirmation, staged-secret consumption, and no password content in the browser, API, state, audit, or command arguments.
 - Added authenticated, idempotent NAS group-membership controls for existing managed users and groups, with identity-bound exact confirmation, root-side revalidation, refreshed member counts, and no exposure of membership identities.
