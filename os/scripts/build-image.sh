@@ -64,6 +64,8 @@ fi
 "$OS_DIR/scripts/create-spdx-sbom.sh" packages.lock bedrock-os.spdx.json \
   "$BEDROCK_VERSION" "$BEDROCK_DISTRIBUTION" "$BEDROCK_ARCHITECTURE" \
   "$BEDROCK_SOURCE_COMMIT" "$SOURCE_DATE_EPOCH"
+sbom_sha256=$(sha256sum bedrock-os.spdx.json | cut -d' ' -f1)
+sbom_package_count=$(jq '.packages | length' bedrock-os.spdx.json)
 
 jq -n \
   --arg version "$BEDROCK_VERSION" \
@@ -72,8 +74,10 @@ jq -n \
   --arg source_date_epoch "$SOURCE_DATE_EPOCH" \
   --arg commit "$BEDROCK_SOURCE_COMMIT" \
   --arg live_build "$(lb --version 2>/dev/null | head -n1)" \
+  --arg sbom_sha256 "$sbom_sha256" \
+  --argjson sbom_package_count "$sbom_package_count" \
   --argjson protected_writer_enabled "$protected_writer_enabled" \
-  '{schema:1,product:"Bedrock Server OS",version:$version,distribution:$distribution,architecture:$architecture,source_date_epoch:($source_date_epoch|tonumber),commit:$commit,live_build:$live_build,protected_system_writer_enabled:$protected_writer_enabled}' \
+  '{schema:1,product:"Bedrock Server OS",version:$version,distribution:$distribution,architecture:$architecture,source_date_epoch:($source_date_epoch|tonumber),commit:$commit,live_build:$live_build,protected_system_writer_enabled:$protected_writer_enabled,sbom:{format:"SPDX-2.3-json",path:"bedrock-os.spdx.json",sha256:$sbom_sha256,package_count:$sbom_package_count}}' \
   > bedrock-build-manifest.json
 
 "$OS_DIR/scripts/verify-artifacts.sh" "$OUT_DIR"

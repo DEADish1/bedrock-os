@@ -17,7 +17,9 @@ sbom="$OUT_DIR/bedrock-os.spdx.json"
 
 command -v jq >/dev/null 2>&1 && jq -e '
   .schema == 1 and .product == "Bedrock Server OS" and .architecture == "amd64" and
-  (.protected_system_writer_enabled | type == "boolean")
+  (.protected_system_writer_enabled | type == "boolean") and
+  .sbom == {format:"SPDX-2.3-json",path:"bedrock-os.spdx.json",sha256:.sbom.sha256,package_count:.sbom.package_count} and
+  (.sbom.sha256 | test("^[0-9a-f]{64}$")) and (.sbom.package_count | type == "number" and floor == . and . > 0)
 ' "$manifest" >/dev/null
 jq -e '
   .spdxVersion == "SPDX-2.3" and .dataLicense == "CC0-1.0" and
@@ -26,6 +28,8 @@ jq -e '
   (.packages | type == "array" and length > 0) and
   ([.packages[].SPDXID] | unique | length) == (.packages | length)
 ' "$sbom" >/dev/null
+[ "$(sha256sum "$sbom" | cut -d' ' -f1)" = "$(jq -r .sbom.sha256 "$manifest")" ] || { printf 'error: SPDX SBOM hash does not match build manifest\n' >&2; exit 1; }
+[ "$(jq '.packages | length' "$sbom")" = "$(jq -r .sbom.package_count "$manifest")" ] || { printf 'error: SPDX package count does not match build manifest\n' >&2; exit 1; }
 (cd "$OUT_DIR" && sha256sum -c "$(basename "$checksum")")
 
 if [ -e "$OUT_DIR/bedrock-os-amd64.raw" ]; then

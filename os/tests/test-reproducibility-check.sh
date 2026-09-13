@@ -11,8 +11,11 @@ for directory in "$work/a" "$work/b"; do
   (cd "$directory" && sha256sum bedrock-os-amd64.iso > bedrock-os-amd64.iso.sha256)
   printf 'base-files=13.8+deb13u2\nlinux-image-amd64=6.12.57-1\n' > "$directory/packages.lock"
   "$ROOT/os/scripts/create-spdx-sbom.sh" "$directory/packages.lock" "$directory/bedrock-os.spdx.json" 0.2.0-dev trixie amd64 test 1
-  printf '{"schema":1,"product":"Bedrock Server OS","version":"0.2.0-dev","architecture":"amd64","source_date_epoch":1,"commit":"test","live_build":"test"}\n' > "$directory/bedrock-build-manifest.json"
+  sbom_sha=$(sha256sum "$directory/bedrock-os.spdx.json" | cut -d' ' -f1)
+  jq -n --arg sha "$sbom_sha" '{schema:1,product:"Bedrock Server OS",version:"0.2.0-dev",architecture:"amd64",source_date_epoch:1,commit:"test",live_build:"test",sbom:{format:"SPDX-2.3-json",path:"bedrock-os.spdx.json",sha256:$sha,package_count:3}}' > "$directory/bedrock-build-manifest.json"
 done
+"$ROOT/os/scripts/compare-reproducible-builds.sh" "$work/a" "$work/b" >/dev/null
+rm "$work/a/bedrock-os.spdx.json" "$work/b/bedrock-os.spdx.json"
 "$ROOT/os/scripts/compare-reproducible-builds.sh" "$work/a" "$work/b" >/dev/null
 printf x >> "$work/b/bedrock-os-amd64.iso"
 if "$ROOT/os/scripts/compare-reproducible-builds.sh" "$work/a" "$work/b" >/dev/null 2>&1; then

@@ -184,7 +184,7 @@ Exit: users can prove that data and configuration can be restored after realisti
 - [ ] Run upgrade tests from every supported pre-1.0 release.
 - [ ] Run soak, load, power-loss, disk-failure, network-loss, and recovery tests.
 - [ ] Complete penetration test, dependency review, SBOM, and vulnerability process.
-  - Every OS image build now emits a deterministic SPDX 2.3 JSON SBOM from the exact resolved Debian package set, verifies its structure, and requires byte-identical SBOMs across reproducibility replicas. The web dependency audit is currently clean. CI artifact publication, independent dependency review, vulnerability-response acceptance, and penetration testing remain.
+  - Every OS image build now emits a deterministic SPDX 2.3 JSON SBOM from the exact resolved Debian package set, verifies its structure and manifest-bound SHA-256/package count, and requires matching SBOM evidence across reproducibility replicas. The web dependency audit is currently clean. Standalone CI artifact publication, independent dependency review, vulnerability-response acceptance, and penetration testing remain.
 - [ ] Sign/notarize OS images, installers, clients, manifests, and releases.
 - [x] Finish installation, admin, troubleshooting, recovery, privacy, and security docs.
   - A validated documentation index now connects installation and first-run procedures, routine administration, subsystem operations, troubleshooting, bare-metal and drill recovery, privacy/telemetry policy, security architecture, support, and milestone acceptance evidence.
