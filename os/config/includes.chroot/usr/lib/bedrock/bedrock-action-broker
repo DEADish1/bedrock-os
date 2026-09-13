@@ -215,14 +215,31 @@ def parse_request(raw):
         if not isinstance(backup_id, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", backup_id) or confirmation != f"CREATE ENCRYPTED BACKUP {backup_id}":
             raise RequestError("invalid-backup-create", "backup identity or exact confirmation is invalid")
         details = {"schema": 1, "id": backup_id, "operation": "create-staged", "confirmation": confirmation}
-    elif request.get("action") in {"storage-scrub", "storage-export", "storage-import"}:
-        if set(request) != {"schema", "request_id", "action", "id", "confirmation"}:
-            raise RequestError("invalid-request", "request fields do not match the storage operation schema")
-        storage_id, confirmation = request["id"], request["confirmation"]
+    elif request.get("action") in {"storage-scrub", "storage-export", "storage-import", "storage-create", "storage-expand", "storage-replace"}:
+        storage_id, confirmation = request.get("id"), request.get("confirmation")
         operation = request["action"].removeprefix("storage-")
-        if not isinstance(storage_id, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", storage_id) or confirmation != f"{operation.upper()} STORAGE {storage_id}":
+        if not isinstance(storage_id, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", storage_id) or not isinstance(confirmation, str):
             raise RequestError(f"invalid-storage-{operation}", "storage identity or exact confirmation is invalid")
-        details = {"schema": 1, "id": storage_id, "operation": operation, "confirmation": confirmation}
+        if operation in {"scrub", "export", "import"}:
+            if set(request) != {"schema", "request_id", "action", "id", "confirmation"} or confirmation != f"{operation.upper()} STORAGE {storage_id}":
+                raise RequestError(f"invalid-storage-{operation}", "storage identity or exact confirmation is invalid")
+            details = {"schema": 1, "id": storage_id, "operation": operation, "confirmation": confirmation}
+        elif operation in {"create", "expand"}:
+            expected = {"schema", "request_id", "action", "id", "disk_ids", "confirmation"} | ({"backend", "layout"} if operation == "create" else set())
+            disk_ids = request.get("disk_ids")
+            if set(request) != expected or not isinstance(disk_ids, list) or not 1 <= len(disk_ids) <= 24 or operation == "create" and len(disk_ids) < 2 or not all(isinstance(item, str) and re.fullmatch(r"disk-[0-9a-f]{20}", item) for item in disk_ids) or len(disk_ids) != len(set(disk_ids)) or confirmation != f"{operation.upper()} STORAGE {storage_id} USING {','.join(disk_ids)}":
+                raise RequestError(f"invalid-storage-{operation}", "storage disks or exact confirmation are invalid")
+            details = {"schema": 1, "id": storage_id, "operation": operation, "disk_ids": disk_ids, "confirmation": confirmation}
+            if operation == "create":
+                if request.get("backend") not in {"zfs", "mdraid"} or not isinstance(request.get("layout"), str) or not re.fullmatch(r"[a-z0-9]{1,16}", request["layout"]):
+                    raise RequestError("invalid-storage-create", "storage technology or layout is invalid")
+                details.update({"backend": request["backend"], "layout": request["layout"]})
+        else:
+            expected = {"schema", "request_id", "action", "id", "old_disk_id", "new_disk_id", "confirmation"}
+            old_disk, new_disk = request.get("old_disk_id"), request.get("new_disk_id")
+            if set(request) != expected or not all(isinstance(item, str) and re.fullmatch(r"disk-[0-9a-f]{20}", item) for item in (old_disk, new_disk)) or old_disk == new_disk or confirmation != f"REPLACE STORAGE {storage_id} MEMBER {old_disk} WITH {new_disk}":
+                raise RequestError("invalid-storage-replace", "storage replacement or exact confirmation is invalid")
+            details = {"schema": 1, "id": storage_id, "operation": operation, "old_disk_id": old_disk, "new_disk_id": new_disk, "confirmation": confirmation}
     elif request.get("action") == "nas-identity-create":
         if set(request) != {"schema", "request_id", "action", "id", "operation", "confirmation"}:
             raise RequestError("invalid-request", "request fields do not match the NAS identity schema")
@@ -616,7 +633,7 @@ def execute(raw, settings):
         if completed_code != 0:
             raise RequestError("action-failed", "guarded backup helper rejected the action")
         return response(request["request_id"], "succeeded", replayed=False)
-    if request["action"] in {"storage-scrub", "storage-export", "storage-import"}:
+    if request["action"] in {"storage-scrub", "storage-export", "storage-import", "storage-create", "storage-expand", "storage-replace"}:
         completed_code = execute_storage(request, details, settings, helper_environment)
         result_entry["status"] = "succeeded" if completed_code == 0 else "failed"
         save_state(settings["state"], state)

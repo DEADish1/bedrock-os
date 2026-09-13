@@ -13,5 +13,8 @@ EOF
 EOF
     exit 8
     ;;
+  /dev/sdc|/dev/sdd)
+    printf '%s\n' '{"smart_status":{"passed":true},"temperature":{"current":30},"power_on_time":{"hours":100},"power_mode":"ACTIVE"}'
+    ;;
   *) exit 2 ;;
 esac

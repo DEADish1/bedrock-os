@@ -1,12 +1,22 @@
 #!/bin/sh
-[ "$*" = "-J -b -d -o PATH,TYPE,SIZE,MODEL,SERIAL,TRAN" ] || exit 2
+if [ "$*" = "-s -n -p -o PATH -- /dev/sda1" ]; then
+  printf '%s\n' /dev/sda1 /dev/sda
+  exit 0
+fi
+if [ "$*" = "-n -p -o MOUNTPOINTS -- /dev/sda" ]; then printf '%s\n' /; exit 0; fi
+if [ "$*" = "-n -p -o MOUNTPOINTS -- /dev/sdb" ]; then exit 0; fi
+if [ "$*" = "-n -p -o MOUNTPOINTS -- /dev/sdc" ]; then exit 0; fi
+if [ "$*" = "-n -p -o MOUNTPOINTS -- /dev/sdd" ]; then exit 0; fi
+[ "$*" = "-J -b -d -o PATH,TYPE,SIZE,MODEL,SERIAL,WWN,TRAN,RM,RO,MOUNTPOINTS" ] || exit 2
 if [ "${BEDROCK_STORAGE_UNSAFE_FIXTURE:-0}" = 1 ]; then
-  printf '%s\n' '{"blockdevices":[{"path":"/dev/sda;unsafe","type":"disk","size":1,"model":"Unsafe","serial":null,"tran":"sata"}]}'
+  printf '%s\n' '{"blockdevices":[{"path":"/dev/sda;unsafe","type":"disk","size":1,"model":"Unsafe","serial":null,"wwn":null,"tran":"sata","rm":false,"ro":false,"mountpoints":[]}]}'
   exit 0
 fi
 cat <<'EOF'
 {"blockdevices":[
-  {"path":"/dev/sda","type":"disk","size":1000000000000,"model":"Bedrock SSD","serial":"SAFE-001","tran":"sata"},
-  {"path":"/dev/sdb","type":"disk","size":2000000000000,"model":"Archive Disk","serial":"WARN-002","tran":"sas"}
+  {"path":"/dev/sda","type":"disk","size":1000000000000,"model":"Bedrock SSD","serial":"SAFE-001","wwn":"0x5000c50000000001","tran":"sata","rm":false,"ro":false,"mountpoints":["/"]},
+  {"path":"/dev/sdb","type":"disk","size":2000000000000,"model":"Archive Disk","serial":"WARN-002","wwn":"0x5000c50000000002","tran":"sas","rm":false,"ro":false,"mountpoints":[]},
+  {"path":"/dev/sdc","type":"disk","size":2000000000000,"model":"Managed Disk","serial":"SAFE-003","wwn":"0x5000c50000000003","tran":"sata","rm":false,"ro":false,"mountpoints":[]},
+  {"path":"/dev/sdd","type":"disk","size":2000000000000,"model":"New Disk","serial":"SAFE-004","wwn":"0x5000c50000000004","tran":"sata","rm":false,"ro":false,"mountpoints":[]}
 ]}
 EOF

@@ -8,37 +8,100 @@ fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
 [ -f "$request" ] && [ ! -L "$request" ] || fail "storage request is missing or indirect"
 command -v jq >/dev/null 2>&1 || fail "jq is required"
 jq -e '
-  (keys|sort)==(["confirmation","id","operation","schema"]|sort) and .schema==1 and
-  (.operation=="scrub" or .operation=="export" or .operation=="import") and
+  .schema==1 and (.operation=="scrub" or .operation=="export" or .operation=="import" or
+    .operation=="create" or .operation=="expand" or .operation=="replace") and
   (.id|type=="string" and test("^[a-z][a-z0-9_-]{0,31}$")) and
-  .confirmation==((.operation|ascii_upcase)+" STORAGE "+.id)
-' "$request" >/dev/null || fail "storage request or exact confirmation is invalid"
+  (.confirmation|type=="string" and length<=4096 and (test("[\\r\\n]")|not))
+' "$request" >/dev/null || fail "storage request is invalid"
 id=$(jq -r .id "$request" | tr -d '\r')
 operation=$(jq -r .operation "$request" | tr -d '\r')
+case "$operation" in
+  scrub|export|import)
+    jq -e '(keys|sort)==(["confirmation","id","operation","schema"]|sort) and .confirmation==((.operation|ascii_upcase)+" STORAGE "+.id)' "$request" >/dev/null || fail "storage request or exact confirmation is invalid"
+    ;;
+  create)
+    jq -e '(keys|sort)==(["backend","confirmation","disk_ids","id","layout","operation","schema"]|sort) and
+      (.backend=="zfs" or .backend=="mdraid") and (.layout|type=="string" and length<=16) and
+      (.disk_ids|type=="array" and length>=2 and length<=24 and length==(unique|length)) and
+      all(.disk_ids[];type=="string" and test("^disk-[0-9a-f]{20}$")) and
+      .confirmation==("CREATE STORAGE "+.id+" USING "+(.disk_ids|join(",")))' "$request" >/dev/null || fail "storage create request or exact confirmation is invalid"
+    ;;
+  expand)
+    jq -e '(keys|sort)==(["confirmation","disk_ids","id","operation","schema"]|sort) and
+      (.disk_ids|type=="array" and length>=1 and length<=24 and length==(unique|length)) and
+      all(.disk_ids[];type=="string" and test("^disk-[0-9a-f]{20}$")) and
+      .confirmation==("EXPAND STORAGE "+.id+" USING "+(.disk_ids|join(",")))' "$request" >/dev/null || fail "storage expansion request or exact confirmation is invalid"
+    ;;
+  replace)
+    jq -e '(keys|sort)==(["confirmation","id","new_disk_id","old_disk_id","operation","schema"]|sort) and
+      (.old_disk_id|type=="string" and test("^disk-[0-9a-f]{20}$")) and
+      (.new_disk_id|type=="string" and test("^disk-[0-9a-f]{20}$")) and .old_disk_id!=.new_disk_id and
+      .confirmation==("REPLACE STORAGE "+.id+" MEMBER "+.old_disk_id+" WITH "+.new_disk_id)' "$request" >/dev/null || fail "storage replacement request or exact confirmation is invalid"
+    ;;
+esac
 if [ "${BEDROCK_STORAGE_ACTION_TEST_MODE:-0}" = 1 ]; then
   manager=${BEDROCK_STORAGE_ACTION_MANAGER:?test mode requires BEDROCK_STORAGE_ACTION_MANAGER}
   state=${BEDROCK_STORAGE_ACTION_STATE:?test mode requires BEDROCK_STORAGE_ACTION_STATE}
   output=${BEDROCK_STORAGE_ACTION_OUTPUT:?test mode requires BEDROCK_STORAGE_ACTION_OUTPUT}
+  candidates=${BEDROCK_STORAGE_ACTION_CANDIDATES:-}
 else
   [ "$(id -u)" -eq 0 ] || fail "storage action requires root"
   [ "$request" = "/var/lib/bedrock/storage/requests/$id-$operation.json" ] || fail "storage request path is not identity-bound"
   manager=/usr/sbin/bedrock-storage
   state=/var/lib/bedrock/storage/resources.json
   output=/var/lib/bedrock/storage/requests/$id-$operation-operation.json
+  candidates=/var/lib/bedrock/storage/candidates.json
 fi
 [ -x "$manager" ] && [ ! -L "$manager" ] || fail "storage manager is unavailable or indirect"
-[ -s "$state" ] && [ ! -L "$state" ] || fail "managed storage state is unavailable or indirect"
-jq -e --arg id "$id" '
-  .schema==1 and (.pools|type=="array") and
-  ([.pools[]|select(.name==$id and (.backend=="zfs" or .backend=="mdraid") and (.layout|type=="string" and length<=16))]|length)==1
-' "$state" >/dev/null || fail "managed storage identity is unavailable"
+[ "$operation" = create ] || { [ -s "$state" ] && [ ! -L "$state" ] || fail "managed storage state is unavailable or indirect"; }
+if [ -s "$state" ]; then
+  [ ! -L "$state" ] && jq -e '.schema==1 and (.pools|type=="array")' "$state" >/dev/null || fail "managed storage state is unsafe"
+fi
+if [ "$operation" != create ]; then
+  jq -e --arg id "$id" '([.pools[]|select(.name==$id and (.backend=="zfs" or .backend=="mdraid") and (.layout|type=="string" and length<=16))]|length)==1' "$state" >/dev/null || fail "managed storage identity is unavailable"
+fi
 [ ! -e "$output" ] && [ ! -L "$output" ] || fail "storage operation request already exists"
 temporary=$(mktemp "$(dirname "$output")/.storage-operation.XXXXXX")
 cleanup() { rm -f "$temporary" "$output"; }
 trap cleanup EXIT INT TERM
-jq -S -n --arg id "$id" --arg action "$operation" --arg backend "$(jq -r --arg id "$id" '.pools[]|select(.name==$id)|.backend' "$state")" \
-  --arg layout "$(jq -r --arg id "$id" '.pools[]|select(.name==$id)|.layout' "$state")" \
-  '{schema:1,action:$action,backend:$backend,name:$id,pool:$id,layout:$layout,devices:[],confirmation:(($action|ascii_upcase)+" — "+$id)}' > "$temporary"
+if [ "$operation" = create ] || [ "$operation" = expand ] || [ "$operation" = replace ]; then
+  if [ "${BEDROCK_STORAGE_ACTION_TEST_MODE:-0}" != 1 ]; then /usr/lib/bedrock/collect-storage-health >/dev/null; fi
+  [ -n "$candidates" ] && [ -s "$candidates" ] && [ ! -L "$candidates" ] || fail "fresh storage candidates are unavailable"
+  jq -e '.schema==1 and (.generated_unix|type=="number" and floor==.) and (.disks|type=="array" and length<=256) and
+    ([.disks[].id]|length==(unique|length)) and all(.disks[];(keys|sort)==(["eligible","health","id","model","path","reason","size_bytes","transport"]|sort) and
+      (.id|type=="string" and test("^disk-[0-9a-f]{20}$")) and (.path|type=="string" and test("^/dev/[A-Za-z0-9._/-]+$") and (test("(^|/)\\.\\.(/|$)")|not)) and (.eligible|type=="boolean"))' "$candidates" >/dev/null || fail "storage candidate map is invalid"
+  case "$operation" in
+    create|expand) ids=$(jq -c .disk_ids "$request") ;;
+    replace) ids=$(jq -c '[.old_disk_id,.new_disk_id]' "$request") ;;
+  esac
+  paths=$(jq -c --argjson ids "$ids" '[ $ids[] as $id | .disks[] | select(.id==$id) | .path ]' "$candidates")
+  [ "$(printf '%s' "$paths" | jq length)" -eq "$(printf '%s' "$ids" | jq length)" ] || fail "a selected disk identity is unavailable"
+  case "$operation" in
+    create|expand)
+      jq -e --argjson ids "$ids" '. as $root|all($ids[];. as $id|any($root.disks[];.id==$id and .eligible==true and .reason=="available" and .health=="healthy"))' "$candidates" >/dev/null || fail "every new storage disk must still be eligible and healthy"
+      ;;
+    replace)
+      old=$(printf '%s' "$paths" | jq -r '.[0]'); new=$(printf '%s' "$paths" | jq -r '.[1]')
+      jq -e --arg id "$(jq -r .new_disk_id "$request")" 'any(.disks[];.id==$id and .eligible==true and .reason=="available" and .health=="healthy")' "$candidates" >/dev/null || fail "replacement disk must still be eligible and healthy"
+      jq -e --arg pool "$id" --arg old "$old" '. as $root|any($root.pools[]|select(.name==$pool)|.devices[];.==$old)' "$state" >/dev/null || fail "old disk is not a member of the selected storage"
+      ;;
+  esac
+fi
+if [ "$operation" = create ]; then
+  backend=$(jq -r .backend "$request"); layout=$(jq -r .layout "$request")
+else
+  backend=$(jq -r --arg id "$id" '.pools[]|select(.name==$id)|.backend' "$state")
+  layout=$(jq -r --arg id "$id" '.pools[]|select(.name==$id)|.layout' "$state")
+fi
+case "$operation" in
+  scrub|export|import) devices='[]'; manager_confirmation="$(printf '%s' "$operation" | tr '[:lower:]' '[:upper:]') — $id" ;;
+  create) devices=$paths; manager_confirmation="ERASE AND CREATE — $id — $backend $layout — $(printf '%s' "$paths" | jq -r 'join(", ")')" ;;
+  expand) devices=$paths; manager_confirmation="EXPAND — $id — $(printf '%s' "$paths" | jq -r 'join(", ")')" ;;
+  replace) devices=$paths; manager_confirmation="REPLACE — $id — $(printf '%s' "$paths" | jq -r 'join(", ")')" ;;
+esac
+jq -S -n --arg id "$id" --arg action "$operation" --arg backend "$backend" --arg layout "$layout" \
+  --arg confirmation "$manager_confirmation" --argjson devices "$devices" \
+  '{schema:1,action:$action,backend:$backend,name:$id,pool:$id,layout:$layout,devices:$devices,confirmation:$confirmation}' > "$temporary"
 chmod 0600 "$temporary"; mv "$temporary" "$output"; temporary=
-if [ "${BEDROCK_STORAGE_ACTION_TEST_MODE:-0}" = 1 ]; then "$manager" "$output"; else "$manager" apply "$output"; fi
+if [ "${BEDROCK_STORAGE_ACTION_TEST_MODE:-0}" = 1 ]; then "$manager" "$output"; else "$manager" apply "$output"; /usr/lib/bedrock/collect-storage-health >/dev/null; fi
 trap - EXIT INT TERM; rm -f "$output"

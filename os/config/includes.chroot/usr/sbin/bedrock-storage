@@ -267,7 +267,8 @@ temporary=
 # managed summary from the same durable state and publish with an atomic rename.
 health=$directory/health.json
 if [ -f "$health" ] && [ ! -L "$health" ] && jq -e '.schema==1 and has("managed_pools")' "$health" >/dev/null 2>&1; then
-  managed=$(jq -c '[.pools[]|{name,backend,layout,state}]|sort_by(.name)' "$state")
+  # The periodic collector owns opaque member identities; preserve them until its immediate post-operation refresh.
+  managed=$(jq -c --argjson current "$(jq '.managed_pools' "$health")" '[.pools[]|. as $pool|{name,backend,layout,state,members:([$current[]|select(.name==$pool.name)|.members][0]//[])}]|sort_by(.name)' "$state")
   health_temporary=$(mktemp "$directory/.storage-health-state.XXXXXX")
   if jq --argjson managed "$managed" '.managed_pools=$managed' "$health" > "$health_temporary"; then
     chmod 0644 "$health_temporary"; mv "$health_temporary" "$health"

@@ -10,6 +10,8 @@ if [ "${BEDROCK_STORAGE_TEST_MODE:-0}" = 1 ]; then
   PATH=${BEDROCK_STORAGE_TEST_PATH:?test mode requires BEDROCK_STORAGE_TEST_PATH}:/usr/bin:/bin
   now=${BEDROCK_STORAGE_TEST_NOW:-0}
   resources=${BEDROCK_STORAGE_TEST_RESOURCES:-/nonexistent/bedrock-storage-resources.json}
+  candidates=${BEDROCK_STORAGE_TEST_CANDIDATES:-$(dirname -- "$output")/candidates.json}
+  candidate_key=${BEDROCK_STORAGE_TEST_CANDIDATE_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
 else
   [ "$#" -eq 0 ] || { printf 'usage: %s\n' "$0" >&2; exit 2; }
   [ "$(id -u)" -eq 0 ] || { printf 'error: storage health collection requires root\n' >&2; exit 1; }
@@ -18,15 +20,34 @@ else
   PATH=/usr/sbin:/usr/bin:/sbin:/bin
   now=$(date +%s)
   resources=/var/lib/bedrock/storage/resources.json
+  candidates=/var/lib/bedrock/storage/candidates.json
+  candidate_key_file=/var/lib/bedrock/storage/candidate-key
 fi
 export PATH
 
-for tool in jq lsblk smartctl; do
+for tool in cut findmnt head jq ln lsblk od readlink sha256sum smartctl; do
   command -v "$tool" >/dev/null 2>&1 || {
     printf 'error: storage health collection requires %s\n' "$tool" >&2
     exit 2
   }
 done
+
+directory=$(dirname -- "$output")
+mkdir -p "$directory"
+if [ "${BEDROCK_STORAGE_TEST_MODE:-0}" != 1 ]; then
+  if [ ! -e "$candidate_key_file" ]; then
+    umask 077
+    key_temporary=$(mktemp "$directory/.candidate-key.XXXXXX")
+    head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$key_temporary"
+    chmod 0600 "$key_temporary"
+    # A hard-link create is atomic and never replaces a key won by a concurrent collector.
+    ln "$key_temporary" "$candidate_key_file" 2>/dev/null || true
+    rm -f "$key_temporary"
+  fi
+  [ -f "$candidate_key_file" ] && [ ! -L "$candidate_key_file" ] || { printf 'error: storage candidate key is unsafe\n' >&2; exit 1; }
+  candidate_key=$(tr -d '\r\n' < "$candidate_key_file")
+fi
+printf '%s' "$candidate_key" | grep -Eq '^[0-9a-f]{64}$' || { printf 'error: storage candidate key is invalid\n' >&2; exit 1; }
 
 work=$(mktemp -d)
 temporary=
@@ -36,13 +57,43 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-lsblk -J -b -d -o PATH,TYPE,SIZE,MODEL,SERIAL,TRAN > "$work/lsblk.json"
+lsblk -J -b -d -o PATH,TYPE,SIZE,MODEL,SERIAL,WWN,TRAN,RM,RO,MOUNTPOINTS > "$work/lsblk.json"
 jq -e '.blockdevices | type == "array"' "$work/lsblk.json" >/dev/null || {
   printf 'error: block-device inventory is invalid\n' >&2
   exit 1
 }
 
+managed_members='[]'
+if [ -e "$resources" ]; then
+  [ -f "$resources" ] && [ ! -L "$resources" ] && [ "$(wc -c < "$resources" | tr -d ' ')" -le 1048576 ] || {
+    printf 'error: managed storage state is unsafe\n' >&2; exit 1
+  }
+  jq -e '
+    .schema==1 and (.pools|type=="array" and length<=128) and
+    ([.pools[].name]|length==(unique|length)) and all(.pools[];
+      (.name|type=="string" and test("^[a-z][a-z0-9_-]{0,31}$")) and
+      (.backend=="zfs" or .backend=="mdraid") and
+      (.layout|type=="string" and length<=16) and
+      (.devices|type=="array" and length<=24 and length==(unique|length) and all(.[];type=="string" and test("^/dev/[A-Za-z0-9._/-]+$") and (test("(^|/)\\.\\.(/|$)")|not))) and
+      (.state=="online" or .state=="degraded" or .state=="rebuilding" or .state=="exported"))
+  ' "$resources" >/dev/null || { printf 'error: managed storage state is invalid\n' >&2; exit 1; }
+  jq -r '.pools[]|.name as $pool|.devices[]|[$pool,.]|@tsv' "$resources" > "$work/managed-members.tsv"
+  while IFS="$(printf '\t')" read -r managed_pool managed_path; do
+    [ -n "$managed_path" ] || continue
+    resolved_path=$(readlink -f -- "$managed_path" 2>/dev/null || printf '%s' "$managed_path")
+    managed_members=$(printf '%s' "$managed_members" | jq -c --arg pool "$managed_pool" --arg path "$resolved_path" '.+[{pool:$pool,path:$path}]')
+  done < "$work/managed-members.tsv"
+fi
+
+system_source=$(findmnt -n -o SOURCE / 2>/dev/null || true)
+system_ancestors=''
+[ -z "$system_source" ] || system_ancestors=$(lsblk -s -n -p -o PATH -- "$system_source" 2>/dev/null || true)
+if [ "${BEDROCK_STORAGE_TEST_MODE:-0}" != 1 ] && { [ -z "$system_source" ] || [ -z "$system_ancestors" ]; }; then
+  printf 'error: cannot identify the running system disk for storage eligibility\n' >&2
+  exit 1
+fi
 disks='[]'
+candidate_rows='[]'
 jq -c '.blockdevices[] | select(.type == "disk")' "$work/lsblk.json" > "$work/disks.jsonl"
 while IFS= read -r disk; do
   path=$(printf '%s' "$disk" | jq -r .path)
@@ -70,6 +121,39 @@ while IFS= read -r disk; do
     smart=$(jq -n -c --argjson smart_exit "$smart_exit" \
       '{available:false,passed:null,temperature_c:null,power_on_hours:null,power_mode:"unknown",command_exit:$smart_exit,health:"unknown"}')
   fi
+  disk_serial=$(printf '%s' "$disk" | jq -r '.serial // ""')
+  disk_wwn=$(printf '%s' "$disk" | jq -r '.wwn // ""')
+  if [ -n "$disk_wwn" ]; then
+    identity_material="wwn:$disk_wwn"
+  elif [ -n "$disk_serial" ]; then
+    identity_material=$(printf 'serial:%s\nmodel:%s\nsize:%s' "$disk_serial" "$(printf '%s' "$disk" | jq -r '.model // "unknown"')" "$(printf '%s' "$disk" | jq -r .size)")
+  else
+    identity_material="path:$path"
+  fi
+  candidate_id="disk-$(printf '%s\n%s' "$candidate_key" "$identity_material" | sha256sum | cut -c1-20)"
+  removable=$(printf '%s' "$disk" | jq -r '(.rm // false) | if . == true or . == 1 then "true" else "false" end')
+  read_only=$(printf '%s' "$disk" | jq -r '(.ro // false) | if . == true or . == 1 then "true" else "false" end')
+  mounted=$(printf '%s' "$disk" | jq -r '(.mountpoints // []) | if type=="array" then any(.[]; . != null and . != "") elif type=="string" then . != "" else false end')
+  if lsblk -n -p -o MOUNTPOINTS -- "$path" 2>/dev/null | grep -Eq '[^[:space:]]'; then mounted=true; fi
+  system=false
+  if printf '%s\n' "$system_ancestors" | grep -Fx -- "$path" >/dev/null 2>&1; then system=true; fi
+  in_use=false
+  if printf '%s' "$managed_members" | jq -e --arg path "$path" 'any(.[];.path==$path)' >/dev/null 2>&1; then in_use=true; fi
+  health=$(printf '%s' "$smart" | jq -r .health)
+  size=$(printf '%s' "$disk" | jq .size)
+  eligible=true reason=available
+  if [ "$system" = true ]; then eligible=false reason=system
+  elif [ "$removable" = true ]; then eligible=false reason=removable
+  elif [ "$mounted" = true ]; then eligible=false reason=mounted
+  elif [ "$read_only" = true ]; then eligible=false reason=read-only
+  elif [ "$in_use" = true ]; then eligible=false reason=managed
+  elif [ "$size" -lt 68719476736 ]; then eligible=false reason=too-small
+  elif [ "$health" = failing ]; then eligible=false reason=failing
+  elif [ "$health" != healthy ]; then eligible=false reason=health-unknown
+  fi
+  candidate_rows=$(printf '%s' "$candidate_rows" | jq -c --arg id "$candidate_id" --arg path "$path" --argjson disk "$disk" \
+    --arg health "$health" --argjson eligible "$eligible" --arg reason "$reason" \
+    '. + [{id:$id,path:$path,model:((($disk.model//"unknown")|gsub("^[[:space:]]+|[[:space:]]+$";"")) as $model|if $model=="" then "unknown" else $model end),size_bytes:$disk.size,transport:($disk.tran//"unknown"),health:$health,eligible:$eligible,reason:$reason}]')
   disks=$(printf '%s' "$disks" | jq -c --argjson disk "$disk" --argjson smart "$smart" '
     . + [{path:$disk.path,size_bytes:$disk.size,
           model:(($disk.model // "unknown") | gsub("^[[:space:]]+|[[:space:]]+$";"")),
@@ -77,6 +161,17 @@ while IFS= read -r disk; do
           transport:($disk.tran // "unknown"),smart:$smart}]
   ')
 done < "$work/disks.jsonl"
+
+printf '%s' "$candidate_rows" | jq -e '([.[].id]|length)==([.[].id]|unique|length)' >/dev/null || { printf 'error: duplicate opaque disk identity\n' >&2; exit 1; }
+
+[ ! -L "$candidates" ] || { printf 'error: storage candidate map cannot be a symbolic link\n' >&2; exit 1; }
+mkdir -p "$(dirname -- "$candidates")"
+temporary=$(mktemp "$(dirname -- "$candidates")/.storage-candidates.XXXXXX")
+printf '%s' "$candidate_rows" | jq -S --argjson generated_unix "$now" '{schema:1,generated_unix:$generated_unix,disks:.}' > "$temporary"
+chmod 0600 "$temporary"
+mv "$temporary" "$candidates"
+temporary=
+safe_candidates=$(printf '%s' "$candidate_rows" | jq -c 'map(del(.path))')
 
 md_arrays='[]'
 if [ -r "$proc_root/mdstat" ]; then
@@ -139,18 +234,7 @@ fi
 
 managed_pools='[]'
 if [ -e "$resources" ]; then
-  [ -f "$resources" ] && [ ! -L "$resources" ] && [ "$(wc -c < "$resources" | tr -d ' ')" -le 1048576 ] || {
-    printf 'error: managed storage state is unsafe\n' >&2; exit 1
-  }
-  jq -e '
-    .schema==1 and (.pools|type=="array" and length<=128) and
-    ([.pools[].name]|length==(unique|length)) and all(.pools[];
-      (.name|type=="string" and test("^[a-z][a-z0-9_-]{0,31}$")) and
-      (.backend=="zfs" or .backend=="mdraid") and
-      (.layout|type=="string" and length<=16) and
-      (.state=="online" or .state=="degraded" or .state=="rebuilding" or .state=="exported"))
-  ' "$resources" >/dev/null || { printf 'error: managed storage state is invalid\n' >&2; exit 1; }
-  managed_pools=$(jq -c '[.pools[]|{name,backend,layout,state}]|sort_by(.name)' "$resources")
+  managed_pools=$(jq -c --argjson candidates "$candidate_rows" --argjson members "$managed_members" '[.pools[]|. as $pool|{name,backend,layout,state,members:[$members[]|select(.pool==$pool.name).path as $path|$candidates[]|select(.path==$path)|.id]}]|sort_by(.name)' "$resources")
 fi
 
 hardware_controllers='[]'
@@ -214,17 +298,16 @@ elif [ "$(printf '%s' "$vendor_reports" | jq 'length')" -gt 0 ] &&
   overall=healthy
 fi
 
-directory=$(dirname -- "$output")
-mkdir -p "$directory"
 [ ! -L "$output" ] || { printf 'error: storage health output cannot be a symbolic link\n' >&2; exit 1; }
 temporary=$(mktemp "$directory/.storage-health.XXXXXX")
 jq -S -n --argjson generated_unix "$now" --arg overall "$overall" \
   --argjson disks "$disks" --argjson md_arrays "$md_arrays" \
   --argjson zfs_available "$zfs_available" --argjson zfs_pools "$zfs_pools" \
   --argjson managed_pools "$managed_pools" \
+  --argjson disk_candidates "$safe_candidates" \
   --argjson hardware_controllers "$hardware_controllers" --argjson management_tools "$management_tools" \
   --argjson vendor_reports "$vendor_reports" \
-  '{schema:1,generated_unix:$generated_unix,overall:$overall,read_only:true,disks:$disks,managed_pools:$managed_pools,
+  '{schema:1,generated_unix:$generated_unix,overall:$overall,read_only:true,disks:$disks,disk_candidates:$disk_candidates,managed_pools:$managed_pools,
     software_raid:{md_arrays:$md_arrays,zfs:{available:$zfs_available,pools:$zfs_pools}},
     hardware_raid:{controllers:$hardware_controllers,management_tools:$management_tools,vendor_reports:$vendor_reports,
       explanation:(if ($vendor_reports|length)>0 then
@@ -233,4 +316,4 @@ jq -S -n --argjson generated_unix "$now" --arg overall "$overall" \
 chmod 0644 "$temporary"
 mv "$temporary" "$output"
 temporary=
-printf 'BEDROCK_STORAGE_HEALTH_READY path=%s overall=%s\n' "$output" "$overall" > /dev/console 2>/dev/null || true
+if [ -w /dev/console ]; then printf 'BEDROCK_STORAGE_HEALTH_READY path=%s overall=%s\n' "$output" "$overall" > /dev/console 2>/dev/null || true; fi

@@ -377,10 +377,32 @@ def backup_create_action(request_id: str, backup_id: str, body: object) -> dict:
                          "confirmation": body["confirmation"]})
 
 def storage_action(request_id: str, storage_id: str, operation: str, body: object) -> dict:
-    if operation not in {"scrub", "export", "import"} or not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", storage_id) or not isinstance(body, dict) or set(body) != {"schema", "confirmation"} or body.get("schema") != 1 or not isinstance(body["confirmation"], str) or not hmac.compare_digest(body["confirmation"], f"{operation.upper()} STORAGE {storage_id}"):
+    if operation not in {"scrub", "export", "import", "create", "expand", "replace"} or not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", storage_id) or not isinstance(body, dict) or body.get("schema") != 1:
         raise ValueError("invalid storage operation")
+    if operation in {"scrub", "export", "import"}:
+        expected_fields, expected = {"schema", "confirmation"}, f"{operation.upper()} STORAGE {storage_id}"
+        payload = {}
+    elif operation in {"create", "expand"}:
+        expected_fields = {"schema", "disk_ids", "confirmation"} | ({"id", "backend", "layout"} if operation == "create" else set())
+        disk_ids = body.get("disk_ids")
+        if not isinstance(disk_ids, list) or not 1 <= len(disk_ids) <= 24 or operation == "create" and len(disk_ids) < 2 or not all(isinstance(item, str) and re.fullmatch(r"disk-[0-9a-f]{20}", item) for item in disk_ids) or len(disk_ids) != len(set(disk_ids)):
+            raise ValueError("invalid storage disks")
+        if operation == "create" and (body.get("id") != storage_id or body.get("backend") not in {"zfs", "mdraid"} or not isinstance(body.get("layout"), str) or not re.fullmatch(r"[a-z0-9]{1,16}", body["layout"])):
+            raise ValueError("invalid storage create")
+        expected = f"{operation.upper()} STORAGE {storage_id} USING {','.join(disk_ids)}"
+        payload = {"disk_ids": disk_ids}
+        if operation == "create": payload.update({"backend": body["backend"], "layout": body["layout"]})
+    else:
+        expected_fields = {"schema", "old_disk_id", "new_disk_id", "confirmation"}
+        old_disk, new_disk = body.get("old_disk_id"), body.get("new_disk_id")
+        if not all(isinstance(item, str) and re.fullmatch(r"disk-[0-9a-f]{20}", item) for item in (old_disk, new_disk)) or old_disk == new_disk:
+            raise ValueError("invalid storage replacement")
+        expected = f"REPLACE STORAGE {storage_id} MEMBER {old_disk} WITH {new_disk}"
+        payload = {"old_disk_id": old_disk, "new_disk_id": new_disk}
+    if set(body) != expected_fields or not isinstance(body.get("confirmation"), str) or not hmac.compare_digest(body["confirmation"], expected):
+        raise ValueError("invalid storage confirmation")
     return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": f"storage-{operation}", "id": storage_id,
-                         "confirmation": body["confirmation"]})
+                         **payload, "confirmation": body["confirmation"]})
 
 def nas_identity_create_action(request_id: str, body: object) -> dict:
     if not isinstance(body, dict) or set(body) != {"schema", "kind", "name", "confirmation"} or body.get("schema") != 1 or body.get("kind") not in {"user", "group"} or not isinstance(body.get("name"), str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", body["name"]):
@@ -679,20 +701,31 @@ def image_feed() -> dict:
 
 def storage_feed() -> dict:
     value = regular_json(STORAGE, 1048576)
-    expected = {"schema", "generated_unix", "overall", "read_only", "disks", "managed_pools", "software_raid", "hardware_raid"}
+    expected = {"schema", "generated_unix", "overall", "read_only", "disks", "disk_candidates", "managed_pools", "software_raid", "hardware_raid"}
     if not isinstance(value, dict) or set(value) != expected or value["schema"] != 1 or type(value["generated_unix"]) is not int or value["generated_unix"] < 0 or value["overall"] not in {"healthy", "attention", "limited"} or value["read_only"] is not True:
         raise ValueError("invalid storage status")
     disks = value["disks"]
     if not isinstance(disks, list) or len(disks) > 256:
         raise ValueError("invalid disk status")
+    candidates = value["disk_candidates"]
+    if not isinstance(candidates, list) or len(candidates) > 256:
+        raise ValueError("invalid storage candidates")
+    safe_candidates = []
+    candidate_fields = {"id", "model", "size_bytes", "transport", "health", "eligible", "reason"}
+    for item in candidates:
+        if not isinstance(item, dict) or set(item) != candidate_fields or not re.fullmatch(r"disk-[0-9a-f]{20}", bounded_string(item.get("id"), 25)) or not 1 <= len(bounded_string(item.get("model"), 160)) <= 160 or type(item.get("size_bytes")) is not int or item["size_bytes"] < 1 or item.get("health") not in {"healthy", "failing", "standby", "unknown"} or type(item.get("eligible")) is not bool or item.get("reason") not in {"available", "system", "removable", "mounted", "read-only", "managed", "too-small", "failing", "health-unknown"} or (item["eligible"] is not (item["reason"] == "available")) or (item["eligible"] and item["health"] != "healthy"):
+            raise ValueError("invalid storage candidate")
+        safe_candidates.append({"id": item["id"], "model": item["model"], "size_bytes": item["size_bytes"], "transport": bounded_string(item.get("transport"), 32), "health": item["health"], "eligible": item["eligible"], "reason": item["reason"]})
+    if len({item["id"] for item in safe_candidates}) != len(safe_candidates):
+        raise ValueError("duplicate storage candidate")
     managed_pools = value["managed_pools"]
     if not isinstance(managed_pools, list) or len(managed_pools) > 128:
         raise ValueError("invalid managed storage status")
     safe_managed = []
     for item in managed_pools:
-        if not isinstance(item, dict) or set(item) != {"name", "backend", "layout", "state"} or not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", bounded_string(item.get("name"), 32)) or item.get("backend") not in {"zfs", "mdraid"} or item.get("state") not in {"online", "degraded", "rebuilding", "exported"}:
+        if not isinstance(item, dict) or set(item) != {"name", "backend", "layout", "state", "members"} or not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", bounded_string(item.get("name"), 32)) or item.get("backend") not in {"zfs", "mdraid"} or item.get("state") not in {"online", "degraded", "rebuilding", "exported"} or not isinstance(item.get("members"), list) or len(item["members"]) > 24 or not all(isinstance(member, str) and re.fullmatch(r"disk-[0-9a-f]{20}", member) for member in item["members"]) or len(item["members"]) != len(set(item["members"])):
             raise ValueError("invalid managed storage group")
-        safe_managed.append({"name": item["name"], "backend": item["backend"], "layout": bounded_string(item.get("layout"), 16), "state": item["state"]})
+        safe_managed.append({"name": item["name"], "backend": item["backend"], "layout": bounded_string(item.get("layout"), 16), "state": item["state"], "members": item["members"]})
     if len({item["name"] for item in safe_managed}) != len(safe_managed):
         raise ValueError("duplicate managed storage group")
     safe_disks = []
@@ -731,7 +764,7 @@ def storage_feed() -> dict:
     for report in hardware["vendor_reports"]:
         if not isinstance(report, dict) or type(report.get("healthy")) is not bool or not all(isinstance(report.get(key), list) and len(report[key]) <= 256 for key in ("physical_drives", "logical_volumes", "cache_protection")):
             raise ValueError("invalid hardware RAID report")
-    return {"schema": 1, "generated_unix": value["generated_unix"], "overall": value["overall"], "disks": safe_disks, "managed_pools": safe_managed, "software_raid": {"md_arrays": md_arrays, "zfs": {"available": software["zfs"]["available"], "pools": zfs_pools}}, "hardware_raid": {"controller_count": len(hardware["controllers"]), "full_visibility_count": len(hardware["vendor_reports"]), "attention_count": sum(report["healthy"] is False for report in hardware["vendor_reports"])}}
+    return {"schema": 1, "generated_unix": value["generated_unix"], "overall": value["overall"], "disks": safe_disks, "disk_candidates": safe_candidates, "managed_pools": safe_managed, "software_raid": {"md_arrays": md_arrays, "zfs": {"available": software["zfs"]["available"], "pools": zfs_pools}}, "hardware_raid": {"controller_count": len(hardware["controllers"]), "full_visibility_count": len(hardware["vendor_reports"]), "attention_count": sum(report["healthy"] is False for report in hardware["vendor_reports"])}}
 
 def settings_feed() -> dict:
     try:
@@ -918,6 +951,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(401, {"schema": 1, "error": "unauthorized"})
             return
         create = self.path == "/api/v1/vms"
+        storage_create = self.path == "/api/v1/storage"
         nas_identity_create = self.path == "/api/v1/users"
         power = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/power", self.path)
         snapshots = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/snapshots", self.path)
@@ -936,12 +970,14 @@ class Handler(BaseHTTPRequestHandler):
         storage_scrub = re.fullmatch(r"/api/v1/storage/([a-z][a-z0-9_-]{0,31})/scrub", self.path)
         storage_export = re.fullmatch(r"/api/v1/storage/([a-z][a-z0-9_-]{0,31})/export", self.path)
         storage_import = re.fullmatch(r"/api/v1/storage/([a-z][a-z0-9_-]{0,31})/import", self.path)
+        storage_expand = re.fullmatch(r"/api/v1/storage/([a-z][a-z0-9_-]{0,31})/expand", self.path)
+        storage_replace = re.fullmatch(r"/api/v1/storage/([a-z][a-z0-9_-]{0,31})/replace", self.path)
         nas_membership_add = re.fullmatch(r"/api/v1/groups/([a-z][a-z0-9_-]{0,31})/members", self.path)
         nas_credential_rotate = re.fullmatch(r"/api/v1/users/([a-z][a-z0-9_-]{0,31})/rotate-credential", self.path)
         app_control = re.fullmatch(r"/api/v1/apps/([a-z][a-z0-9-]{0,31})/power", self.path)
         app_update = re.fullmatch(r"/api/v1/apps/([a-z][a-z0-9-]{0,31})/update", self.path)
         app_install = re.fullmatch(r"/api/v1/apps/([a-z][a-z0-9-]{0,31})/install", self.path)
-        if not create and not nas_identity_create and not power and not snapshots and not clone and not resources and not images and not networks and not passthrough and not remote_device and not pairing_approval and not image_conversion and not image_import and not backup_run and not backup_restore_latest and not backup_create and not storage_scrub and not storage_export and not storage_import and not nas_membership_add and not nas_credential_rotate and not app_control and not app_update and not app_install:
+        if not create and not storage_create and not nas_identity_create and not power and not snapshots and not clone and not resources and not images and not networks and not passthrough and not remote_device and not pairing_approval and not image_conversion and not image_import and not backup_run and not backup_restore_latest and not backup_create and not storage_scrub and not storage_export and not storage_import and not storage_expand and not storage_replace and not nas_membership_add and not nas_credential_rotate and not app_control and not app_update and not app_install:
             self.send_json(405, {"schema": 1, "error": "method-not-allowed"})
             return
         if self.headers.get("Transfer-Encoding") is not None or self.headers.get("Content-Type") != "application/json":
@@ -954,6 +990,8 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length).decode("utf-8"))
             if create:
                 result = vm_create_action(self.headers.get("Idempotency-Key", ""), body)
+            elif storage_create:
+                result = storage_action(self.headers.get("Idempotency-Key", ""), body.get("id", "") if isinstance(body, dict) else "", "create", body)
             elif nas_identity_create:
                 result = nas_identity_create_action(self.headers.get("Idempotency-Key", ""), body)
             elif nas_membership_add:
@@ -985,6 +1023,10 @@ class Handler(BaseHTTPRequestHandler):
                 result = storage_action(self.headers.get("Idempotency-Key", ""), storage_export.group(1), "export", body)
             elif storage_import:
                 result = storage_action(self.headers.get("Idempotency-Key", ""), storage_import.group(1), "import", body)
+            elif storage_expand:
+                result = storage_action(self.headers.get("Idempotency-Key", ""), storage_expand.group(1), "expand", body)
+            elif storage_replace:
+                result = storage_action(self.headers.get("Idempotency-Key", ""), storage_replace.group(1), "replace", body)
             elif app_control:
                 result = app_control_action(self.headers.get("Idempotency-Key", ""), app_control.group(1), body)
             elif app_update:
