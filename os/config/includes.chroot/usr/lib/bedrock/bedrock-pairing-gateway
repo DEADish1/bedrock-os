@@ -16,6 +16,7 @@ TEST = os.environ.get("BEDROCK_PAIRING_GATEWAY_TEST_MODE") == "1"
 WINDOW = 60
 MAX_ALL = 120
 MAX_NEW = 30
+MAX_AUTHORIZE = 60
 events: collections.deque[tuple[float, str]] = collections.deque()
 
 def rejected() -> bytes:
@@ -41,7 +42,7 @@ class Handler(socketserver.BaseRequestHandler):
             action = value.get("action") if isinstance(value, dict) else "invalid"
             now = time.monotonic()
             while events and events[0][0] < now - WINDOW: events.popleft()
-            if len(events) >= MAX_ALL or (action == "request" and sum(kind == "request" for _, kind in events) >= MAX_NEW):
+            if len(events) >= MAX_ALL or (action == "request" and sum(kind == "request" for _, kind in events) >= MAX_NEW) or (action == "authorize" and sum(kind == "authorize" for _, kind in events) >= MAX_AUTHORIZE):
                 raise ValueError("rate limited")
             events.append((now, action))
             command = [sys.executable, MANAGER, "gateway"] if TEST else [MANAGER, "gateway"]

@@ -67,6 +67,10 @@ def main() -> None:
             subprocess.run([sys.executable, str(MANAGER), "approve", PAIRING_ID, f"APPROVE REMOTE DEVICE {PAIRING_ID}"], env=environment, check=True, capture_output=True)
             redeemed = exchange(gateway_socket, {"schema": 1, "action": "redeem", "pairing_id": PAIRING_ID, "manual_code": CODE, "client_public_key": client_key})
             assert redeemed["status"] == "redeemed" and redeemed["device_id"] == DEVICE_ID
+            authorized = exchange(gateway_socket, {"schema": 1, "action": "authorize", "device_id": DEVICE_ID, "client_public_key": client_key})
+            assert authorized == {"schema": 1, "status": "authorized", "device_id": DEVICE_ID, "session_target": f"bedrock-remote-device@{DEVICE_ID}.target"}
+            assert json.loads((work / "pairings.json").read_text(encoding="utf-8"))["devices"][0]["last_seen_unix"] == 1000
+            assert exchange(gateway_socket, {"schema": 1, "action": "authorize", "device_id": DEVICE_ID, "client_public_key": hashlib.sha256(b"wrong").hexdigest()}) == denied
             replay = exchange(gateway_socket, {"schema": 1, "action": "redeem", "pairing_id": PAIRING_ID, "manual_code": CODE, "client_public_key": client_key})
             assert replay == denied
             assert exchange(gateway_socket, b"x" * 1025) == denied

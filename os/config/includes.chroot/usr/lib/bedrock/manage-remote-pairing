@@ -78,8 +78,10 @@ def main() -> None:
             arguments = [arguments[0], "request", request["client_public_key"]]
         elif set(request) == {"schema", "action", "pairing_id", "manual_code", "client_public_key"} and request.get("action") == "redeem":
             arguments = [arguments[0], "redeem", request["pairing_id"], request["manual_code"], request["client_public_key"]]
+        elif set(request) == {"schema", "action", "device_id", "client_public_key"} and request.get("action") == "authorize":
+            arguments = [arguments[0], "authorize", request["device_id"], request["client_public_key"]]
         else: fail("pairing gateway request is invalid")
-    if len(arguments) < 2 or arguments[1] not in {"request", "approve", "redeem"}:
+    if len(arguments) < 2 or arguments[1] not in {"request", "approve", "redeem", "authorize"}:
         fail("usage: manage-remote-pairing request CLIENT_KEY | approve ID CONFIRMATION | redeem ID CODE CLIENT_KEY | gateway")
     test = os.environ.get("BEDROCK_PAIRING_TEST_MODE") == "1"
     if not test and os.geteuid() != 0: fail("remote pairing management requires root")
@@ -123,7 +125,7 @@ def main() -> None:
             if len(matches) != 1 or matches[0]["used"] or matches[0]["expires_monotonic"] < now: fail("pairing request is unavailable")
             matches[0]["approved"] = True; save(state_path, state)
             print(json.dumps({"schema": 1, "status": "approved", "pairing_id": arguments[2]}, sort_keys=True, separators=(",", ":")))
-        else:
+        elif command == "redeem":
             if len(arguments) != 5 or not ID.fullmatch(arguments[2]) or not CODE.fullmatch(arguments[3]) or not KEY.fullmatch(arguments[4]): fail("redemption input is invalid")
             matches = [item for item in state["requests"] if item["id"] == arguments[2]]
             if len(matches) != 1: fail("pairing request is unavailable")
@@ -142,5 +144,18 @@ def main() -> None:
             item["used"] = True; save(state_path, state)
             print(json.dumps({"schema": 1, "status": "redeemed", "pairing_id": item["id"], "device_id": device_id,
                               "client_key_sha256": item["client_key_sha256"], "server_fingerprint": server_fingerprint}, sort_keys=True, separators=(",", ":")))
+        else:
+            if len(arguments) != 4 or not ID.fullmatch(arguments[2]) or not KEY.fullmatch(arguments[3]): fail("session identity is invalid")
+            matches = [device for device in state["devices"] if device["id"] == arguments[2]]
+            supplied_key = hashlib.sha256(bytes.fromhex(arguments[3])).hexdigest()
+            if len(matches) != 1 or matches[0]["revoked"] or matches[0]["expires_unix"] < wall_now or not hmac.compare_digest(matches[0]["public_key_sha256"], supplied_key):
+                fail("session authorization denied")
+            device = matches[0]
+            device["last_seen_unix"] = wall_now
+            save(state_path, state)
+            if not test and os.spawnlp(os.P_WAIT, "/bin/systemctl", "/bin/systemctl", "start", f"bedrock-remote-device@{device['id']}.target") != 0:
+                fail("session authorization denied")
+            print(json.dumps({"schema": 1, "status": "authorized", "device_id": device["id"],
+                              "session_target": f"bedrock-remote-device@{device['id']}.target"}, sort_keys=True, separators=(",", ":")))
 
 if __name__ == "__main__": main()
