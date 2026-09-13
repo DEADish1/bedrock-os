@@ -13,7 +13,7 @@ Bedrock Server OS has completed **0.1.0 — Product definition** and the indepen
 
 This index is the short, actively maintained view of the open path to 1.0. The milestone sections below remain the authoritative detailed requirements; completing an item here does not close a milestone checkbox until its stated acceptance evidence also passes.
 
-- [ ] Restore the current branch to green CI by resolving the storage-expansion authenticated API test failure.
+- [x] Restore the current branch to green CI by resolving the storage-expansion authenticated API test failure. [Run 34765144873](https://github.com/DEADish1/bedrock-os/actions/runs/34765144873) passed validation, both clean image builds, attestation, and byte-for-byte reproducibility.
 - [ ] Complete physical boot and installer acceptance on supported Intel and AMD systems, including verified USB writing and a successful disposable-system-disk install. **Requires physical hardware.**
 - [ ] Complete cross-hypervisor boot acceptance and distinct Linux and Windows guest sessions on the exact release-candidate image. **Requires acceptance hosts and Windows installation media/license.**
 - [ ] Finish all remaining authenticated management mutations, VM console integration, advanced disclosures, concurrent-change protection, keyboard/WCAG 2.2 AA verification, and browser end-to-end tests.

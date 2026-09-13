@@ -4,6 +4,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Restored the full OS image pipeline after adding persisted storage actions to the broker state allowlist; both clean image replicas, artifact attestation, and byte-for-byte reproducibility now pass again.
 - Added a deterministic SPDX 2.3 JSON software bill of materials to every OS image build, including package URLs for the exact resolved Debian package set, artifact validation, and byte-for-byte reproducibility comparison.
 - Added Chromium management-interface acceptance for keyboard navigation across every area, authenticated settings mutation headers and payloads, confirmed-state refresh, and automated WCAG A/AA checks; fixed the contrast issues it found and exposed mutation success notices as polite status updates.
 - Updated the web dependency stack and locked browser-test tooling, with the current production dependency tree reporting zero known npm audit findings; added a dedicated management acceptance workflow for audit, lint, build, browser, and accessibility checks.
