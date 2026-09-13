@@ -11,7 +11,7 @@ const feeds: Record<string, object> = {
   } },
   '/api/v1/apps': { schema: 1, apps: [], install_candidates: [] },
   '/api/v1/backups': { schema: 1, plans: [], create_candidates: [] },
-  '/api/v1/hardware': { schema: 1, cpu: { architecture: 'x86_64', model: 'Acceptance CPU', logical_processors: 8, sockets: 1, cores_per_socket: 4, threads_per_core: 2, virtualization: 'AMD-V', virtualization_supported: true }, memory: { total_bytes: 17_179_869_184 }, disks: [], storage_controllers: [], networks: [], gpus: [], usb_device_count: 0 },
+  '/api/v1/hardware': { schema: 1, cpu: { architecture: 'x86_64', model: 'Acceptance CPU', logical_processors: 8, sockets: 1, cores_per_socket: 4, threads_per_core: 2, virtualization: 'AMD-V', virtualization_supported: true }, memory: { total_bytes: 17_179_869_184 }, disks: [{ model: 'Acceptance SSD', vendor: 'Bedrock Lab', size_bytes: 1_000_000_000_000, rotational: false, transport: 'nvme', removable: false }], storage_controllers: [{ class: 'NVMe', description: 'Acceptance controller' }], networks: [{ mtu: 1500, state: 'up', link_type: 'ethernet' }], gpus: [], usb_device_count: 0 },
   '/api/v1/vms': { schema: 1, generated_unix: now, domains: [] },
   '/api/v1/virtualization/passthrough-candidates': { schema: 1, gpus: [], usb_devices: [], assignments: [] },
   '/api/v1/images': { schema: 1, images: [], upload_candidates: [] },
@@ -90,4 +90,27 @@ test('an authenticated settings mutation sends guarded input and refreshes confi
   expect(mutation?.headers.authorization).toBe('Bearer acceptance-token');
   expect(mutation?.headers['idempotency-key']).toMatch(/^[0-9a-f-]{36}$/);
   expect(mutation?.body).toEqual({ schema: 1, setting: 'automatic_checks', value: false, beta_risk_acknowledged: false });
+});
+
+test('advanced details are keyboard operable while primary hardware health stays visible', async ({ page }) => {
+  await connect(page);
+  await page.locator('aside').getByRole('button', { name: 'Hardware' }).click();
+  await expect(page.getByText('8 threads', { exact: true })).toBeVisible();
+  await expect(page.getByText('Ready', { exact: true })).toBeVisible();
+  const summary = page.locator('summary').filter({ hasText: 'Advanced hardware details' });
+  await summary.focus();
+  await page.keyboard.press('Enter');
+  await expect(summary.locator('..')).toHaveAttribute('open', '');
+  await expect(page.getByRole('heading', { name: 'Processor topology' })).toBeVisible();
+  await expect(page.getByText('Acceptance controller', { exact: true })).toBeVisible();
+  await expect(page.getByText('8 threads', { exact: true })).toBeVisible();
+  await expectNoAutomatedWcagViolations(page);
+  await page.locator('aside').getByRole('button', { name: 'Storage' }).click();
+  const storageSummary = page.locator('summary').filter({ hasText: 'Advanced storage details' });
+  await storageSummary.focus();
+  await page.keyboard.press('Enter');
+  await expect(storageSummary.locator('..')).toHaveAttribute('open', '');
+  await expect(page.getByText('Storage health, rebuild state, and destructive warnings remain visible above.')).toBeVisible();
+  await expect(page.getByText('healthy', { exact: true }).first()).toBeVisible();
+  await expectNoAutomatedWcagViolations(page);
 });
