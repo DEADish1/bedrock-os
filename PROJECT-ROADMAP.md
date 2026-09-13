@@ -133,10 +133,11 @@ Exit pending physical acceptance: one exact Bedrock image must still pass distin
   - Users now has a dedicated authenticated contract and live interface for managed NAS accounts, credential-rotation state, group membership counts, exact-confirmation creation of fixed-policy local users and groups, membership additions, and root-staged credential rotation. Passwords, hashes, member identities, numeric IDs, shell/home options, datasets, ACLs, share paths, and snapshots remain outside the API and browser boundary.
 - [ ] Add advanced disclosures without hiding health or safety information.
 - [ ] Add keyboard-complete controls and WCAG 2.2 AA testing.
+  - Automated Chromium acceptance now reaches every management area by keyboard and reports no axe WCAG A/AA violations, including WCAG 2.2 AA rules. Manual assistive-technology, zoom/reflow, and physical-device verification remain before this item can close.
 - [ ] Handle offline, reconnecting, partial failure, and concurrent changes.
   - Independent dashboard components already degrade without collapsing the full response. API state and audit reads pin non-symlink file descriptors and reject mid-read mutation. The interface now detects browser-offline and transient API failures, retains visibly labeled last-confirmed state, pauses management controls, retries on network return and while visible, and clears credentials on an explicit authorization failure. Mutation-wide stale-state conflict handling remains.
 - [ ] Add API schema tests, authorization tests, and UI end-to-end tests.
-  - The authenticated OpenAPI 3.1 document covers every implemented v1 route and its bearer security policy. Route/schema agreement, recursive successful-response conformance, every documented operation with missing and invalid bearer credentials, and token issue/revocation tests pass. UI end-to-end coverage remains.
+  - The authenticated OpenAPI 3.1 document covers every implemented v1 route and its bearer security policy. Route/schema agreement, recursive successful-response conformance, every documented operation with missing and invalid bearer credentials, and token issue/revocation tests pass. Initial browser end-to-end coverage now verifies token entry, all management-area navigation, an authenticated idempotent settings mutation, server-confirmed refresh, and automated accessibility checks. Remaining mutation flows and console integration still need browser coverage.
 
 Exit: every supported server task works through the UI and documented API.
 

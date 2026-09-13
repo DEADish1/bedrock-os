@@ -4,6 +4,8 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Added Chromium management-interface acceptance for keyboard navigation across every area, authenticated settings mutation headers and payloads, confirmed-state refresh, and automated WCAG A/AA checks; fixed the contrast issues it found and exposed mutation success notices as polite status updates.
+- Updated the web dependency stack and locked browser-test tooling, with the current production dependency tree reporting zero known npm audit findings; added a dedicated management acceptance workflow for audit, lint, build, browser, and accessibility checks.
 - Added authenticated, idempotent storage creation, expansion, and member replacement controls. Disk paths stay root-only behind keyed opaque identities, and eligibility plus membership is refreshed immediately before execution.
 - Added authenticated, idempotent storage export/import controls with exact confirmation, root-side backend/layout resolution, guarded state transitions, and a path-free managed-pool feed that keeps exported groups visible for reconnection.
 - Added authenticated, SHA-256-bound discard controls for staged browser image uploads, including exact confirmation and an import/discard lock that prevents cleanup from racing privileged validation.

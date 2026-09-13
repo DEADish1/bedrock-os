@@ -33,7 +33,7 @@ export default function Home(){
    {page==='Project status'&&<ProjectStatus/>}
    {page==='Get Bedrock'&&<Download notify={notify}/>}
   </div></section>
-  {toast&&<div className="toast">✓ {toast}</div>}
+  {toast&&<div className="toast" role="status" aria-live="polite">✓ {toast}</div>}
  </main>
 }
 function Title({title,copy,action}:{title:string,copy:string,action?:React.ReactNode}){return <div className="title"><div><h1>{title}</h1><p>{copy}</p></div>{action}</div>}
