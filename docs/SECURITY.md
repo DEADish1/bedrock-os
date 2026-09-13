@@ -11,3 +11,5 @@ Storage operations reject the running system disk, mounted or indirect devices, 
 Remote access is not release-ready. Its required protocol, client-key storage, relay privacy, rekeying, revocation, and review gates are defined in the [remote-access threat model](REMOTE-ACCESS-THREAT-MODEL.md). Do not expose unfinished remote services or claim end-to-end protection before those tests and the third-party review pass.
 
 Release security requires reproducible artifacts, an SBOM, dependency and vulnerability review, production signatures, penetration testing, restore and failure drills, and archived acceptance evidence. Report vulnerabilities according to the repository [security policy](../SECURITY.md).
+
+Each image build publishes `bedrock-os.spdx.json`, an SPDX 2.3 document generated from the exact sorted Debian package lock used by that build. The reproducibility gate requires both clean replicas to produce identical package locks and identical SBOMs. An SBOM records composition; it does not replace dependency review, vulnerability triage, or penetration testing.

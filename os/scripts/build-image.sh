@@ -61,6 +61,10 @@ else
   : > packages.lock
 fi
 
+"$OS_DIR/scripts/create-spdx-sbom.sh" packages.lock bedrock-os.spdx.json \
+  "$BEDROCK_VERSION" "$BEDROCK_DISTRIBUTION" "$BEDROCK_ARCHITECTURE" \
+  "$BEDROCK_SOURCE_COMMIT" "$SOURCE_DATE_EPOCH"
+
 jq -n \
   --arg version "$BEDROCK_VERSION" \
   --arg distribution "$BEDROCK_DISTRIBUTION" \
