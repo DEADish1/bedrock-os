@@ -521,11 +521,14 @@ def main() -> None:
             assert admin_requests[23] == {"schema": 1, "id": "archive", "operation": "import", "confirmation": "IMPORT STORAGE archive"}
             first, second = "disk-0123456789abcdef0123", "disk-abcdef0123456789abcd"
             storage_create = {"schema": 1, "id": "media", "backend": "zfs", "layout": "mirror", "disk_ids": [first, second], "confirmation": f"CREATE STORAGE media USING {first},{second}"}
-            assert request(socket_path, "POST", "/api/v1/storage", body=storage_create, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 200
+            storage_create_response = request(socket_path, "POST", "/api/v1/storage", body=storage_create, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})
+            assert storage_create_response[0] == 200, storage_create_response
             storage_expand = {"schema": 1, "disk_ids": [first, second], "confirmation": f"EXPAND STORAGE main USING {first},{second}"}
-            assert request(socket_path, "POST", "/api/v1/storage/main/expand", body=storage_expand, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 200
+            storage_expand_response = request(socket_path, "POST", "/api/v1/storage/main/expand", body=storage_expand, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})
+            assert storage_expand_response[0] == 200, storage_expand_response
             storage_replace = {"schema": 1, "old_disk_id": first, "new_disk_id": second, "confirmation": f"REPLACE STORAGE main MEMBER {first} WITH {second}"}
-            assert request(socket_path, "POST", "/api/v1/storage/main/replace", body=storage_replace, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 200
+            storage_replace_response = request(socket_path, "POST", "/api/v1/storage/main/replace", body=storage_replace, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})
+            assert storage_replace_response[0] == 200, storage_replace_response
             assert request(socket_path, "POST", "/api/v1/storage/main/replace", body=storage_replace | {"confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[24]["operation"] == "create" and admin_requests[24]["backend"] == "zfs"
