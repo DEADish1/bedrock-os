@@ -7,7 +7,7 @@ Start with [architecture](ARCHITECTURE.md), the [1.0 scope freeze](1.0-SCOPE-FRE
 - [Create installation media](INSTALL-MEDIA.md), [installer safety](INSTALLER-SAFETY.md), and [on-server installation](ON-SERVER-INSTALL.md)
 - [First-run setup](FIRST-RUN-SETUP.md) and [administrator guide](ADMINISTRATION.md)
 - [Storage and NAS](STORAGE-PLANS.md), [virtual machines](VIRTUALIZATION.md), [applications](APPLICATIONS.md), and [backups](BACKUP.md)
-- [Health notifications](NOTIFICATIONS.md), [UPS and maintenance](UPS-AND-MAINTENANCE.md), and [troubleshooting](TROUBLESHOOTING.md)
+- [Remote pairing gateway](REMOTE-PAIRING-GATEWAY.md), [health notifications](NOTIFICATIONS.md), [UPS and maintenance](UPS-AND-MAINTENANCE.md), and [troubleshooting](TROUBLESHOOTING.md)
 
 ## Recover and secure
 

@@ -4,6 +4,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Added the server-side remote-pairing bootstrap gateway: an AF_UNIX-only, peer-isolated, size/rate-bounded request and redemption boundary with indistinguishable failures, no approval capability, and no pairing secrets in child-process arguments. Added crash-recoverable X25519 server identity provisioning and end-to-end gateway tests for approval gating, single use, key binding, oversized input, and forbidden operations.
 - Added keyboard-operable advanced hardware and storage disclosures for privacy-safe topology, capabilities, SMART history, and candidate eligibility while keeping health, compatibility, rebuild state, and destructive warnings permanently visible; extended browser and accessibility acceptance to cover both closed and expanded states.
 - Restored the full OS image pipeline after adding persisted storage actions to the broker state allowlist; both clean image replicas, artifact attestation, and byte-for-byte reproducibility now pass again.
 - Added a deterministic SPDX 2.3 JSON software bill of materials to every OS image build, including package URLs for the exact resolved Debian package set, manifest-bound SHA-256/package-count validation, and reproducibility comparison even when CI currently transfers only the build manifest.

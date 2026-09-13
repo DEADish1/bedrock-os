@@ -1,0 +1,74 @@
+#!/usr/bin/python3
+import collections
+import json
+import os
+import pathlib
+import socket
+import socketserver
+import struct
+import subprocess
+import sys
+import time
+
+SOCKET = pathlib.Path(os.environ.get("BEDROCK_PAIRING_GATEWAY_SOCKET", "/run/bedrock-pairing/gateway.sock"))
+MANAGER = os.environ.get("BEDROCK_PAIRING_GATEWAY_MANAGER", "/usr/lib/bedrock/manage-remote-pairing")
+TEST = os.environ.get("BEDROCK_PAIRING_GATEWAY_TEST_MODE") == "1"
+WINDOW = 60
+MAX_ALL = 120
+MAX_NEW = 30
+events: collections.deque[tuple[float, str]] = collections.deque()
+
+def rejected() -> bytes:
+    return b'{"error":"pairing-request-rejected","schema":1,"status":"rejected"}\n'
+
+class Handler(socketserver.BaseRequestHandler):
+    def handle(self) -> None:
+        try:
+            if not TEST:
+                import pwd
+                credentials = self.request.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+                _pid, uid, _gid = struct.unpack("3i", credentials)
+                if uid != pwd.getpwnam("bedrock-remote").pw_uid:
+                    self.request.sendall(rejected())
+                    return
+            raw = b""
+            while len(raw) <= 1024:
+                chunk = self.request.recv(min(1025 - len(raw), 512))
+                if not chunk: break
+                raw += chunk
+            if len(raw) > 1024: raise ValueError("oversized")
+            value = json.loads(raw.decode("ascii"))
+            action = value.get("action") if isinstance(value, dict) else "invalid"
+            now = time.monotonic()
+            while events and events[0][0] < now - WINDOW: events.popleft()
+            if len(events) >= MAX_ALL or (action == "request" and sum(kind == "request" for _, kind in events) >= MAX_NEW):
+                raise ValueError("rate limited")
+            events.append((now, action))
+            command = [sys.executable, MANAGER, "gateway"] if TEST else [MANAGER, "gateway"]
+            result = subprocess.run(command, input=raw, capture_output=True, timeout=5)
+            if result.returncode or len(result.stdout) > 4096: raise ValueError("manager rejected")
+            response = json.loads(result.stdout.decode("utf-8"))
+            if not isinstance(response, dict) or response.get("schema") != 1: raise ValueError("bad response")
+            encoded = json.dumps(response, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+            self.request.sendall(encoded)
+        except (BrokenPipeError, json.JSONDecodeError, OSError, subprocess.SubprocessError, UnicodeDecodeError, ValueError):
+            try: self.request.sendall(rejected())
+            except OSError: pass
+
+class Server(socketserver.TCPServer):
+    address_family = socket.AF_UNIX
+    allow_reuse_address = False
+
+def main() -> None:
+    SOCKET.parent.mkdir(parents=True, exist_ok=True)
+    if SOCKET.exists() or SOCKET.is_symlink(): SOCKET.unlink()
+    old = os.umask(0o007)
+    try:
+        with Server(str(SOCKET), Handler) as server:
+            os.chmod(SOCKET, 0o660)
+            server.serve_forever()
+    finally:
+        os.umask(old)
+        if SOCKET.exists() and not SOCKET.is_symlink(): SOCKET.unlink()
+
+if __name__ == "__main__": main()

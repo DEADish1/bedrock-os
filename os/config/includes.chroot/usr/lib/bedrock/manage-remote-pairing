@@ -66,8 +66,21 @@ def save(path: pathlib.Path, value: dict) -> None:
         if os.path.exists(temporary): os.unlink(temporary)
 
 def main() -> None:
-    if len(sys.argv) < 2 or sys.argv[1] not in {"request", "approve", "redeem"}:
-        fail("usage: manage-remote-pairing request CLIENT_KEY | approve ID CONFIRMATION | redeem ID CODE CLIENT_KEY")
+    arguments = sys.argv
+    if len(arguments) == 2 and arguments[1] == "gateway":
+        raw = sys.stdin.buffer.read(1025)
+        if len(raw) > 1024: fail("pairing gateway request is too large")
+        try: request = json.loads(raw.decode("ascii"))
+        except (UnicodeDecodeError, json.JSONDecodeError): fail("pairing gateway request is invalid")
+        if not isinstance(request, dict) or request.get("schema") != 1:
+            fail("pairing gateway request is invalid")
+        if set(request) == {"schema", "action", "client_public_key"} and request.get("action") == "request":
+            arguments = [arguments[0], "request", request["client_public_key"]]
+        elif set(request) == {"schema", "action", "pairing_id", "manual_code", "client_public_key"} and request.get("action") == "redeem":
+            arguments = [arguments[0], "redeem", request["pairing_id"], request["manual_code"], request["client_public_key"]]
+        else: fail("pairing gateway request is invalid")
+    if len(arguments) < 2 or arguments[1] not in {"request", "approve", "redeem"}:
+        fail("usage: manage-remote-pairing request CLIENT_KEY | approve ID CONFIRMATION | redeem ID CODE CLIENT_KEY | gateway")
     test = os.environ.get("BEDROCK_PAIRING_TEST_MODE") == "1"
     if not test and os.geteuid() != 0: fail("remote pairing management requires root")
     directory = pathlib.Path(os.environ.get("BEDROCK_PAIRING_STATE_DIR", "/var/lib/bedrock/remote"))
@@ -89,10 +102,10 @@ def main() -> None:
         state = load(state_path)
         # A pending request never survives a reboot or remains redeemable after expiry.
         state["requests"] = [item for item in state["requests"] if item["used"] or (item["boot_id"] == boot_id and item["expires_monotonic"] >= now)]
-        command = sys.argv[1]
+        command = arguments[1]
         if command == "request":
-            if len(sys.argv) != 3 or not KEY.fullmatch(sys.argv[2]): fail("client public key is invalid")
-            client_fingerprint = hashlib.sha256(bytes.fromhex(sys.argv[2])).hexdigest()
+            if len(arguments) != 3 or not KEY.fullmatch(arguments[2]): fail("client public key is invalid")
+            client_fingerprint = hashlib.sha256(bytes.fromhex(arguments[2])).hexdigest()
             if any(not item["used"] and item["client_key_sha256"] == client_fingerprint for item in state["requests"]): fail("a pairing request for this key is already pending")
             pairing_id = os.environ.get("BEDROCK_PAIRING_TEST_ID") or str(uuid.uuid4())
             code = os.environ.get("BEDROCK_PAIRING_TEST_CODE") or "BRK-" + "".join(secrets.choice(ALPHABET) for _ in range(4)) + "-" + "".join(secrets.choice(ALPHABET) for _ in range(4))
@@ -105,24 +118,24 @@ def main() -> None:
                               "server_fingerprint": server_fingerprint, "qr": {"version": 1, "pairing_id": pairing_id,
                               "manual_code": code, "server_fingerprint": server_fingerprint}}, sort_keys=True, separators=(",", ":")))
         elif command == "approve":
-            if len(sys.argv) != 4 or not ID.fullmatch(sys.argv[2]) or sys.argv[3] != PHRASE + sys.argv[2]: fail("approval identity or confirmation is invalid")
-            matches = [item for item in state["requests"] if item["id"] == sys.argv[2]]
+            if len(arguments) != 4 or not ID.fullmatch(arguments[2]) or arguments[3] != PHRASE + arguments[2]: fail("approval identity or confirmation is invalid")
+            matches = [item for item in state["requests"] if item["id"] == arguments[2]]
             if len(matches) != 1 or matches[0]["used"] or matches[0]["expires_monotonic"] < now: fail("pairing request is unavailable")
             matches[0]["approved"] = True; save(state_path, state)
-            print(json.dumps({"schema": 1, "status": "approved", "pairing_id": sys.argv[2]}, sort_keys=True, separators=(",", ":")))
+            print(json.dumps({"schema": 1, "status": "approved", "pairing_id": arguments[2]}, sort_keys=True, separators=(",", ":")))
         else:
-            if len(sys.argv) != 5 or not ID.fullmatch(sys.argv[2]) or not CODE.fullmatch(sys.argv[3]) or not KEY.fullmatch(sys.argv[4]): fail("redemption input is invalid")
-            matches = [item for item in state["requests"] if item["id"] == sys.argv[2]]
+            if len(arguments) != 5 or not ID.fullmatch(arguments[2]) or not CODE.fullmatch(arguments[3]) or not KEY.fullmatch(arguments[4]): fail("redemption input is invalid")
+            matches = [item for item in state["requests"] if item["id"] == arguments[2]]
             if len(matches) != 1: fail("pairing request is unavailable")
             item = matches[0]
-            supplied_key = hashlib.sha256(bytes.fromhex(sys.argv[4])).hexdigest()
-            valid = item["boot_id"] == boot_id and item["expires_monotonic"] >= now and item["approved"] and not item["used"] and item["attempts"] < 5 and hmac.compare_digest(item["code_sha256"], hashlib.sha256(sys.argv[3].encode("ascii")).hexdigest()) and hmac.compare_digest(item["client_key_sha256"], supplied_key)
+            supplied_key = hashlib.sha256(bytes.fromhex(arguments[4])).hexdigest()
+            valid = item["boot_id"] == boot_id and item["expires_monotonic"] >= now and item["approved"] and not item["used"] and item["attempts"] < 5 and hmac.compare_digest(item["code_sha256"], hashlib.sha256(arguments[3].encode("ascii")).hexdigest()) and hmac.compare_digest(item["client_key_sha256"], supplied_key)
             if not valid:
                 item["attempts"] = min(5, item["attempts"] + 1); save(state_path, state); fail("pairing redemption denied")
             if any(device["public_key_sha256"] == supplied_key and not device["revoked"] for device in state["devices"]): fail("client key is already paired")
             device_id = os.environ.get("BEDROCK_PAIRING_TEST_DEVICE_ID") or str(uuid.uuid4())
             if not ID.fullmatch(device_id) or wall_now < 0: fail("device identity is invalid")
-            state["devices"].append({"id": device_id, "name": "New device", "public_key": sys.argv[4],
+            state["devices"].append({"id": device_id, "name": "New device", "public_key": arguments[4],
                                      "public_key_sha256": supplied_key, "created_unix": wall_now,
                                      "expires_unix": wall_now + 7776000, "revoked": False, "last_seen_unix": None})
             state["devices"] = state["devices"][-128:]

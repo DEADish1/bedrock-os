@@ -1,0 +1,33 @@
+[Unit]
+Description=Bedrock bounded remote pairing gateway
+Requires=bedrock-remote-identity.service
+After=local-fs.target bedrock-remote-identity.service
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/bedrock/bedrock-pairing-gateway
+User=root
+Group=bedrock-remote
+RuntimeDirectory=bedrock-pairing
+RuntimeDirectoryMode=0750
+UMask=0007
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/bedrock/remote /run/bedrock-pairing
+CapabilityBoundingSet=
+RestrictNamespaces=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

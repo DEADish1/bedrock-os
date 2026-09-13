@@ -1,0 +1,59 @@
+#!/bin/sh
+set -eu
+
+test_mode=${BEDROCK_REMOTE_IDENTITY_TEST_MODE:-0}
+if [ "$test_mode" = 1 ]; then
+  directory=${BEDROCK_REMOTE_IDENTITY_DIR:?test mode requires an identity directory}
+else
+  [ "$(id -u)" -eq 0 ] || { printf 'error: remote identity initialization requires root\n' >&2; exit 1; }
+  directory=/var/lib/bedrock/remote
+fi
+
+command -v openssl >/dev/null 2>&1 || { printf 'error: openssl is required\n' >&2; exit 1; }
+command -v xxd >/dev/null 2>&1 || { printf 'error: xxd is required\n' >&2; exit 1; }
+mkdir -p "$directory"
+[ -d "$directory" ] && [ ! -L "$directory" ] || { printf 'error: remote identity directory is unsafe\n' >&2; exit 1; }
+chmod 0700 "$directory"
+
+private="$directory/server-private-key.pem"
+public="$directory/server-public-key"
+lock="$directory/.identity.lock"
+exec 9>"$lock"
+chmod 0600 "$lock"
+flock -x 9
+
+if [ -e "$private" ] || [ -e "$public" ]; then
+  [ -f "$private" ] && [ ! -L "$private" ] || { printf 'error: remote private identity is missing or indirect\n' >&2; exit 1; }
+  if [ ! -e "$public" ]; then
+    public_tmp="$directory/.server-public-key.$$"
+    trap 'rm -f "$public_tmp"' EXIT INT TERM
+    umask 077
+    openssl pkey -in "$private" -pubout -outform DER 2>/dev/null | tail -c 32 | xxd -p -c 64 > "$public_tmp"
+    chmod 0600 "$public_tmp"
+    mv "$public_tmp" "$public"
+    trap - EXIT INT TERM
+  fi
+  [ -f "$public" ] && [ ! -L "$public" ] || { printf 'error: remote public identity is indirect\n' >&2; exit 1; }
+  key=$(tr -d '\r\n' < "$public")
+  printf '%s' "$key" | grep -Eq '^[0-9a-f]{64}$' || { printf 'error: remote public identity is invalid\n' >&2; exit 1; }
+  derived=$(openssl pkey -in "$private" -pubout -outform DER 2>/dev/null | tail -c 32 | xxd -p -c 64)
+  [ "$derived" = "$key" ] || { printf 'error: remote identity keypair does not match\n' >&2; exit 1; }
+  chmod 0600 "$private" "$public"
+  printf 'Remote identity is ready.\n'
+  exit 0
+fi
+
+private_tmp="$directory/.server-private-key.$$"
+public_tmp="$directory/.server-public-key.$$"
+cleanup() { rm -f "$private_tmp" "$public_tmp"; }
+trap cleanup EXIT INT TERM
+umask 077
+openssl genpkey -algorithm X25519 -out "$private_tmp" >/dev/null 2>&1
+openssl pkey -in "$private_tmp" -pubout -outform DER 2>/dev/null | tail -c 32 | xxd -p -c 64 > "$public_tmp"
+key=$(tr -d '\r\n' < "$public_tmp")
+printf '%s' "$key" | grep -Eq '^[0-9a-f]{64}$' || { printf 'error: generated remote public identity is invalid\n' >&2; exit 1; }
+chmod 0600 "$private_tmp" "$public_tmp"
+mv "$private_tmp" "$private"
+mv "$public_tmp" "$public"
+trap - EXIT INT TERM
+printf 'Remote identity initialized.\n'
