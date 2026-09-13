@@ -16,6 +16,9 @@ run 104 authorize "$device" "$client" | jq -e --arg device "$device" '.status=="
 jq -e '.devices[0].last_seen_unix==1000' "$work/pairings.json" >/dev/null
 wrong=$(printf wrong-client | sha256sum | awk '{print $1}')
 if run 104 authorize "$device" "$wrong" >/dev/null 2>&1; then echo "wrong client key authorized" >&2; exit 1; fi
+tmp="$work/pairings.tmp"
+jq '.devices[0].revoked=true' "$work/pairings.json" > "$tmp" && chmod 600 "$tmp" && mv "$tmp" "$work/pairings.json"
+if run 104 authorize "$device" "$client" >/dev/null 2>&1; then echo "revoked device authorized" >&2; exit 1; fi
 if run 104 redeem "$id" "$code" "$client" >/dev/null 2>&1; then echo "pairing code replayed" >&2; exit 1; fi
 id=22345678-1234-4123-8123-123456789abc code=BRK-EFGH-6789
 run 200 request "$client" >/dev/null

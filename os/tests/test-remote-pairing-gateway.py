@@ -71,6 +71,10 @@ def main() -> None:
             assert authorized == {"schema": 1, "status": "authorized", "device_id": DEVICE_ID, "session_target": f"bedrock-remote-device@{DEVICE_ID}.target"}
             assert json.loads((work / "pairings.json").read_text(encoding="utf-8"))["devices"][0]["last_seen_unix"] == 1000
             assert exchange(gateway_socket, {"schema": 1, "action": "authorize", "device_id": DEVICE_ID, "client_public_key": hashlib.sha256(b"wrong").hexdigest()}) == denied
+            state = json.loads((work / "pairings.json").read_text(encoding="utf-8"))
+            state["devices"][0]["revoked"] = True
+            (work / "pairings.json").write_text(json.dumps(state, separators=(",", ":")) + "\n", encoding="utf-8")
+            assert exchange(gateway_socket, {"schema": 1, "action": "authorize", "device_id": DEVICE_ID, "client_public_key": client_key}) == denied
             replay = exchange(gateway_socket, {"schema": 1, "action": "redeem", "pairing_id": PAIRING_ID, "manual_code": CODE, "client_public_key": client_key})
             assert replay == denied
             assert exchange(gateway_socket, b"x" * 1025) == denied
