@@ -100,7 +100,7 @@ class UnixConnection(http.client.HTTPConnection):
         self.sock.connect(str(self.path))
 
 
-def request(socket_path: pathlib.Path, method: str, path: str, token: str | None = TOKEN, body=None, extra_headers=None):
+def request(socket_path: pathlib.Path, method: str, path: str, token: str | None = TOKEN, body=None, extra_headers=None, include_headers=False):
     connection = UnixConnection(socket_path)
     headers = {} if token is None else {"Authorization": f"Bearer {token}"}
     if extra_headers:
@@ -109,8 +109,9 @@ def request(socket_path: pathlib.Path, method: str, path: str, token: str | None
     connection.request(method, path, body=payload, headers=headers)
     response = connection.getresponse()
     body = json.loads(response.read())
+    response_headers = dict(response.getheaders())
     connection.close()
-    return response.status, body
+    return (response.status, body, response_headers) if include_headers else (response.status, body)
 
 
 def main() -> None:
@@ -534,18 +535,22 @@ def main() -> None:
             assert admin_requests[24]["operation"] == "create" and admin_requests[24]["backend"] == "zfs"
             assert admin_requests[25]["operation"] == "expand" and admin_requests[25]["disk_ids"] == [first, second]
             assert admin_requests[26]["operation"] == "replace" and admin_requests[26]["old_disk_id"] == first
-            assert request(socket_path, "GET", "/api/v1/settings") == (200, {"schema": 1, "updates": {"automatic_checks": True, "setup_choice_recorded": True, "channel": "stable", "automatic_install": False}, "telemetry_enabled": False})
+            settings_status, settings_body, settings_headers = request(socket_path, "GET", "/api/v1/settings", include_headers=True)
+            assert settings_status == 200 and settings_body == {"schema": 1, "updates": {"automatic_checks": True, "setup_choice_recorded": True, "channel": "stable", "automatic_install": False}, "telemetry_enabled": False}
+            assert re.fullmatch(r'"sha256-[0-9a-f]{64}"', settings_headers["ETag"])
             update_id = str(uuid.uuid4())
             update_body = {"schema": 1, "setting": "channel", "value": "beta", "beta_risk_acknowledged": True}
-            update_headers = {"Content-Type": "application/json", "Idempotency-Key": update_id}
+            assert request(socket_path, "PUT", "/api/v1/settings", body=update_body, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 428
+            assert request(socket_path, "PUT", "/api/v1/settings", body=update_body, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": '"sha256-' + "0" * 64 + '"'})[0] == 412
+            update_headers = {"Content-Type": "application/json", "Idempotency-Key": update_id, "If-Match": settings_headers["ETag"]}
             assert request(socket_path, "PUT", "/api/v1/settings", body=update_body, extra_headers=update_headers) == (200, {"schema": 1, "request_id": update_id, "status": "succeeded", "replayed": False})
             assert request(socket_path, "PUT", "/api/v1/settings", body=update_body, extra_headers=update_headers)[1]["replayed"] is True
             conflict_body = update_body | {"value": "stable", "beta_risk_acknowledged": False}
             assert request(socket_path, "PUT", "/api/v1/settings", body=conflict_body, extra_headers=update_headers)[0] == 409
             assert action_calls.read_text(encoding="utf-8").splitlines() == ["channel beta I_ACCEPT_PRERELEASE_UPDATE_RISK"]
             assert request(socket_path, "PUT", "/api/v1/settings", None, update_body, update_headers)[0] == 401
-            assert request(socket_path, "PUT", "/api/v1/settings", body=update_body, extra_headers={"Content-Type": "application/json"})[0] == 400
-            assert request(socket_path, "PUT", "/api/v1/settings", body=update_body | {"command": "id"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            assert request(socket_path, "PUT", "/api/v1/settings", body=update_body, extra_headers={"Content-Type": "application/json", "If-Match": settings_headers["ETag"]})[0] == 400
+            assert request(socket_path, "PUT", "/api/v1/settings", body=update_body | {"command": "id"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": settings_headers["ETag"]})[0] == 400
             users_status, users_body = request(socket_path, "GET", "/api/v1/users")
             assert users_status == 200 and users_body["users"][0]["credential_generation"] == 1 and users_body["users"][0]["credential_candidate"] is True and users_body["groups"][0]["member_count"] == 1
             assert not any(secret in json.dumps(users_body) for secret in ["/private/path", "private-share", "private-snapshot", "members", "datasets", "shares", "snapshots"])

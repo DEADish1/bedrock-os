@@ -77,6 +77,10 @@ def authorized(value: str | None) -> bool:
     except (OSError, ValueError, json.JSONDecodeError, TypeError):
         return False
 
+def entity_tag(value: object) -> str:
+    canonical = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return '"sha256-' + hashlib.sha256(canonical).hexdigest() + '"'
+
 def broker_action(request_id: str, broker_request: dict) -> dict:
     if not DEVICE_ID.fullmatch(request_id):
         raise ValueError("invalid idempotency key")
@@ -856,6 +860,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        if status == 200:
+            self.send_header("ETag", entity_tag(value))
         self.end_headers()
         self.wfile.write(body)
 
@@ -1112,6 +1118,18 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, {"schema": 1, "candidate": candidate}); return
         if self.path != "/api/v1/settings":
             self.send_json(405, {"schema": 1, "error": "method-not-allowed"})
+            return
+        try:
+            current_tag = entity_tag(settings_feed())
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+            self.send_json(503, {"schema": 1, "error": "settings-unavailable"})
+            return
+        supplied_tag = self.headers.get("If-Match")
+        if supplied_tag is None:
+            self.send_json(428, {"schema": 1, "error": "precondition-required"})
+            return
+        if not hmac.compare_digest(supplied_tag, current_tag):
+            self.send_json(412, {"schema": 1, "error": "state-changed"})
             return
         if self.headers.get("Transfer-Encoding") is not None or self.headers.get("Content-Type") != "application/json":
             self.send_json(400, {"schema": 1, "error": "invalid-request"})

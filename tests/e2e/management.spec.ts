@@ -33,7 +33,7 @@ async function mockAuthenticatedApi(page: Page) {
       return;
     }
     const body = feeds[path];
-    await route.fulfill({ status: body ? 200 : 404, contentType: 'application/json', body: JSON.stringify(body ?? { schema: 1, error: 'not-found' }) });
+    await route.fulfill({ status: body ? 200 : 404, contentType: 'application/json', headers: path === '/api/v1/settings' ? { ETag: '"sha256-acceptance-settings"' } : {}, body: JSON.stringify(body ?? { schema: 1, error: 'not-found' }) });
   });
 }
 
@@ -82,13 +82,14 @@ test('an authenticated settings mutation sends guarded input and refreshes confi
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ schema: 1, request_id: request.headers()['idempotency-key'], status: 'succeeded', replayed: false }) });
       return;
     }
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(feeds['/api/v1/settings']) });
+    await route.fulfill({ status: 200, contentType: 'application/json', headers: { ETag: '"sha256-acceptance-settings"' }, body: JSON.stringify(feeds['/api/v1/settings']) });
   });
   await page.getByRole('button', { name: 'Settings' }).click();
   await page.getByRole('button', { name: 'Disable', exact: true }).click();
   await expect(page.getByRole('status')).toContainText('Update policy saved');
   expect(mutation?.headers.authorization).toBe('Bearer acceptance-token');
   expect(mutation?.headers['idempotency-key']).toMatch(/^[0-9a-f-]{36}$/);
+  expect(mutation?.headers['if-match']).toBe('"sha256-acceptance-settings"');
   expect(mutation?.body).toEqual({ schema: 1, setting: 'automatic_checks', value: false, beta_risk_acknowledged: false });
 });
 
