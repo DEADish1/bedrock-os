@@ -9,6 +9,23 @@ Bedrock Server OS has completed **0.1.0 — Product definition** and the indepen
 - Every release updates `CHANGELOG.md`, the website status page, version metadata, and downloadable checksums.
 - Preview-only UI must never be presented as working infrastructure.
 
+## Current remaining-work index
+
+This index is the short, actively maintained view of the open path to 1.0. The milestone sections below remain the authoritative detailed requirements; completing an item here does not close a milestone checkbox until its stated acceptance evidence also passes.
+
+- [ ] Restore the current branch to green CI by resolving the storage-expansion authenticated API test failure.
+- [ ] Complete physical boot and installer acceptance on supported Intel and AMD systems, including verified USB writing and a successful disposable-system-disk install. **Requires physical hardware.**
+- [ ] Complete cross-hypervisor boot acceptance and distinct Linux and Windows guest sessions on the exact release-candidate image. **Requires acceptance hosts and Windows installation media/license.**
+- [ ] Finish all remaining authenticated management mutations, VM console integration, advanced disclosures, concurrent-change protection, keyboard/WCAG 2.2 AA verification, and browser end-to-end tests.
+- [ ] Complete remote pairing redemption, transport/session binding, optional Google OpenID Connect, relay/fallback operation, and automatic client updates.
+- [ ] Build and acceptance-test the production Windows and universal macOS desktop clients, including certificate pinning and secure local key storage. **Requires Windows and Apple test/signing environments.**
+- [ ] Complete the independent security review of pairing, authentication, transport, updates, dependencies, SBOM, vulnerability handling, and penetration testing. **Requires an independent reviewer.**
+- [ ] Complete controlled UPS discharge/recovery acceptance and the full file, VM, configuration, and replacement-system-drive restore drill. **Requires physical hardware.**
+- [ ] Run every supported pre-1.0 upgrade path plus release-candidate soak, load, abrupt-power-loss, disk-failure, network-loss, and recovery tests. **Requires release-candidate hardware and time.**
+- [ ] Sign and notarize OS images, installers, clients, manifests, and release artifacts. **Requires production signing authority and credentials.**
+- [ ] Recruit the beta group, triage all ship-blocking findings, and publish release-candidate checksums. **Requires beta participants.**
+- [ ] Publish the signed 1.0 ISO, raw USB image, installers, desktop clients, checksums, source/tag, website, final documentation, support/monitoring readiness, and acceptance record; issue final go/no-go approval.
+
 ## 0.1.0 — Product definition (complete)
 
 - [x] Define Bedrock name, identity, tone, colors, and supplied assets.
