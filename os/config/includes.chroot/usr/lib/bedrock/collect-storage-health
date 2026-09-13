@@ -9,6 +9,7 @@ if [ "${BEDROCK_STORAGE_TEST_MODE:-0}" = 1 ]; then
   proc_root=${BEDROCK_STORAGE_PROC_ROOT:?test mode requires BEDROCK_STORAGE_PROC_ROOT}
   PATH=${BEDROCK_STORAGE_TEST_PATH:?test mode requires BEDROCK_STORAGE_TEST_PATH}:/usr/bin:/bin
   now=${BEDROCK_STORAGE_TEST_NOW:-0}
+  resources=${BEDROCK_STORAGE_TEST_RESOURCES:-/nonexistent/bedrock-storage-resources.json}
 else
   [ "$#" -eq 0 ] || { printf 'usage: %s\n' "$0" >&2; exit 2; }
   [ "$(id -u)" -eq 0 ] || { printf 'error: storage health collection requires root\n' >&2; exit 1; }
@@ -16,6 +17,7 @@ else
   proc_root=/proc
   PATH=/usr/sbin:/usr/bin:/sbin:/bin
   now=$(date +%s)
+  resources=/var/lib/bedrock/storage/resources.json
 fi
 export PATH
 
@@ -135,6 +137,22 @@ if command -v zpool >/dev/null 2>&1; then
   fi
 fi
 
+managed_pools='[]'
+if [ -e "$resources" ]; then
+  [ -f "$resources" ] && [ ! -L "$resources" ] && [ "$(wc -c < "$resources" | tr -d ' ')" -le 1048576 ] || {
+    printf 'error: managed storage state is unsafe\n' >&2; exit 1
+  }
+  jq -e '
+    .schema==1 and (.pools|type=="array" and length<=128) and
+    ([.pools[].name]|length==(unique|length)) and all(.pools[];
+      (.name|type=="string" and test("^[a-z][a-z0-9_-]{0,31}$")) and
+      (.backend=="zfs" or .backend=="mdraid") and
+      (.layout|type=="string" and length<=16) and
+      (.state=="online" or .state=="degraded" or .state=="rebuilding" or .state=="exported"))
+  ' "$resources" >/dev/null || { printf 'error: managed storage state is invalid\n' >&2; exit 1; }
+  managed_pools=$(jq -c '[.pools[]|{name,backend,layout,state}]|sort_by(.name)' "$resources")
+fi
+
 hardware_controllers='[]'
 if command -v lspci >/dev/null 2>&1; then
   hardware_controllers=$(lspci -Dnn | awk '
@@ -203,9 +221,10 @@ temporary=$(mktemp "$directory/.storage-health.XXXXXX")
 jq -S -n --argjson generated_unix "$now" --arg overall "$overall" \
   --argjson disks "$disks" --argjson md_arrays "$md_arrays" \
   --argjson zfs_available "$zfs_available" --argjson zfs_pools "$zfs_pools" \
+  --argjson managed_pools "$managed_pools" \
   --argjson hardware_controllers "$hardware_controllers" --argjson management_tools "$management_tools" \
   --argjson vendor_reports "$vendor_reports" \
-  '{schema:1,generated_unix:$generated_unix,overall:$overall,read_only:true,disks:$disks,
+  '{schema:1,generated_unix:$generated_unix,overall:$overall,read_only:true,disks:$disks,managed_pools:$managed_pools,
     software_raid:{md_arrays:$md_arrays,zfs:{available:$zfs_available,pools:$zfs_pools}},
     hardware_raid:{controllers:$hardware_controllers,management_tools:$management_tools,vendor_reports:$vendor_reports,
       explanation:(if ($vendor_reports|length)>0 then

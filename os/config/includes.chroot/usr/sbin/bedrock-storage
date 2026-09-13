@@ -262,6 +262,19 @@ jq -S --arg action "$action" --arg backend "$backend" --arg pool "$pool" --arg l
 chmod 0600 "$temporary"
 mv "$temporary" "$state"
 temporary=
+# Refresh the path-free lifecycle summary immediately when a health snapshot exists.
+# Telemetry collection may replace this file concurrently; both writers derive the
+# managed summary from the same durable state and publish with an atomic rename.
+health=$directory/health.json
+if [ -f "$health" ] && [ ! -L "$health" ] && jq -e '.schema==1 and has("managed_pools")' "$health" >/dev/null 2>&1; then
+  managed=$(jq -c '[.pools[]|{name,backend,layout,state}]|sort_by(.name)' "$state")
+  health_temporary=$(mktemp "$directory/.storage-health-state.XXXXXX")
+  if jq --argjson managed "$managed" '.managed_pools=$managed' "$health" > "$health_temporary"; then
+    chmod 0644 "$health_temporary"; mv "$health_temporary" "$health"
+  else
+    rm -f "$health_temporary"
+  fi
+fi
 jq -c -n --argjson occurred_unix "$now" --arg action "$action" --arg backend "$backend" --arg pool "$pool" \
   '{schema:1,occurred_unix:$occurred_unix,action:$action,backend:$backend,pool:$pool,result:"completed"}' >> "$audit"
 chmod 0600 "$audit"

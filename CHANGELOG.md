@@ -4,6 +4,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Added authenticated, idempotent storage export/import controls with exact confirmation, root-side backend/layout resolution, guarded state transitions, and a path-free managed-pool feed that keeps exported groups visible for reconnection.
 - Added authenticated, SHA-256-bound discard controls for staged browser image uploads, including exact confirmation and an import/discard lock that prevents cleanup from racing privileged validation.
 - Added authenticated browser image uploads with bounded streaming into an unprivileged staging directory, server-side SHA-256 review, exact hash-bound confirmation, guarded root format/checksum validation, post-import cleanup, and live Image Library controls for ISO, IMG, QCOW2, VHDX, and VMDK.
 - Added root-staged NAS credential rotation with owner-only secret transport, a privacy-safe readiness flag, authenticated idempotent execution, exact confirmation, staged-secret consumption, and no password content in the browser, API, state, audit, or command arguments.

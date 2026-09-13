@@ -115,6 +115,10 @@ def storage_scrub_request(request_id):
     return {"schema": 1, "request_id": request_id, "action": "storage-scrub", "id": "vault",
             "confirmation": "SCRUB STORAGE vault"}
 
+def storage_operation_request(request_id, operation):
+    return {"schema": 1, "request_id": request_id, "action": f"storage-{operation}", "id": "vault",
+            "confirmation": f"{operation.upper()} STORAGE vault"}
+
 def nas_identity_request(request_id, kind="user"):
     identity = "alice" if kind == "user" else "family"
     return {"schema": 1, "request_id": request_id, "action": "nas-identity-create", "id": identity,
@@ -304,6 +308,11 @@ def main():
             assert exchange(socket_path, storage_scrub_request(scrub_id))["status"] == "succeeded"
             assert exchange(socket_path, storage_scrub_request(scrub_id))["replayed"] is True
             assert exchange(socket_path, storage_scrub_request(str(uuid.uuid4())) | {"confirmation": "wrong"})["error"]["code"] == "invalid-storage-scrub"
+            for operation in ("export", "import"):
+                operation_id = str(uuid.uuid4())
+                assert exchange(socket_path, storage_operation_request(operation_id, operation))["status"] == "succeeded"
+                assert exchange(socket_path, storage_operation_request(operation_id, operation))["replayed"] is True
+                assert exchange(socket_path, storage_operation_request(str(uuid.uuid4()), operation) | {"confirmation": "wrong"})["error"]["code"] == f"invalid-storage-{operation}"
             nas_id = str(uuid.uuid4())
             assert exchange(socket_path, nas_identity_request(nas_id))["status"] == "succeeded"
             assert exchange(socket_path, nas_identity_request(nas_id))["replayed"] is True
@@ -344,14 +353,16 @@ def main():
             assert admin_requests[11] == {"schema": 1, "id": "nightly", "operation": "restore-latest", "confirmation": "RESTORE LATEST BACKUP nightly"}
             assert admin_requests[12] == {"schema": 1, "id": "archive", "operation": "create-staged", "confirmation": "CREATE ENCRYPTED BACKUP archive"}
             assert admin_requests[13] == {"schema": 1, "id": "vault", "operation": "scrub", "confirmation": "SCRUB STORAGE vault"}
-            assert admin_requests[14] == {"schema": 1, "id": "alice", "operation": "create-user", "confirmation": "CREATE NAS USER alice"}
-            assert admin_requests[15] == {"schema": 1, "id": "family", "subject": "alice", "operation": "add-member", "confirmation": "ADD NAS USER alice TO GROUP family"}
-            assert admin_requests[16] == {"schema": 1, "id": "alice", "operation": "rotate-staged", "confirmation": "ROTATE NAS CREDENTIAL alice"}
-            assert admin_requests[17] == {"schema": 1, "id": "photos", "operation": "stop", "confirmation": "STOP APPLICATION photos"}
-            assert admin_requests[18] == {"schema": 1, "id": "photos", "operation": "remove", "confirmation": "REMOVE APPLICATION photos"}
-            assert admin_requests[19] == {"schema": 1, "id": "photos", "operation": "update-latest", "confirmation": "UPDATE APPLICATION photos"}
-            assert admin_requests[20] == {"schema": 1, "id": "photos", "operation": "install-staged", "confirmation": "INSTALL APPLICATION photos"}
-            assert admin_requests[21] == {"schema": 1, "name": "debian", "type": "iso", "sha256": "d" * 64, "size_bytes": 4096, "confirmation": f"IMPORT ISO debian {'d' * 64}"}
+            assert admin_requests[14] == {"schema": 1, "id": "vault", "operation": "export", "confirmation": "EXPORT STORAGE vault"}
+            assert admin_requests[15] == {"schema": 1, "id": "vault", "operation": "import", "confirmation": "IMPORT STORAGE vault"}
+            assert admin_requests[16] == {"schema": 1, "id": "alice", "operation": "create-user", "confirmation": "CREATE NAS USER alice"}
+            assert admin_requests[17] == {"schema": 1, "id": "family", "subject": "alice", "operation": "add-member", "confirmation": "ADD NAS USER alice TO GROUP family"}
+            assert admin_requests[18] == {"schema": 1, "id": "alice", "operation": "rotate-staged", "confirmation": "ROTATE NAS CREDENTIAL alice"}
+            assert admin_requests[19] == {"schema": 1, "id": "photos", "operation": "stop", "confirmation": "STOP APPLICATION photos"}
+            assert admin_requests[20] == {"schema": 1, "id": "photos", "operation": "remove", "confirmation": "REMOVE APPLICATION photos"}
+            assert admin_requests[21] == {"schema": 1, "id": "photos", "operation": "update-latest", "confirmation": "UPDATE APPLICATION photos"}
+            assert admin_requests[22] == {"schema": 1, "id": "photos", "operation": "install-staged", "confirmation": "INSTALL APPLICATION photos"}
+            assert admin_requests[23] == {"schema": 1, "name": "debian", "type": "iso", "sha256": "d" * 64, "size_bytes": 4096, "confirmation": f"IMPORT ISO debian {'d' * 64}"}
             assert not any(vm_requests.iterdir())
 
             ledger = json.loads(state.read_text(encoding="utf-8"))

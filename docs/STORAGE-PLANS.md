@@ -10,6 +10,8 @@ The planner rejects mixing direct disks with hardware RAID logical volumes and r
 
 `bedrock-storage-guided` provides the local-console workflow. It explains protection choices, lists healthy candidate disks, requires the exact pool/layout/device phrase, displays the protected plan, and performs a final confirmation. The privileged executor repeats safety checks rather than trusting the interface.
 
+The authenticated management interface supports scrub, export, and import using only a logical managed-pool name. The root health collector publishes backend, layout, and lifecycle state without device paths, and the root action wrapper reconstructs the fixed executor request from owner-only managed state. Creation, expansion, and disk replacement still require the local guided workflow until the browser has a purpose-specific opaque disk-selection contract.
+
 ## NAS resources
 
 `bedrock-nas` manages local NAS users, groups, group membership, password rotation, datasets, quotas, ACLs, shares, snapshots, and snapshot removal. Passwords travel only through a bounded direct file, are copied with root-only permissions, and never appear in a request, command argument, state file, or audit event.

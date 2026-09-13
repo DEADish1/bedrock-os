@@ -215,13 +215,14 @@ def parse_request(raw):
         if not isinstance(backup_id, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", backup_id) or confirmation != f"CREATE ENCRYPTED BACKUP {backup_id}":
             raise RequestError("invalid-backup-create", "backup identity or exact confirmation is invalid")
         details = {"schema": 1, "id": backup_id, "operation": "create-staged", "confirmation": confirmation}
-    elif request.get("action") == "storage-scrub":
+    elif request.get("action") in {"storage-scrub", "storage-export", "storage-import"}:
         if set(request) != {"schema", "request_id", "action", "id", "confirmation"}:
-            raise RequestError("invalid-request", "request fields do not match the storage scrub schema")
+            raise RequestError("invalid-request", "request fields do not match the storage operation schema")
         storage_id, confirmation = request["id"], request["confirmation"]
-        if not isinstance(storage_id, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", storage_id) or confirmation != f"SCRUB STORAGE {storage_id}":
-            raise RequestError("invalid-storage-scrub", "storage identity or exact confirmation is invalid")
-        details = {"schema": 1, "id": storage_id, "operation": "scrub", "confirmation": confirmation}
+        operation = request["action"].removeprefix("storage-")
+        if not isinstance(storage_id, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", storage_id) or confirmation != f"{operation.upper()} STORAGE {storage_id}":
+            raise RequestError(f"invalid-storage-{operation}", "storage identity or exact confirmation is invalid")
+        details = {"schema": 1, "id": storage_id, "operation": operation, "confirmation": confirmation}
     elif request.get("action") == "nas-identity-create":
         if set(request) != {"schema", "request_id", "action", "id", "operation", "confirmation"}:
             raise RequestError("invalid-request", "request fields do not match the NAS identity schema")
@@ -295,7 +296,7 @@ def load_state(path):
         if fields not in ({"request_id", "request_sha256", "action", "status"},
                           {"request_id", "request_sha256", "action", "status", "created_unix"}):
             raise RuntimeError("action result state contains an invalid result")
-        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough", "image-convert", "image-import", "backup-run", "backup-restore-latest", "backup-create", "storage-scrub", "nas-identity-create", "nas-membership-add", "nas-credential-rotate", "app-control", "remote-device", "remote-pairing-approve"} or item["status"] not in {"pending", "succeeded", "failed"}:
+        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough", "image-convert", "image-import", "backup-run", "backup-restore-latest", "backup-create", "storage-scrub", "storage-export", "storage-import", "nas-identity-create", "nas-membership-add", "nas-credential-rotate", "app-control", "remote-device", "remote-pairing-approve"} or item["status"] not in {"pending", "succeeded", "failed"}:
             raise RuntimeError("action result state contains an unsupported result")
         if item["status"] != "succeeded" and "created_unix" not in item:
             raise RuntimeError("incomplete action result lacks a creation time")
@@ -498,7 +499,7 @@ def execute_storage(request, request_file, settings, helper_environment):
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     if directory.is_symlink() or not directory.is_dir():
         raise RuntimeError("storage request directory is unsafe")
-    path = directory / f"{request['id']}-scrub.json"
+    path = directory / f"{request['id']}-{request_file['operation']}.json"
     if path.exists() or path.is_symlink():
         raise RuntimeError("storage request path already exists")
     descriptor, temporary = tempfile.mkstemp(prefix=".storage-action.", dir=directory)
@@ -615,7 +616,7 @@ def execute(raw, settings):
         if completed_code != 0:
             raise RequestError("action-failed", "guarded backup helper rejected the action")
         return response(request["request_id"], "succeeded", replayed=False)
-    if request["action"] == "storage-scrub":
+    if request["action"] in {"storage-scrub", "storage-export", "storage-import"}:
         completed_code = execute_storage(request, details, settings, helper_environment)
         result_entry["status"] = "succeeded" if completed_code == 0 else "failed"
         save_state(settings["state"], state)

@@ -9,9 +9,11 @@ timer="$ROOT/os/config/includes.chroot/usr/lib/systemd/system/bedrock-storage-he
 timer_link="$ROOT/os/config/includes.chroot/etc/systemd/system/timers.target.wants/bedrock-storage-health.timer"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
+printf '%s\n' '{"schema":1,"pools":[{"name":"archive","backend":"mdraid","layout":"raid6","devices":["/dev/private"],"state":"exported"},{"name":"vault","backend":"zfs","layout":"mirror","devices":["/dev/private-a","/dev/private-b"],"state":"online"}]}' > "$work/resources.json"
 
 BEDROCK_STORAGE_TEST_MODE=1 BEDROCK_STORAGE_PROC_ROOT="$fixture/proc" \
 BEDROCK_STORAGE_TEST_PATH="$fixture/bin" BEDROCK_STORAGE_TEST_NOW=1787601000 \
+BEDROCK_STORAGE_TEST_RESOURCES="$work/resources.json" \
   "$collector" "$work/health.json"
 
 jq -e '
@@ -19,6 +21,7 @@ jq -e '
   (.disks | length == 2) and
   .disks[0].smart.health == "healthy" and .disks[0].smart.temperature_c == 31 and
   .disks[1].smart.health == "failing" and .disks[1].smart.command_exit == 8 and
+  .managed_pools == [{"backend":"mdraid","layout":"raid6","name":"archive","state":"exported"},{"backend":"zfs","layout":"mirror","name":"vault","state":"online"}] and
   (.software_raid.md_arrays | length == 2) and
   .software_raid.md_arrays[0].health == "healthy" and
   .software_raid.md_arrays[1].health == "degraded" and
