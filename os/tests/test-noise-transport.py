@@ -59,7 +59,8 @@ def gateway_once(path: pathlib.Path, seen: list[dict], ready: threading.Event) -
                                           separators=(",", ":")).encode() + b"\n")
 
 
-def exchange(module, private_raw: bytes, request: dict, corrupt: bool = False) -> tuple[dict | None, list[dict]]:
+def exchange(module, private_raw: bytes, request: dict, corrupt: bool = False,
+             required_device: str | None = None) -> tuple[dict | None, list[dict]]:
     seen: list[dict] = []
     ready = threading.Event()
     gateway = threading.Thread(target=gateway_once, args=(module.GATEWAY, seen, ready), daemon=True)
@@ -71,7 +72,7 @@ def exchange(module, private_raw: bytes, request: dict, corrupt: bool = False) -
     def server() -> None:
         try:
             with left, left.makefile("rb", buffering=0) as incoming, left.makefile("wb", buffering=0) as outgoing:
-                module.serve(incoming, outgoing)
+                module.serve(incoming, outgoing, required_device)
         except Exception as error:
             server_error.append(error)
 
@@ -99,7 +100,8 @@ def exchange(module, private_raw: bytes, request: dict, corrupt: bool = False) -
     worker.join(3)
     gateway.join(3)
     assert not worker.is_alive()
-    if corrupt or request.get("client_public_key") == "00" * 32:
+    if corrupt or request.get("client_public_key") == "00" * 32 or (
+            required_device is not None and request.get("device_id") != required_device):
         assert server_error and not seen and response is None
     else:
         assert not server_error
@@ -131,6 +133,14 @@ def main() -> None:
                                                     "client_public_key": "00" * 32})
         assert response is None
         response, _ = exchange(module, client_raw, {"schema": 1, "action": "redeem"}, corrupt=True)
+        assert response is None
+        device = "42345678-1234-4123-8123-123456789abc"
+        response, seen = exchange(module, client_raw, {"schema": 1, "action": "authorize", "device_id": device},
+                                  required_device=device)
+        assert response and seen[0]["device_id"] == device
+        response, _ = exchange(module, client_raw, {"schema": 1, "action": "authorize",
+                                                    "device_id": "62345678-1234-4123-8123-123456789abc"},
+                               required_device=device)
         assert response is None
     print("Noise XX transport identity-binding tests passed.")
 

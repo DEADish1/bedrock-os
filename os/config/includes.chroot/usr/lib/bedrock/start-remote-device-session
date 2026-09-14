@@ -1,0 +1,44 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 2 ] || { printf 'error: device and session identities are required\n' >&2; exit 2; }
+device=$1
+session=$2
+id_pattern='^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+printf '%s' "$device" | grep -Eq "$id_pattern" || { printf 'error: device identity is invalid\n' >&2; exit 1; }
+printf '%s' "$session" | grep -Eq "$id_pattern" || { printf 'error: session identity is invalid\n' >&2; exit 1; }
+
+if [ "${BEDROCK_REMOTE_LAUNCH_TEST_MODE:-0}" = 1 ]; then
+  runner=${BEDROCK_REMOTE_LAUNCH_SYSTEMD_RUN:?test systemd-run is required}
+  key=${BEDROCK_REMOTE_LAUNCH_PRIVATE_KEY:?test private key is required}
+  transport=${BEDROCK_REMOTE_LAUNCH_TRANSPORT:-/usr/lib/bedrock/bedrock-noise-transport}
+else
+  [ "$(id -u)" -eq 0 ] || { printf 'error: remote session launch requires root\n' >&2; exit 1; }
+  runner=/usr/bin/systemd-run
+  key=/var/lib/bedrock/remote/server-private-key.pem
+  transport=/usr/lib/bedrock/bedrock-noise-transport
+fi
+[ -f "$key" ] && [ ! -L "$key" ] || { printf 'error: remote server identity is unavailable\n' >&2; exit 1; }
+
+unit="bedrock-remote-session-$device-$session.service"
+target="bedrock-remote-device@$device.target"
+exec "$runner" --quiet --wait --pipe --collect --service-type=exec \
+  --unit="$unit" \
+  --property="PartOf=$target" \
+  --property="After=bedrock-pairing-gateway.service" \
+  --property="User=bedrock-remote" \
+  --property="Group=bedrock-remote" \
+  --property="LoadCredential=server-private-key:$key" \
+  --property="Environment=BEDROCK_NOISE_PRIVATE_KEY=%d/server-private-key" \
+  --property="NoNewPrivileges=yes" \
+  --property="PrivateDevices=yes" \
+  --property="PrivateTmp=yes" \
+  --property="ProtectHome=yes" \
+  --property="ProtectSystem=strict" \
+  --property="CapabilityBoundingSet=" \
+  --property="RestrictNamespaces=yes" \
+  --property="RestrictAddressFamilies=AF_UNIX" \
+  --property="RestrictSUIDSGID=yes" \
+  --property="LockPersonality=yes" \
+  --property="MemoryDenyWriteExecute=yes" \
+  "$transport" --require-device "$device"

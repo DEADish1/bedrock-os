@@ -4,6 +4,7 @@
 import json
 import os
 import pathlib
+import re
 import socket
 import struct
 import sys
@@ -19,6 +20,7 @@ GATEWAY = pathlib.Path(os.environ.get("BEDROCK_NOISE_GATEWAY", "/run/bedrock-pai
 MAX_HANDSHAKE = 65535
 MAX_PLAINTEXT = 61440
 MAX_GATEWAY_RESPONSE = 4096
+DEVICE_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
 
 class ProtocolError(Exception):
@@ -101,7 +103,7 @@ def gateway_exchange(value: dict) -> dict:
     return response
 
 
-def serve(input_stream, output_stream) -> None:
+def serve(input_stream, output_stream, required_device: str | None = None) -> None:
     noise = NoiseConnection.from_name(PROTOCOL)
     noise.set_as_responder()
     noise.set_prologue(PROLOGUE)
@@ -120,6 +122,8 @@ def serve(input_stream, output_stream) -> None:
     request = unpack_record(bytes(noise.decrypt(encrypted)), 0)
     if request.get("action") not in {"request", "redeem", "authorize"}:
         raise ProtocolError("unsupported action")
+    if required_device is not None and (request.get("action") != "authorize" or request.get("device_id") != required_device):
+        raise ProtocolError("session route does not match authenticated request")
     supplied = request.get("client_public_key")
     proven_key = remote.public_bytes.hex()
     if supplied is not None and supplied != proven_key:
@@ -130,8 +134,13 @@ def serve(input_stream, output_stream) -> None:
 
 
 def main() -> None:
+    required_device = None
+    if len(sys.argv) == 3 and sys.argv[1] == "--require-device" and DEVICE_ID.fullmatch(sys.argv[2]):
+        required_device = sys.argv[2]
+    elif len(sys.argv) != 1:
+        raise SystemExit(2)
     try:
-        serve(sys.stdin.buffer, sys.stdout.buffer)
+        serve(sys.stdin.buffer, sys.stdout.buffer, required_device)
     except (BrokenPipeError, OSError, ProtocolError, NoiseHandshakeError, NoiseInvalidMessage,
             NoiseValidationError, NoiseValueError, ValueError, json.JSONDecodeError):
         # The connected peer gets only a closed stream; details must not become a remote oracle.

@@ -151,6 +151,7 @@ sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/change-vm-passthrough"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/change-remote-device"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/approve-remote-pairing"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/initialize-remote-identity"
+sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/start-remote-device-session"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/change-backup"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/change-app"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/create-api-token"
@@ -268,6 +269,7 @@ else
   printf 'Noise transport integration test deferred to the packaged Debian runtime.\n'
 fi
 sh "$OS_DIR/tests/test-remote-devices.sh"
+sh "$OS_DIR/tests/test-remote-session-launch.sh"
 sh "$OS_DIR/tests/test-remote-status.sh"
 sh "$OS_DIR/tests/test-remote-device-change.sh"
 sh "$OS_DIR/tests/test-remote-pairing-approval.sh"

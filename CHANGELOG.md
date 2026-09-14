@@ -5,6 +5,7 @@ This file records completed work, decisions, validation, and the next starting p
 ## Unreleased
 
 - Added the server-side Noise XX connected-stream control responder for remote pairing and device authorization. It uses Debian's maintained Noise implementation, authenticates the existing X25519 server identity, derives the client key only from the handshake, accepts one encrypted versioned/sequence-bound control record, and fails closed on identity mismatch, truncation, tampering, or oversized input without opening a network port.
+- Bound authorized remote streams to their per-device revocation target through unique hardened transient services. The encrypted device route must match the unit target, and the unprivileged transport receives the root-only server key through a systemd credential, so revocation stops live streams without broadening key access.
 
 - Connected one-time VM console tokens through a same-origin WebSocket boundary to an ephemeral loopback-only `websockify` process. The API strips the token-bearing subprotocol before proxying, and tests cover root-broker redemption, bounded port selection, a complete WebSocket handshake, and token non-disclosure.
 - Added a guarded embedded noVNC console dialog for running virtual machines. It requests a one-time, ETag-bound authorization and carries the short-lived token only in the WebSocket subprotocol rather than a URL.
