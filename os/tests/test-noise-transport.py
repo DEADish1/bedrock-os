@@ -75,7 +75,7 @@ def api_once(path: pathlib.Path, seen: list[bytes], ready: threading.Event) -> N
                                str(len(body)).encode() + b"\r\nConnection: close\r\n\r\n" + body)
 
 
-def exchange(module, private_raw: bytes, request: dict, corrupt: bool = False,
+def exchange(module, private_raw: bytes, request: dict, corrupt: str | None = None,
              required_device: str | None = None) -> tuple[dict | None, list[dict]]:
     seen: list[dict] = []
     ready = threading.Event()
@@ -103,14 +103,22 @@ def exchange(module, private_raw: bytes, request: dict, corrupt: bool = False,
         outgoing.write(frame(bytes(noise.write_message()))); outgoing.flush()
         noise.read_message(receive_frame(incoming))
         outgoing.write(frame(bytes(noise.write_message()))); outgoing.flush()
-        plain = module.pack_record(request, 0)
-        encrypted = bytearray(noise.encrypt(plain))
-        if corrupt:
+        session_id = noise.get_handshake_hash()[:16]
+        encrypted = bytearray(module.encrypt_record(noise, request, session_id, module.CLIENT_TO_SERVER, 0,
+                                                    module.RECORD_CONTROL))
+        if corrupt == "ciphertext":
             encrypted[-1] ^= 1
+        elif corrupt == "session":
+            encrypted[1] ^= 1
+        elif corrupt == "direction":
+            encrypted[17] = module.SERVER_TO_CLIENT
+        elif corrupt == "type":
+            encrypted[26] = module.RECORD_API
         outgoing.write(frame(bytes(encrypted))); outgoing.flush()
         right.shutdown(socket.SHUT_WR)
         try:
-            response = module.unpack_record(bytes(noise.decrypt(receive_frame(incoming))), 0)
+            response = module.decrypt_record(noise, receive_frame(incoming), session_id, module.SERVER_TO_CLIENT,
+                                             0, module.RECORD_CONTROL)
         except (EOFError, OSError, struct.error):
             response = None
     worker.join(3)
@@ -150,8 +158,9 @@ def main() -> None:
                                                     "device_id": "42345678-1234-4123-8123-123456789abc",
                                                     "client_public_key": "00" * 32})
         assert response is None
-        response, _ = exchange(module, client_raw, {"schema": 1, "action": "redeem"}, corrupt=True)
-        assert response is None
+        for corruption in ("ciphertext", "session", "direction", "type"):
+            response, _ = exchange(module, client_raw, {"schema": 1, "action": "redeem"}, corrupt=corruption)
+            assert response is None
         device = "42345678-1234-4123-8123-123456789abc"
         response, seen = exchange(module, client_raw, {"schema": 1, "action": "authorize", "device_id": device},
                                   required_device=device)

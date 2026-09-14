@@ -14,6 +14,7 @@ import sys
 import time
 
 from cryptography.hazmat.primitives import serialization
+from cryptography.exceptions import InvalidTag
 from noise.connection import Keypair, NoiseConnection
 from noise.exceptions import NoiseHandshakeError, NoiseInvalidMessage, NoiseValidationError, NoiseValueError
 
@@ -27,6 +28,11 @@ MAX_HANDSHAKE = 65535
 MAX_PLAINTEXT = 61440
 MAX_GATEWAY_RESPONSE = 4096
 MAX_API_BODY = 32768
+RECORD_HEADER = struct.Struct("!B16sBQBI")
+RECORD_CONTROL = 1
+RECORD_API = 2
+CLIENT_TO_SERVER = 0
+SERVER_TO_CLIENT = 1
 MAX_RECORDS = 1048576
 MAX_DIRECTION_BYTES = 1073741824
 MAX_AGE_SECONDS = 3600
@@ -70,13 +76,7 @@ def load_private_key(path: pathlib.Path) -> bytes:
                              serialization.NoEncryption())
 
 
-def unpack_record(plain: bytes, expected_sequence: int) -> dict:
-    if len(plain) < 13:
-        raise ProtocolError("short record")
-    version, sequence, size = struct.unpack("!BQI", plain[:13])
-    body = plain[13:]
-    if version != 1 or sequence != expected_sequence or size != len(body) or size > MAX_PLAINTEXT - 13:
-        raise ProtocolError("invalid authenticated record")
+def decode_body(body: bytes) -> dict:
     try:
         value = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -86,11 +86,38 @@ def unpack_record(plain: bytes, expected_sequence: int) -> dict:
     return value
 
 
-def pack_record(value: dict, sequence: int) -> bytes:
+def encode_body(value: dict) -> bytes:
     body = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    if len(body) > MAX_PLAINTEXT - 13:
+    if len(body) > MAX_PLAINTEXT:
         raise ProtocolError("response is too large")
-    return struct.pack("!BQI", 1, sequence, len(body)) + body
+    return body
+
+
+def encrypt_record(noise: NoiseConnection, value: dict, session_id: bytes, direction: int,
+                   sequence: int, record_type: int) -> bytes:
+    body = encode_body(value)
+    if len(session_id) != 16 or direction not in {CLIENT_TO_SERVER, SERVER_TO_CLIENT} or record_type not in {RECORD_CONTROL, RECORD_API}:
+        raise ProtocolError("invalid record metadata")
+    header = RECORD_HEADER.pack(1, session_id, direction, sequence, record_type, len(body))
+    ciphertext = noise.noise_protocol.cipher_state_encrypt.encrypt_with_ad(header, body)
+    return header + ciphertext
+
+
+def decrypt_record(noise: NoiseConnection, record: bytes, session_id: bytes, direction: int,
+                   expected_sequence: int, expected_type: int) -> dict:
+    if len(record) < RECORD_HEADER.size + 16:
+        raise ProtocolError("short record")
+    header, ciphertext = record[:RECORD_HEADER.size], record[RECORD_HEADER.size:]
+    version, supplied_session, supplied_direction, sequence, record_type, size = RECORD_HEADER.unpack(header)
+    if version != 1 or supplied_session != session_id or supplied_direction != direction or sequence != expected_sequence or record_type != expected_type or size > MAX_PLAINTEXT or len(ciphertext) != size + 16:
+        raise ProtocolError("invalid authenticated record")
+    try:
+        body = noise.noise_protocol.cipher_state_decrypt.decrypt_with_ad(header, ciphertext)
+    except InvalidTag as error:
+        raise ProtocolError("record authentication failed") from error
+    if len(body) != size:
+        raise ProtocolError("invalid authenticated record")
+    return decode_body(body)
 
 
 def gateway_exchange(value: dict) -> dict:
@@ -177,12 +204,13 @@ def serve(input_stream, output_stream, required_device: str | None = None) -> No
     noise.read_message(read_frame(input_stream, MAX_HANDSHAKE))
     if not noise.handshake_finished:
         raise ProtocolError("incomplete handshake")
+    session_id = noise.get_handshake_hash()[:16]
     remote = noise.noise_protocol.handshake_state.rs
     if remote is None or len(remote.public_bytes) != 32:
         raise ProtocolError("missing client identity")
 
-    encrypted = read_frame(input_stream, MAX_PLAINTEXT + 16)
-    request = unpack_record(bytes(noise.decrypt(encrypted)), 0)
+    encrypted = read_frame(input_stream, MAX_PLAINTEXT + RECORD_HEADER.size + 16)
+    request = decrypt_record(noise, encrypted, session_id, CLIENT_TO_SERVER, 0, RECORD_CONTROL)
     if request.get("action") not in {"request", "redeem", "authorize"}:
         raise ProtocolError("unsupported action")
     if required_device is not None and (request.get("action") != "authorize" or request.get("device_id") != required_device):
@@ -193,7 +221,7 @@ def serve(input_stream, output_stream, required_device: str | None = None) -> No
         raise ProtocolError("client identity mismatch")
     request["client_public_key"] = proven_key
     response = gateway_exchange(request)
-    write_frame(output_stream, bytes(noise.encrypt(pack_record(response, 0))))
+    write_frame(output_stream, encrypt_record(noise, response, session_id, SERVER_TO_CLIENT, 0, RECORD_CONTROL))
     if required_device is None or response.get("status") != "authorized" or response.get("device_id") != required_device:
         return
 
@@ -203,7 +231,7 @@ def serve(input_stream, output_stream, required_device: str | None = None) -> No
     sequence = 1
     while sequence < MAX_RECORDS and time.monotonic() - started <= MAX_AGE_SECONDS:
         try:
-            encrypted = read_frame(input_stream, MAX_PLAINTEXT + 16)
+            encrypted = read_frame(input_stream, MAX_PLAINTEXT + RECORD_HEADER.size + 16)
         except ProtocolError as error:
             if str(error) == "truncated stream":
                 return
@@ -211,9 +239,9 @@ def serve(input_stream, output_stream, required_device: str | None = None) -> No
         inbound_bytes += len(encrypted)
         if inbound_bytes > MAX_DIRECTION_BYTES:
             raise ProtocolError("inbound byte limit exceeded")
-        api_request = unpack_record(bytes(noise.decrypt(encrypted)), sequence)
+        api_request = decrypt_record(noise, encrypted, session_id, CLIENT_TO_SERVER, sequence, RECORD_API)
         api_response = api_exchange(api_request, token)
-        encrypted_response = bytes(noise.encrypt(pack_record(api_response, sequence)))
+        encrypted_response = encrypt_record(noise, api_response, session_id, SERVER_TO_CLIENT, sequence, RECORD_API)
         outbound_bytes += len(encrypted_response)
         if outbound_bytes > MAX_DIRECTION_BYTES:
             raise ProtocolError("outbound byte limit exceeded")
