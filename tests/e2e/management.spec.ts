@@ -33,7 +33,8 @@ async function mockAuthenticatedApi(page: Page) {
       return;
     }
     const body = feeds[path];
-    await route.fulfill({ status: body ? 200 : 404, contentType: 'application/json', headers: path === '/api/v1/settings' ? { ETag: '"sha256-acceptance-settings"' } : {}, body: JSON.stringify(body ?? { schema: 1, error: 'not-found' }) });
+    const etag = path === '/api/v1/settings' ? '"sha256-acceptance-settings"' : path === '/api/v1/remote/devices' ? '"sha256-acceptance-remote"' : null;
+    await route.fulfill({ status: body ? 200 : 404, contentType: 'application/json', headers: etag ? { ETag: etag } : {}, body: JSON.stringify(body ?? { schema: 1, error: 'not-found' }) });
   });
 }
 
@@ -91,6 +92,31 @@ test('an authenticated settings mutation sends guarded input and refreshes confi
   expect(mutation?.headers['idempotency-key']).toMatch(/^[0-9a-f-]{36}$/);
   expect(mutation?.headers['if-match']).toBe('"sha256-acceptance-settings"');
   expect(mutation?.body).toEqual({ schema: 1, setting: 'automatic_checks', value: false, beta_risk_acknowledged: false });
+});
+
+test('remote pairing approval is bound to the displayed trust state', async ({ page }) => {
+  const path = '/api/v1/remote/devices';
+  const previous = feeds[path];
+  const pairingId = '12345678-1234-4123-8123-123456789abc';
+  feeds[path] = { schema: 1, devices: [], pending_requests: [{ id: pairingId, approved: false, expires_in_seconds: 420 }] };
+  try {
+    let mutationHeaders: Record<string, string> | undefined;
+    await connect(page);
+    await page.route('**/api/v1/remote/**', async route => {
+      if (route.request().method() === 'POST') {
+        mutationHeaders = route.request().headers();
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ schema: 1, request_id: mutationHeaders['idempotency-key'], status: 'succeeded', replayed: false }) });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: 'application/json', headers: { ETag: '"sha256-acceptance-remote"' }, body: JSON.stringify(feeds[path]) });
+    });
+    await page.getByRole('button', { name: 'Remote access' }).click();
+    await page.getByRole('button', { name: 'Review' }).click();
+    await page.getByRole('dialog').getByRole('textbox').fill(`APPROVE REMOTE DEVICE ${pairingId}`);
+    await page.getByRole('button', { name: 'Approve pairing' }).click();
+    await expect(page.getByRole('status')).toContainText('Remote pairing approved');
+    expect(mutationHeaders?.['if-match']).toBe('"sha256-acceptance-remote"');
+  } finally { feeds[path] = previous; }
 });
 
 test('advanced details are keyboard operable while primary hardware health stays visible', async ({ page }) => {

@@ -291,7 +291,7 @@ def main() -> None:
             assert alert_status == 200 and alert_body["alerts"][0]["kind"] == "disk-smart"
             assert "/dev/sda" not in json.dumps(alert_body)
             assert request(socket_path, "GET", "/api/v1/audit") == (200, {"schema": 1, "events": [{"id": "event-1", "category": "storage", "action": "scrub", "outcome": "succeeded", "occurred_unix": 99}]})
-            remote_status, remote_body = request(socket_path, "GET", "/api/v1/remote/devices")
+            remote_status, remote_body, remote_headers = request(socket_path, "GET", "/api/v1/remote/devices", include_headers=True)
             assert remote_status == 200 and remote_body["devices"][0]["name"] == "Office laptop"
             assert remote_body["pending_requests"] == [{"id": "12345678-1234-4123-8123-123456789abc", "approved": False, "expires_in_seconds": 420}]
             assert "public_key" not in json.dumps(remote_body) and "sha256" not in json.dumps(remote_body)
@@ -372,19 +372,22 @@ def main() -> None:
             remote_device_id = "42345678-1234-4123-8123-123456789abc"
             remote_revoke_id = str(uuid.uuid4())
             remote_revoke_body = {"schema": 1, "operation": "revoke", "confirmation": f"REVOKE REMOTE DEVICE {remote_device_id}"}
-            remote_revoke_headers = {"Content-Type": "application/json", "Idempotency-Key": remote_revoke_id}
+            assert re.fullmatch(r'"sha256-[0-9a-f]{64}"', remote_headers["ETag"])
+            assert request(socket_path, "POST", f"/api/v1/remote/devices/{remote_device_id}", body=remote_revoke_body, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 428
+            assert request(socket_path, "POST", f"/api/v1/remote/devices/{remote_device_id}", body=remote_revoke_body, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": '"sha256-' + "0" * 64 + '"'})[0] == 412
+            remote_revoke_headers = {"Content-Type": "application/json", "Idempotency-Key": remote_revoke_id, "If-Match": remote_headers["ETag"]}
             assert request(socket_path, "POST", f"/api/v1/remote/devices/{remote_device_id}", body=remote_revoke_body, extra_headers=remote_revoke_headers)[0] == 200
             assert request(socket_path, "POST", f"/api/v1/remote/devices/{remote_device_id}", body=remote_revoke_body, extra_headers=remote_revoke_headers)[1]["replayed"] is True
-            assert request(socket_path, "POST", f"/api/v1/remote/devices/{remote_device_id}", body=remote_revoke_body | {"confirmation": "REVOKE REMOTE DEVICE wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            assert request(socket_path, "POST", f"/api/v1/remote/devices/{remote_device_id}", body=remote_revoke_body | {"confirmation": "REVOKE REMOTE DEVICE wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": remote_headers["ETag"]})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[7] == {"schema": 1, "operation": "revoke", "id": remote_device_id, "confirmation": f"REVOKE REMOTE DEVICE {remote_device_id}"}
             pairing_id = "12345678-1234-4123-8123-123456789abc"
             pairing_approval_id = str(uuid.uuid4())
             pairing_body = {"schema": 1, "confirmation": f"APPROVE REMOTE DEVICE {pairing_id}"}
-            pairing_headers = {"Content-Type": "application/json", "Idempotency-Key": pairing_approval_id}
+            pairing_headers = {"Content-Type": "application/json", "Idempotency-Key": pairing_approval_id, "If-Match": remote_headers["ETag"]}
             assert request(socket_path, "POST", f"/api/v1/remote/pairings/{pairing_id}/approve", body=pairing_body, extra_headers=pairing_headers)[0] == 200
             assert request(socket_path, "POST", f"/api/v1/remote/pairings/{pairing_id}/approve", body=pairing_body, extra_headers=pairing_headers)[1]["replayed"] is True
-            assert request(socket_path, "POST", f"/api/v1/remote/pairings/{pairing_id}/approve", body={"schema": 1, "confirmation": "APPROVE REMOTE DEVICE wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            assert request(socket_path, "POST", f"/api/v1/remote/pairings/{pairing_id}/approve", body={"schema": 1, "confirmation": "APPROVE REMOTE DEVICE wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": remote_headers["ETag"]})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[8] == {"schema": 1, "id": pairing_id, "confirmation": f"APPROVE REMOTE DEVICE {pairing_id}"}
             conversion_id = str(uuid.uuid4())
