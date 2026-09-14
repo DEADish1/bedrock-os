@@ -54,6 +54,7 @@
       "/api/v1/vms",
       "/api/v1/vms/{name}",
       "/api/v1/vms/{name}/clone",
+      "/api/v1/vms/{name}/console",
       "/api/v1/vms/{name}/console-sessions",
       "/api/v1/vms/{name}/images",
       "/api/v1/vms/{name}/networks",

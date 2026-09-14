@@ -5,10 +5,13 @@ import json
 import os
 import pathlib
 import re
+import select
 import socket
 import socketserver
 import stat
 import tempfile
+import time
+import uuid
 from http.server import BaseHTTPRequestHandler
 
 SOCKET = pathlib.Path(os.environ.get("BEDROCK_API_SOCKET", "/run/bedrock-api/api.sock"))
@@ -119,6 +122,10 @@ def broker_action(request_id: str, broker_request: dict) -> dict:
     session_fields = {"schema", "status", "vm", "token", "expires_at", "one_time", "transport", "websocket_path"}
     if result.get("status") == "succeeded" and result.get("replayed") is False and set(result) == {"schema", "request_id", "status", "replayed", "session"} and isinstance(session, dict) and set(session) == session_fields and session.get("schema") == 1 and session.get("status") == "authorized" and re.fullmatch(r"[0-9a-f]{64}", session.get("token", "")) and type(session.get("expires_at")) is int and session.get("one_time") is True and session.get("transport") == "vnc-websocket":
         return result
+    proxy = result.get("proxy")
+    proxy_fields = {"schema", "status", "vm", "host", "port", "expires_at", "transport"}
+    if result.get("status") == "succeeded" and result.get("replayed") is False and set(result) == {"schema", "request_id", "status", "replayed", "proxy"} and isinstance(proxy, dict) and set(proxy) == proxy_fields and proxy.get("schema") == 1 and proxy.get("status") == "ready" and re.fullmatch(r"[a-z][a-z0-9-]{0,30}[a-z0-9]", proxy.get("vm", "")) and proxy.get("host") == "127.0.0.1" and type(proxy.get("port")) is int and 20000 <= proxy["port"] <= 20999 and type(proxy.get("expires_at")) is int and proxy.get("transport") == "vnc-websocket":
+        return result
     error = result.get("error")
     if result.get("status") in {"rejected", "failed"} and isinstance(error, dict) and set(error) == {"code", "message"} and error.get("code") in {
         "idempotency-conflict", "action-failed", "internal-error"
@@ -147,6 +154,16 @@ def vm_console_session_action(request_id: str, name: str, body: object) -> dict:
     if result.get("replayed") is not False or not isinstance(session, dict) or session.get("vm") != name or session.get("websocket_path") != f"/api/v1/vms/{name}/console":
         raise ValueError("console authorization cannot be replayed")
     return result
+
+def vm_console_redemption_action(name: str, token: str) -> dict:
+    if not VM_NAME.fullmatch(name) or not SHA256.fullmatch(token):
+        raise ValueError("invalid VM console redemption")
+    request_id = str(uuid.uuid4())
+    result = broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "vm-console-redeem", "name": name, "token": token})
+    proxy = result.get("proxy")
+    if result.get("replayed") is not False or not isinstance(proxy, dict) or proxy.get("vm") != name or proxy.get("host") != "127.0.0.1":
+        raise ValueError("console authorization cannot be replayed")
+    return proxy
 
 def vm_control_action(request_id: str, name: str, body: object) -> dict:
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,30}[a-z0-9]", name) or not isinstance(body, dict) or set(body) != {"schema", "operation", "confirmation"} or body.get("schema") != 1:
@@ -893,7 +910,77 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def proxy_vm_console(self, name: str) -> None:
+        protocols = [item.strip() for item in self.headers.get("Sec-WebSocket-Protocol", "").split(",") if item.strip()]
+        token_protocols = [item for item in protocols if re.fullmatch(r"bedrock-console\.[0-9a-f]{64}", item)]
+        host, origin = self.headers.get("Host", ""), self.headers.get("Origin", "")
+        key = self.headers.get("Sec-WebSocket-Key", "")
+        connection_tokens = {item.strip().lower() for item in self.headers.get("Connection", "").split(",")}
+        if protocols.count("binary") != 1 or len(token_protocols) != 1 or len(protocols) != 2 or self.headers.get("Upgrade", "").lower() != "websocket" or "upgrade" not in connection_tokens or self.headers.get("Sec-WebSocket-Version") != "13" or not re.fullmatch(r"[A-Za-z0-9+/]{22}==", key) or not host or origin not in {f"http://{host}", f"https://{host}"}:
+            self.send_json(400, {"schema": 1, "error": "invalid-console-upgrade"})
+            return
+        token = token_protocols[0].removeprefix("bedrock-console.")
+        try:
+            proxy = vm_console_redemption_action(name, token)
+        except (ValueError, OSError, socket.timeout):
+            self.send_json(401, {"schema": 1, "error": "invalid-console-authorization"})
+            return
+        upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        upstream.settimeout(0.5)
+        try:
+            deadline = time.monotonic() + 0.5
+            while True:
+                try:
+                    upstream.connect((proxy["host"], proxy["port"]))
+                    break
+                except (ConnectionRefusedError, socket.timeout):
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.02)
+            request = (
+                f"GET {self.path} HTTP/1.1\r\n"
+                f"Host: 127.0.0.1:{proxy['port']}\r\n"
+                "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+                f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n"
+                "Sec-WebSocket-Protocol: binary\r\n\r\n"
+            ).encode("ascii")
+            upstream.sendall(request)
+            response_bytes = bytearray()
+            while b"\r\n\r\n" not in response_bytes:
+                chunk = upstream.recv(4096)
+                if not chunk or len(response_bytes) + len(chunk) > 16384:
+                    raise OSError("invalid console proxy handshake")
+                response_bytes.extend(chunk)
+            headers = bytes(response_bytes).split(b"\r\n\r\n", 1)[0].lower()
+            if not headers.startswith(b"http/1.1 101 ") or b"sec-websocket-protocol: binary" not in headers or b"bedrock-console" in headers:
+                raise OSError("console proxy rejected handshake")
+            self.connection.sendall(response_bytes)
+            self.close_connection = True
+            upstream.settimeout(None)
+            self.connection.settimeout(None)
+            sockets = [self.connection, upstream]
+            idle_deadline = time.monotonic() + 300
+            while time.monotonic() < idle_deadline:
+                readable, _, _ = select.select(sockets, [], [], min(5, max(0, idle_deadline - time.monotonic())))
+                if not readable:
+                    continue
+                for source in readable:
+                    data = source.recv(65536)
+                    if not data:
+                        return
+                    (upstream if source is self.connection else self.connection).sendall(data)
+                    idle_deadline = time.monotonic() + 300
+        except OSError:
+            if not self.close_connection:
+                self.send_json(503, {"schema": 1, "error": "console-proxy-unavailable"})
+        finally:
+            upstream.close()
+
     def do_GET(self) -> None:
+        console = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/console", self.path)
+        if console:
+            self.proxy_vm_console(console.group(1))
+            return
         if not authorized(self.headers.get("Authorization")):
             self.send_json(401, {"schema": 1, "error": "unauthorized"})
             return

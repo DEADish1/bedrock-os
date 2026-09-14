@@ -47,6 +47,11 @@ def console_request(request_id, confirmation="OPEN CONSOLE VM test-vm"):
             "confirmation": confirmation}
 
 
+def console_redemption_request(request_id, token="a" * 64):
+    return {"schema": 1, "request_id": request_id, "action": "vm-console-redeem", "name": "test-vm",
+            "token": token}
+
+
 def clone_request(request_id):
     return {"schema": 1, "request_id": request_id, "action": "vm-clone", "source": "test-vm",
             "name": "copy-vm", "confirmation": "CLONE VM test-vm AS copy-vm"}
@@ -181,6 +186,12 @@ def main():
         console_helper = work / "console-helper"
         console_helper.write_text("#!/bin/sh\nnow=$(date +%s)\nprintf '{\"schema\":1,\"status\":\"authorized\",\"vm\":\"test-vm\",\"token\":\"%064d\",\"expires_at\":%s,\"one_time\":true,\"transport\":\"vnc-websocket\",\"websocket_path\":\"/api/v1/vms/test-vm/console\"}\\n' 1 $((now+60))\n", encoding="utf-8")
         console_helper.chmod(0o755)
+        console_redemption_helper = work / "console-redemption-helper"
+        console_redemption_helper.write_text("#!/bin/sh\nnow=$(date +%s)\nprintf '{\"schema\":1,\"status\":\"redeemed\",\"vm\":\"test-vm\",\"socket\":\"/run/libvirt/qemu/bedrock-test-vm.vnc\",\"redeemed_at\":%s,\"proxy_start_expires_at\":%s,\"one_time\":true,\"network_listener\":false}\\n' \"$now\" \"$((now+10))\"\n", encoding="utf-8")
+        console_redemption_helper.chmod(0o755)
+        console_proxy_helper = work / "console-proxy-helper"
+        console_proxy_helper.write_text("#!/bin/sh\nrm -f \"$1\"\nprintf '%s\\n' \"$2\" >> \"$BEDROCK_TEST_CALLS\"\nsleep 1\n", encoding="utf-8")
+        console_proxy_helper.chmod(0o755)
         environment = os.environ | {
             "BEDROCK_ACTION_BROKER_TEST_MODE": "1", "BEDROCK_ACTION_BROKER_EXPECTED_UID": str(os.getuid()),
             "BEDROCK_ACTION_BROKER_SOCKET": str(socket_path), "BEDROCK_ACTION_BROKER_STATE": str(state),
@@ -199,6 +210,8 @@ def main():
             "BEDROCK_ACTION_BROKER_NETWORK_ATTACHMENT_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_PASSTHROUGH_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_CONSOLE_SESSION_HELPER": str(console_helper),
+            "BEDROCK_ACTION_BROKER_CONSOLE_REDEMPTION_HELPER": str(console_redemption_helper),
+            "BEDROCK_ACTION_BROKER_CONSOLE_PROXY_HELPER": str(console_proxy_helper),
             "BEDROCK_ACTION_BROKER_IMAGE_CONVERSION_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_IMAGE_IMPORT_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_BACKUP_HELPER": str(admin_helper),
@@ -274,6 +287,18 @@ def main():
             assert console_result["session"]["token"] == "0" * 63 + "1" and console_result["session"]["one_time"] is True
             assert exchange(socket_path, console_request(console_id))["replayed"] is True
             assert exchange(socket_path, console_request(str(uuid.uuid4()), "OPEN CONSOLE VM other"))["error"]["code"] == "invalid-vm-console"
+            assert not any(vm_requests.iterdir())
+            console_redemption_id = str(uuid.uuid4())
+            console_redemption = exchange(socket_path, console_redemption_request(console_redemption_id))
+            assert console_redemption["status"] == "succeeded" and console_redemption["replayed"] is False
+            assert console_redemption["proxy"]["vm"] == "test-vm" and 20000 <= console_redemption["proxy"]["port"] <= 20999
+            assert console_redemption["proxy"]["host"] == "127.0.0.1" and console_redemption["proxy"]["transport"] == "vnc-websocket"
+            assert exchange(socket_path, console_redemption_request(console_redemption_id))["replayed"] is True
+            assert exchange(socket_path, console_redemption_request(str(uuid.uuid4()), "bad"))["error"]["code"] == "invalid-vm-console"
+            for _ in range(20):
+                if vm_calls.exists() and vm_calls.read_text(encoding="utf-8").strip(): break
+                time.sleep(0.05)
+            assert 20000 <= int(vm_calls.read_text(encoding="utf-8").splitlines()[-1]) <= 20999
             assert not any(vm_requests.iterdir())
             clone_id = str(uuid.uuid4())
             assert exchange(socket_path, clone_request(clone_id))["status"] == "succeeded"
@@ -398,7 +423,7 @@ def main():
             assert not any(vm_requests.iterdir())
 
             ledger = json.loads(state.read_text(encoding="utf-8"))
-            assert ledger["schema"] == 1 and len(ledger["results"]) == 34
+            assert ledger["schema"] == 1 and len(ledger["results"]) == 35
             serialized = state.read_text(encoding="utf-8")
             assert "I_ACCEPT" not in serialized and "automatic_checks" not in serialized
             assert state.stat().st_mode & 0o777 == 0o600

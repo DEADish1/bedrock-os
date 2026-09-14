@@ -165,6 +165,22 @@ def main() -> None:
         console_action_helper = work / "console-helper"
         console_action_helper.write_text("#!/bin/sh\nnow=$(date +%s)\nprintf '{\"schema\":1,\"status\":\"authorized\",\"vm\":\"test-vm\",\"token\":\"%064d\",\"expires_at\":%s,\"one_time\":true,\"transport\":\"vnc-websocket\",\"websocket_path\":\"/api/v1/vms/test-vm/console\"}\\n' 1 $((now+60))\n", encoding="utf-8")
         console_action_helper.chmod(0o755)
+        console_redemption_helper = work / "console-redemption-helper"
+        console_redemption_helper.write_text("#!/bin/sh\nnow=$(date +%s)\nprintf '{\"schema\":1,\"status\":\"redeemed\",\"vm\":\"test-vm\",\"socket\":\"/run/libvirt/qemu/bedrock-test-vm.vnc\",\"redeemed_at\":%s,\"proxy_start_expires_at\":%s,\"one_time\":true,\"network_listener\":false}\\n' \"$now\" \"$((now+10))\"\n", encoding="utf-8")
+        console_redemption_helper.chmod(0o755)
+        console_proxy_helper = work / "console-proxy-helper"
+        console_proxy_helper.write_text("""#!/usr/bin/python3
+import base64, hashlib, os, socket, sys
+os.unlink(sys.argv[1])
+server = socket.socket(); server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); server.bind(('127.0.0.1', int(sys.argv[2]))); server.listen(1)
+client, _ = server.accept(); request = b''
+while b'\\r\\n\\r\\n' not in request: request += client.recv(4096)
+key = next(line.split(b':', 1)[1].strip() for line in request.split(b'\\r\\n') if line.lower().startswith(b'sec-websocket-key:'))
+accept = base64.b64encode(hashlib.sha1(key + b'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest())
+client.sendall(b'HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\nSec-WebSocket-Protocol: binary\\r\\nSec-WebSocket-Accept: ' + accept + b'\\r\\n\\r\\n')
+client.close(); server.close()
+""", encoding="utf-8")
+        console_proxy_helper.chmod(0o755)
         tokens.write_text(json.dumps({"schema": 1, "tokens": [{
             "name": "test-client", "sha256": hashlib.sha256(TOKEN.encode()).hexdigest(),
             "created_at": "2026-08-31T00:00:00Z", "revoked": False,
@@ -233,6 +249,8 @@ def main() -> None:
             "BEDROCK_ACTION_BROKER_NETWORK_ATTACHMENT_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_PASSTHROUGH_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_CONSOLE_SESSION_HELPER": str(console_action_helper),
+            "BEDROCK_ACTION_BROKER_CONSOLE_REDEMPTION_HELPER": str(console_redemption_helper),
+            "BEDROCK_ACTION_BROKER_CONSOLE_PROXY_HELPER": str(console_proxy_helper),
             "BEDROCK_ACTION_BROKER_REMOTE_DEVICE_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_REMOTE_PAIRING_APPROVAL_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_REMOTE_REQUESTS": str(vm_action_requests),
@@ -266,13 +284,15 @@ def main() -> None:
             assert request(socket_path, "GET", "/api/v1/health")[0] == 200
             schema_status, schema_body = request(socket_path, "GET", "/api/v1/openapi.json")
             assert schema_status == 200 and schema_body["openapi"] == "3.1.0"
-            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/apps/{id}", "/api/v1/apps/{id}/install", "/api/v1/apps/{id}/power", "/api/v1/apps/{id}/update", "/api/v1/backups", "/api/v1/backups/{id}/create", "/api/v1/backups/{id}/restore-latest", "/api/v1/backups/{id}/run", "/api/v1/groups/{id}/members", "/api/v1/hardware", "/api/v1/images", "/api/v1/images/{name}/convert", "/api/v1/images/{name}/import", "/api/v1/images/{name}/upload", "/api/v1/remote/devices", "/api/v1/remote/devices/{id}", "/api/v1/remote/pairings/{id}/approve", "/api/v1/settings", "/api/v1/storage", "/api/v1/storage/{id}/expand", "/api/v1/storage/{id}/export", "/api/v1/storage/{id}/import", "/api/v1/storage/{id}/replace", "/api/v1/storage/{id}/scrub", "/api/v1/users", "/api/v1/users/{id}/rotate-credential", "/api/v1/virtualization/capabilities", "/api/v1/virtualization/passthrough-candidates", "/api/v1/vms", "/api/v1/vms/{name}", "/api/v1/vms/{name}/clone", "/api/v1/vms/{name}/console-sessions", "/api/v1/vms/{name}/images", "/api/v1/vms/{name}/networks", "/api/v1/vms/{name}/passthrough", "/api/v1/vms/{name}/power", "/api/v1/vms/{name}/resources", "/api/v1/vms/{name}/snapshots"}
+            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/apps/{id}", "/api/v1/apps/{id}/install", "/api/v1/apps/{id}/power", "/api/v1/apps/{id}/update", "/api/v1/backups", "/api/v1/backups/{id}/create", "/api/v1/backups/{id}/restore-latest", "/api/v1/backups/{id}/run", "/api/v1/groups/{id}/members", "/api/v1/hardware", "/api/v1/images", "/api/v1/images/{name}/convert", "/api/v1/images/{name}/import", "/api/v1/images/{name}/upload", "/api/v1/remote/devices", "/api/v1/remote/devices/{id}", "/api/v1/remote/pairings/{id}/approve", "/api/v1/settings", "/api/v1/storage", "/api/v1/storage/{id}/expand", "/api/v1/storage/{id}/export", "/api/v1/storage/{id}/import", "/api/v1/storage/{id}/replace", "/api/v1/storage/{id}/scrub", "/api/v1/users", "/api/v1/users/{id}/rotate-credential", "/api/v1/virtualization/capabilities", "/api/v1/virtualization/passthrough-candidates", "/api/v1/vms", "/api/v1/vms/{name}", "/api/v1/vms/{name}/clone", "/api/v1/vms/{name}/console", "/api/v1/vms/{name}/console-sessions", "/api/v1/vms/{name}/images", "/api/v1/vms/{name}/networks", "/api/v1/vms/{name}/passthrough", "/api/v1/vms/{name}/power", "/api/v1/vms/{name}/resources", "/api/v1/vms/{name}/snapshots"}
             assert schema_body["security"] == [{"bearerAuth": []}]
             assert set(schema_body["paths"]["/api/v1/settings"]) == {"get", "put"}
             assert set(schema_body["paths"]["/api/v1/users"]) == {"get", "post"}
             concrete = lambda path: path.replace("{name}", "test-vm").replace("{id}", "12345678-1234-4123-8123-123456789abc")
             for documented_path, operations in schema_body["paths"].items():
                 for method in operations:
+                    if operations[method].get("x-websocket"):
+                        continue
                     body = None if method == "get" else {}
                     headers = None if method == "get" else {"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())}
                     assert request(socket_path, method.upper(), concrete(documented_path), None, body, headers) == (401, {"schema": 1, "error": "unauthorized"})
@@ -332,6 +352,22 @@ def main() -> None:
             assert console_result["session"]["websocket_path"] == "/api/v1/vms/test-vm/console" and console_result["session"]["one_time"] is True
             assert request(socket_path, "POST", "/api/v1/vms/test-vm/console-sessions", body=console_body, extra_headers=console_headers)[0] == 400
             assert request(socket_path, "POST", "/api/v1/vms/test-vm/console-sessions", body={"schema": 1, "confirmation": "OPEN CONSOLE VM other"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": vm_headers["ETag"]})[0] == 400
+            websocket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            websocket.settimeout(2); websocket.connect(str(socket_path))
+            console_token = console_result["session"]["token"]
+            websocket.sendall((
+                "GET /api/v1/vms/test-vm/console HTTP/1.1\r\nHost: bedrock.test\r\nOrigin: http://bedrock.test\r\n"
+                "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                f"Sec-WebSocket-Protocol: binary, bedrock-console.{console_token}\r\n\r\n"
+            ).encode("ascii"))
+            websocket_response = b""
+            while b"\r\n\r\n" not in websocket_response:
+                websocket_response += websocket.recv(4096)
+            websocket.close()
+            assert websocket_response.startswith(b"HTTP/1.1 101 Switching Protocols\r\n")
+            assert b"Sec-WebSocket-Protocol: binary\r\n" in websocket_response
+            assert console_token.encode("ascii") not in websocket_response
             snapshot_action_id = str(uuid.uuid4())
             snapshot_action_body = {"schema": 1, "snapshot": "clean-install", "operation": "restore", "confirmation": "RESTORE SNAPSHOT clean-install FOR VM test-vm"}
             snapshot_action_headers = {"Content-Type": "application/json", "Idempotency-Key": snapshot_action_id, "If-Match": vm_headers["ETag"]}
