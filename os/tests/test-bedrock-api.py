@@ -295,10 +295,10 @@ def main() -> None:
             assert remote_status == 200 and remote_body["devices"][0]["name"] == "Office laptop"
             assert remote_body["pending_requests"] == [{"id": "12345678-1234-4123-8123-123456789abc", "approved": False, "expires_in_seconds": 420}]
             assert "public_key" not in json.dumps(remote_body) and "sha256" not in json.dumps(remote_body)
-            app_status, app_body = request(socket_path, "GET", "/api/v1/apps")
+            app_status, app_body, app_headers = request(socket_path, "GET", "/api/v1/apps", include_headers=True)
             assert app_status == 200 and app_body["apps"][0]["id"] == "media" and app_body["apps"][0]["running"] is True and app_body["apps"][0]["update_available"] is True and app_body["install_candidates"][0]["id"] == "notes"
             assert "image" not in json.dumps(app_body) and "digest" not in json.dumps(app_body)
-            backup_status, backup_body = request(socket_path, "GET", "/api/v1/backups")
+            backup_status, backup_body, backup_headers = request(socket_path, "GET", "/api/v1/backups", include_headers=True)
             assert backup_status == 200 and backup_body["plans"][0]["has_snapshot"] is True
             assert "source" not in json.dumps(backup_body) and "repository" not in json.dumps(backup_body) and "last_snapshot" not in json.dumps(backup_body)
             hardware_status, hardware_body = request(socket_path, "GET", "/api/v1/hardware")
@@ -402,26 +402,28 @@ def main() -> None:
             assert admin_requests[9] == {"schema": 1, "source": "installer", "source_sha256": source_hash, "target": "converted", "target_type": "qcow2", "confirmation": f"CONVERT IMAGE installer {source_hash} TO QCOW2 converted"}
             backup_run_id = str(uuid.uuid4())
             backup_run_body = {"schema": 1, "confirmation": "RUN ENCRYPTED BACKUP nightly"}
-            backup_run_headers = {"Content-Type": "application/json", "Idempotency-Key": backup_run_id}
+            assert request(socket_path, "POST", "/api/v1/backups/nightly/run", body=backup_run_body, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 428
+            assert request(socket_path, "POST", "/api/v1/backups/nightly/run", body=backup_run_body, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": '"sha256-' + "0" * 64 + '"'})[0] == 412
+            backup_run_headers = {"Content-Type": "application/json", "Idempotency-Key": backup_run_id, "If-Match": backup_headers["ETag"]}
             assert request(socket_path, "POST", "/api/v1/backups/nightly/run", body=backup_run_body, extra_headers=backup_run_headers)[0] == 200
             assert request(socket_path, "POST", "/api/v1/backups/nightly/run", body=backup_run_body, extra_headers=backup_run_headers)[1]["replayed"] is True
-            assert request(socket_path, "POST", "/api/v1/backups/nightly/run", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            assert request(socket_path, "POST", "/api/v1/backups/nightly/run", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": backup_headers["ETag"]})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[10] == {"schema": 1, "id": "nightly", "operation": "run", "confirmation": "RUN ENCRYPTED BACKUP nightly"}
             backup_restore_id = str(uuid.uuid4())
             backup_restore_body = {"schema": 1, "confirmation": "RESTORE LATEST BACKUP nightly"}
-            backup_restore_headers = {"Content-Type": "application/json", "Idempotency-Key": backup_restore_id}
+            backup_restore_headers = {"Content-Type": "application/json", "Idempotency-Key": backup_restore_id, "If-Match": backup_headers["ETag"]}
             assert request(socket_path, "POST", "/api/v1/backups/nightly/restore-latest", body=backup_restore_body, extra_headers=backup_restore_headers)[0] == 200
             assert request(socket_path, "POST", "/api/v1/backups/nightly/restore-latest", body=backup_restore_body, extra_headers=backup_restore_headers)[1]["replayed"] is True
-            assert request(socket_path, "POST", "/api/v1/backups/nightly/restore-latest", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            assert request(socket_path, "POST", "/api/v1/backups/nightly/restore-latest", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": backup_headers["ETag"]})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[11] == {"schema": 1, "id": "nightly", "operation": "restore-latest", "confirmation": "RESTORE LATEST BACKUP nightly"}
             backup_create_id = str(uuid.uuid4())
             backup_create_body = {"schema": 1, "confirmation": "CREATE ENCRYPTED BACKUP archive"}
-            backup_create_headers = {"Content-Type": "application/json", "Idempotency-Key": backup_create_id}
+            backup_create_headers = {"Content-Type": "application/json", "Idempotency-Key": backup_create_id, "If-Match": backup_headers["ETag"]}
             assert request(socket_path, "POST", "/api/v1/backups/archive/create", body=backup_create_body, extra_headers=backup_create_headers)[0] == 200
             assert request(socket_path, "POST", "/api/v1/backups/archive/create", body=backup_create_body, extra_headers=backup_create_headers)[1]["replayed"] is True
-            assert request(socket_path, "POST", "/api/v1/backups/archive/create", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            assert request(socket_path, "POST", "/api/v1/backups/archive/create", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": backup_headers["ETag"]})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[12] == {"schema": 1, "id": "archive", "operation": "create-staged", "confirmation": "CREATE ENCRYPTED BACKUP archive"}
             storage_scrub_id = str(uuid.uuid4())
@@ -458,34 +460,36 @@ def main() -> None:
             assert admin_requests[16] == {"schema": 1, "id": "alice", "operation": "rotate-staged", "confirmation": "ROTATE NAS CREDENTIAL alice"}
             app_control_id = str(uuid.uuid4())
             app_control_body = {"schema": 1, "operation": "stop", "confirmation": "STOP APPLICATION media"}
-            app_control_headers = {"Content-Type": "application/json", "Idempotency-Key": app_control_id}
+            assert request(socket_path, "POST", "/api/v1/apps/media/power", body=app_control_body, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 428
+            assert request(socket_path, "POST", "/api/v1/apps/media/power", body=app_control_body, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": '"sha256-' + "0" * 64 + '"'})[0] == 412
+            app_control_headers = {"Content-Type": "application/json", "Idempotency-Key": app_control_id, "If-Match": app_headers["ETag"]}
             assert request(socket_path, "POST", "/api/v1/apps/media/power", body=app_control_body, extra_headers=app_control_headers)[0] == 200
             assert request(socket_path, "POST", "/api/v1/apps/media/power", body=app_control_body, extra_headers=app_control_headers)[1]["replayed"] is True
-            assert request(socket_path, "POST", "/api/v1/apps/media/power", body=app_control_body | {"confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            assert request(socket_path, "POST", "/api/v1/apps/media/power", body=app_control_body | {"confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": app_headers["ETag"]})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[17] == {"schema": 1, "id": "media", "operation": "stop", "confirmation": "STOP APPLICATION media"}
             app_remove_id = str(uuid.uuid4())
             app_remove_body = {"schema": 1, "confirmation": "REMOVE APPLICATION media"}
-            app_remove_headers = {"Content-Type": "application/json", "Idempotency-Key": app_remove_id}
+            app_remove_headers = {"Content-Type": "application/json", "Idempotency-Key": app_remove_id, "If-Match": app_headers["ETag"]}
             assert request(socket_path, "DELETE", "/api/v1/apps/media", body=app_remove_body, extra_headers=app_remove_headers)[0] == 200
             assert request(socket_path, "DELETE", "/api/v1/apps/media", body=app_remove_body, extra_headers=app_remove_headers)[1]["replayed"] is True
-            assert request(socket_path, "DELETE", "/api/v1/apps/media", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            assert request(socket_path, "DELETE", "/api/v1/apps/media", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": app_headers["ETag"]})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[18] == {"schema": 1, "id": "media", "operation": "remove", "confirmation": "REMOVE APPLICATION media"}
             app_update_id = str(uuid.uuid4())
             app_update_body = {"schema": 1, "confirmation": "UPDATE APPLICATION media"}
-            app_update_headers = {"Content-Type": "application/json", "Idempotency-Key": app_update_id}
+            app_update_headers = {"Content-Type": "application/json", "Idempotency-Key": app_update_id, "If-Match": app_headers["ETag"]}
             assert request(socket_path, "POST", "/api/v1/apps/media/update", body=app_update_body, extra_headers=app_update_headers)[0] == 200
             assert request(socket_path, "POST", "/api/v1/apps/media/update", body=app_update_body, extra_headers=app_update_headers)[1]["replayed"] is True
-            assert request(socket_path, "POST", "/api/v1/apps/media/update", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            assert request(socket_path, "POST", "/api/v1/apps/media/update", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": app_headers["ETag"]})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[19] == {"schema": 1, "id": "media", "operation": "update-latest", "confirmation": "UPDATE APPLICATION media"}
             app_install_id = str(uuid.uuid4())
             app_install_body = {"schema": 1, "confirmation": "INSTALL APPLICATION notes"}
-            app_install_headers = {"Content-Type": "application/json", "Idempotency-Key": app_install_id}
+            app_install_headers = {"Content-Type": "application/json", "Idempotency-Key": app_install_id, "If-Match": app_headers["ETag"]}
             assert request(socket_path, "POST", "/api/v1/apps/notes/install", body=app_install_body, extra_headers=app_install_headers)[0] == 200
             assert request(socket_path, "POST", "/api/v1/apps/notes/install", body=app_install_body, extra_headers=app_install_headers)[1]["replayed"] is True
-            assert request(socket_path, "POST", "/api/v1/apps/notes/install", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            assert request(socket_path, "POST", "/api/v1/apps/notes/install", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": app_headers["ETag"]})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[20] == {"schema": 1, "id": "notes", "operation": "install-staged", "confirmation": "INSTALL APPLICATION notes"}
             upload_bytes = b"browser-upload-fixture"

@@ -33,7 +33,7 @@ async function mockAuthenticatedApi(page: Page) {
       return;
     }
     const body = feeds[path];
-    const etag = path === '/api/v1/settings' ? '"sha256-acceptance-settings"' : path === '/api/v1/remote/devices' ? '"sha256-acceptance-remote"' : null;
+    const etag = path === '/api/v1/settings' ? '"sha256-acceptance-settings"' : path === '/api/v1/remote/devices' ? '"sha256-acceptance-remote"' : path === '/api/v1/apps' ? '"sha256-acceptance-apps"' : path === '/api/v1/backups' ? '"sha256-acceptance-backups"' : null;
     await route.fulfill({ status: body ? 200 : 404, contentType: 'application/json', headers: etag ? { ETag: etag } : {}, body: JSON.stringify(body ?? { schema: 1, error: 'not-found' }) });
   });
 }

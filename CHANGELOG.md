@@ -4,7 +4,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
-- Added strong ETag/If-Match concurrency protection to update-policy changes, remote pairing approval, and trusted-device changes, including explicit missing/stale precondition responses and browser refresh behavior.
+- Added strong ETag/If-Match concurrency protection to update-policy changes, remote trust, application lifecycle, and backup creation/run/restore actions, including explicit missing/stale precondition responses and browser refresh behavior.
 - Added the server-side remote-pairing bootstrap gateway: an AF_UNIX-only, peer-isolated, size/rate-bounded request, redemption, and exact paired-key session-authorization boundary with indistinguishable failures, no approval capability, and no pairing secrets in child-process arguments. Successful authorization rejects expired/revoked devices, records last-seen time, and starts the device's revocation-controlled systemd target. Added crash-recoverable X25519 server identity provisioning and end-to-end gateway tests for approval gating, single use, key binding, session binding, oversized input, and forbidden operations.
 - Added keyboard-operable advanced hardware and storage disclosures for privacy-safe topology, capabilities, SMART history, and candidate eligibility while keeping health, compatibility, rebuild state, and destructive warnings permanently visible; extended browser and accessibility acceptance to cover both closed and expanded states.
 - Restored the full OS image pipeline after adding persisted storage actions to the broker state allowlist; both clean image replicas, artifact attestation, and byte-for-byte reproducibility now pass again.

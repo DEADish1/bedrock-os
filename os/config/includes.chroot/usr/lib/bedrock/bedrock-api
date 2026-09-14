@@ -1009,6 +1009,20 @@ class Handler(BaseHTTPRequestHandler):
             except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
                 self.send_json(503, {"schema": 1, "error": "remote-status-unavailable"})
                 return
+        if app_control or app_update or app_install:
+            try:
+                if not self.require_match(app_feed()):
+                    return
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                self.send_json(503, {"schema": 1, "error": "apps-unavailable"})
+                return
+        if backup_run or backup_restore_latest or backup_create:
+            try:
+                if not self.require_match(backup_feed()):
+                    return
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                self.send_json(503, {"schema": 1, "error": "backups-unavailable"})
+                return
         if self.headers.get("Transfer-Encoding") is not None or self.headers.get("Content-Type") != "application/json":
             self.send_json(400, {"schema": 1, "error": "invalid-request"})
             return
@@ -1091,6 +1105,13 @@ class Handler(BaseHTTPRequestHandler):
         if not target and not app_target and not image_upload:
             self.send_json(405, {"schema": 1, "error": "method-not-allowed"})
             return
+        if app_target:
+            try:
+                if not self.require_match(app_feed()):
+                    return
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                self.send_json(503, {"schema": 1, "error": "apps-unavailable"})
+                return
         if self.headers.get("Transfer-Encoding") is not None or self.headers.get("Content-Type") != "application/json":
             self.send_json(400, {"schema": 1, "error": "invalid-request"})
             return
