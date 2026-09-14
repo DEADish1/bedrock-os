@@ -394,12 +394,16 @@ def main() -> None:
             assert admin_requests[8] == {"schema": 1, "id": pairing_id, "confirmation": f"APPROVE REMOTE DEVICE {pairing_id}"}
             conversion_id = str(uuid.uuid4())
             source_hash = "c" * 64
+            image_precondition_status, _, image_headers = request(socket_path, "GET", "/api/v1/images", include_headers=True)
+            assert image_precondition_status == 200 and re.fullmatch(r'"sha256-[0-9a-f]{64}"', image_headers["ETag"])
             conversion_body = {"schema": 1, "target": "converted", "target_type": "qcow2", "source_sha256": source_hash,
                                "confirmation": f"CONVERT IMAGE installer {source_hash} TO QCOW2 converted"}
-            conversion_headers = {"Content-Type": "application/json", "Idempotency-Key": conversion_id}
+            assert request(socket_path, "POST", "/api/v1/images/installer/convert", body=conversion_body, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 428
+            assert request(socket_path, "POST", "/api/v1/images/installer/convert", body=conversion_body, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": '"sha256-' + "0" * 64 + '"'})[0] == 412
+            conversion_headers = {"Content-Type": "application/json", "Idempotency-Key": conversion_id, "If-Match": image_headers["ETag"]}
             assert request(socket_path, "POST", "/api/v1/images/installer/convert", body=conversion_body, extra_headers=conversion_headers)[0] == 200
             assert request(socket_path, "POST", "/api/v1/images/installer/convert", body=conversion_body, extra_headers=conversion_headers)[1]["replayed"] is True
-            assert request(socket_path, "POST", "/api/v1/images/installer/convert", body=conversion_body | {"confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            assert request(socket_path, "POST", "/api/v1/images/installer/convert", body=conversion_body | {"confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": image_headers["ETag"]})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[9] == {"schema": 1, "source": "installer", "source_sha256": source_hash, "target": "converted", "target_type": "qcow2", "confirmation": f"CONVERT IMAGE installer {source_hash} TO QCOW2 converted"}
             backup_run_id = str(uuid.uuid4())
@@ -428,36 +432,44 @@ def main() -> None:
             assert request(socket_path, "POST", "/api/v1/backups/archive/create", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": backup_headers["ETag"]})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[12] == {"schema": 1, "id": "archive", "operation": "create-staged", "confirmation": "CREATE ENCRYPTED BACKUP archive"}
+            storage_precondition_status, _, storage_headers = request(socket_path, "GET", "/api/v1/storage", include_headers=True)
+            assert storage_precondition_status == 200 and re.fullmatch(r'"sha256-[0-9a-f]{64}"', storage_headers["ETag"])
             storage_scrub_id = str(uuid.uuid4())
             storage_scrub_body = {"schema": 1, "confirmation": "SCRUB STORAGE main"}
-            storage_scrub_headers = {"Content-Type": "application/json", "Idempotency-Key": storage_scrub_id}
+            assert request(socket_path, "POST", "/api/v1/storage/main/scrub", body=storage_scrub_body, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 428
+            assert request(socket_path, "POST", "/api/v1/storage/main/scrub", body=storage_scrub_body, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": '"sha256-' + "0" * 64 + '"'})[0] == 412
+            storage_scrub_headers = {"Content-Type": "application/json", "Idempotency-Key": storage_scrub_id, "If-Match": storage_headers["ETag"]}
             assert request(socket_path, "POST", "/api/v1/storage/main/scrub", body=storage_scrub_body, extra_headers=storage_scrub_headers)[0] == 200
             assert request(socket_path, "POST", "/api/v1/storage/main/scrub", body=storage_scrub_body, extra_headers=storage_scrub_headers)[1]["replayed"] is True
-            assert request(socket_path, "POST", "/api/v1/storage/main/scrub", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            assert request(socket_path, "POST", "/api/v1/storage/main/scrub", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": storage_headers["ETag"]})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[13] == {"schema": 1, "id": "main", "operation": "scrub", "confirmation": "SCRUB STORAGE main"}
+            users_precondition_status, _, users_headers = request(socket_path, "GET", "/api/v1/users", include_headers=True)
+            assert users_precondition_status == 200 and re.fullmatch(r'"sha256-[0-9a-f]{64}"', users_headers["ETag"])
             nas_identity_id = str(uuid.uuid4())
             nas_identity_body = {"schema": 1, "kind": "user", "name": "bob", "confirmation": "CREATE NAS USER bob"}
-            nas_identity_headers = {"Content-Type": "application/json", "Idempotency-Key": nas_identity_id}
+            assert request(socket_path, "POST", "/api/v1/users", body=nas_identity_body, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 428
+            assert request(socket_path, "POST", "/api/v1/users", body=nas_identity_body, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": '"sha256-' + "0" * 64 + '"'})[0] == 412
+            nas_identity_headers = {"Content-Type": "application/json", "Idempotency-Key": nas_identity_id, "If-Match": users_headers["ETag"]}
             assert request(socket_path, "POST", "/api/v1/users", body=nas_identity_body, extra_headers=nas_identity_headers)[0] == 200
             assert request(socket_path, "POST", "/api/v1/users", body=nas_identity_body, extra_headers=nas_identity_headers)[1]["replayed"] is True
-            assert request(socket_path, "POST", "/api/v1/users", body=nas_identity_body | {"confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            assert request(socket_path, "POST", "/api/v1/users", body=nas_identity_body | {"confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": users_headers["ETag"]})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[14] == {"schema": 1, "id": "bob", "operation": "create-user", "confirmation": "CREATE NAS USER bob"}
             membership_id = str(uuid.uuid4())
             membership_body = {"schema": 1, "user": "alice", "confirmation": "ADD NAS USER alice TO GROUP family"}
-            membership_headers = {"Content-Type": "application/json", "Idempotency-Key": membership_id}
+            membership_headers = {"Content-Type": "application/json", "Idempotency-Key": membership_id, "If-Match": users_headers["ETag"]}
             assert request(socket_path, "POST", "/api/v1/groups/family/members", body=membership_body, extra_headers=membership_headers)[0] == 200
             assert request(socket_path, "POST", "/api/v1/groups/family/members", body=membership_body, extra_headers=membership_headers)[1]["replayed"] is True
-            assert request(socket_path, "POST", "/api/v1/groups/family/members", body=membership_body | {"confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            assert request(socket_path, "POST", "/api/v1/groups/family/members", body=membership_body | {"confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": users_headers["ETag"]})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[15] == {"schema": 1, "id": "family", "subject": "alice", "operation": "add-member", "confirmation": "ADD NAS USER alice TO GROUP family"}
             credential_id = str(uuid.uuid4())
             credential_body = {"schema": 1, "confirmation": "ROTATE NAS CREDENTIAL alice"}
-            credential_headers = {"Content-Type": "application/json", "Idempotency-Key": credential_id}
+            credential_headers = {"Content-Type": "application/json", "Idempotency-Key": credential_id, "If-Match": users_headers["ETag"]}
             assert request(socket_path, "POST", "/api/v1/users/alice/rotate-credential", body=credential_body, extra_headers=credential_headers)[0] == 200
             assert request(socket_path, "POST", "/api/v1/users/alice/rotate-credential", body=credential_body, extra_headers=credential_headers)[1]["replayed"] is True
-            assert request(socket_path, "POST", "/api/v1/users/alice/rotate-credential", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            assert request(socket_path, "POST", "/api/v1/users/alice/rotate-credential", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": users_headers["ETag"]})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[16] == {"schema": 1, "id": "alice", "operation": "rotate-staged", "confirmation": "ROTATE NAS CREDENTIAL alice"}
             app_control_id = str(uuid.uuid4())
@@ -496,24 +508,30 @@ def main() -> None:
             assert admin_requests[20] == {"schema": 1, "id": "notes", "operation": "install-staged", "confirmation": "INSTALL APPLICATION notes"}
             upload_bytes = b"browser-upload-fixture"
             upload_hash = hashlib.sha256(upload_bytes).hexdigest()
-            upload_headers = {"Content-Type": "application/octet-stream", "X-Bedrock-Image-Type": "iso"}
+            upload_headers = {"Content-Type": "application/octet-stream", "X-Bedrock-Image-Type": "iso", "If-Match": image_headers["ETag"]}
+            assert request(socket_path, "PUT", "/api/v1/images/discardme/upload", body=upload_bytes, extra_headers={"Content-Type": "application/octet-stream", "X-Bedrock-Image-Type": "iso"})[0] == 428
+            assert request(socket_path, "PUT", "/api/v1/images/discardme/upload", body=upload_bytes, extra_headers={"Content-Type": "application/octet-stream", "X-Bedrock-Image-Type": "iso", "If-Match": '"sha256-' + "0" * 64 + '"'})[0] == 412
             discard_status, discard_upload = request(socket_path, "PUT", "/api/v1/images/discardme/upload", body=upload_bytes, extra_headers=upload_headers)
             assert discard_status == 200
             discard_hash = discard_upload["candidate"]["sha256"]
             discard_body = {"schema": 1, "sha256": discard_hash, "confirmation": f"DISCARD IMAGE UPLOAD discardme {discard_hash}"}
-            assert request(socket_path, "DELETE", "/api/v1/images/discardme/upload", body=discard_body, extra_headers={"Content-Type": "application/json"}) == (200, {"schema": 1, "name": "discardme", "discarded": True})
-            assert request(socket_path, "DELETE", "/api/v1/images/discardme/upload", body=discard_body, extra_headers={"Content-Type": "application/json"})[0] == 400
-            assert request(socket_path, "GET", "/api/v1/images")[1]["upload_candidates"] == []
+            _, _, discard_headers = request(socket_path, "GET", "/api/v1/images", include_headers=True)
+            assert request(socket_path, "DELETE", "/api/v1/images/discardme/upload", body=discard_body, extra_headers={"Content-Type": "application/json", "If-Match": discard_headers["ETag"]}) == (200, {"schema": 1, "name": "discardme", "discarded": True})
+            _, cleared_body, cleared_headers = request(socket_path, "GET", "/api/v1/images", include_headers=True)
+            assert cleared_body["upload_candidates"] == []
+            assert request(socket_path, "DELETE", "/api/v1/images/discardme/upload", body=discard_body, extra_headers={"Content-Type": "application/json", "If-Match": cleared_headers["ETag"]})[0] == 400
+            upload_headers["If-Match"] = cleared_headers["ETag"]
             upload_status, upload_body = request(socket_path, "PUT", "/api/v1/images/debian/upload", body=upload_bytes, extra_headers=upload_headers)
             assert upload_status == 200 and upload_body["candidate"] == {"name": "debian", "type": "iso", "sha256": upload_hash, "size_bytes": len(upload_bytes)}
-            assert request(socket_path, "PUT", "/api/v1/images/debian/upload", body=upload_bytes, extra_headers=upload_headers)[0] == 409
-            staged_status, staged_body = request(socket_path, "GET", "/api/v1/images")
+            staged_status, staged_body, staged_headers = request(socket_path, "GET", "/api/v1/images", include_headers=True)
             assert staged_status == 200 and staged_body["upload_candidates"] == [upload_body["candidate"]]
+            upload_headers["If-Match"] = staged_headers["ETag"]
+            assert request(socket_path, "PUT", "/api/v1/images/debian/upload", body=upload_bytes, extra_headers=upload_headers)[0] == 409
             import_id = str(uuid.uuid4()); import_confirmation = f"IMPORT ISO debian {upload_hash}"
-            import_body = {"schema": 1, "confirmation": import_confirmation}; import_headers = {"Content-Type": "application/json", "Idempotency-Key": import_id}
+            import_body = {"schema": 1, "confirmation": import_confirmation}; import_headers = {"Content-Type": "application/json", "Idempotency-Key": import_id, "If-Match": staged_headers["ETag"]}
             assert request(socket_path, "POST", "/api/v1/images/debian/import", body=import_body, extra_headers=import_headers)[0] == 200
             assert request(socket_path, "POST", "/api/v1/images/debian/import", body=import_body, extra_headers=import_headers)[1]["replayed"] is True
-            assert request(socket_path, "POST", "/api/v1/images/debian/import", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            assert request(socket_path, "POST", "/api/v1/images/debian/import", body={"schema": 1, "confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": staged_headers["ETag"]})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[21] == {"schema": 1, "name": "debian", "type": "iso", "sha256": upload_hash, "size_bytes": len(upload_bytes), "confirmation": import_confirmation}
             image_status, image_body = request(socket_path, "GET", "/api/v1/images")
@@ -524,22 +542,22 @@ def main() -> None:
             assert not any(secret in json.dumps(storage_body) for secret in ["/dev/sda", "/dev/md0", "private-serial", "0000:01:00.0", "member_pattern"])
             for operation, storage_id in (("export", "main"), ("import", "archive")):
                 operation_body = {"schema": 1, "confirmation": f"{operation.upper()} STORAGE {storage_id}"}
-                operation_headers = {"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())}
+                operation_headers = {"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": storage_headers["ETag"]}
                 assert request(socket_path, "POST", f"/api/v1/storage/{storage_id}/{operation}", body=operation_body, extra_headers=operation_headers)[0] == 200
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[22] == {"schema": 1, "id": "main", "operation": "export", "confirmation": "EXPORT STORAGE main"}
             assert admin_requests[23] == {"schema": 1, "id": "archive", "operation": "import", "confirmation": "IMPORT STORAGE archive"}
             first, second = "disk-0123456789abcdef0123", "disk-abcdef0123456789abcd"
             storage_create = {"schema": 1, "id": "media", "backend": "zfs", "layout": "mirror", "disk_ids": [first, second], "confirmation": f"CREATE STORAGE media USING {first},{second}"}
-            storage_create_response = request(socket_path, "POST", "/api/v1/storage", body=storage_create, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})
+            storage_create_response = request(socket_path, "POST", "/api/v1/storage", body=storage_create, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": storage_headers["ETag"]})
             assert storage_create_response[0] == 200, storage_create_response
             storage_expand = {"schema": 1, "disk_ids": [first, second], "confirmation": f"EXPAND STORAGE main USING {first},{second}"}
-            storage_expand_response = request(socket_path, "POST", "/api/v1/storage/main/expand", body=storage_expand, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})
+            storage_expand_response = request(socket_path, "POST", "/api/v1/storage/main/expand", body=storage_expand, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": storage_headers["ETag"]})
             assert storage_expand_response[0] == 200, storage_expand_response
             storage_replace = {"schema": 1, "old_disk_id": first, "new_disk_id": second, "confirmation": f"REPLACE STORAGE main MEMBER {first} WITH {second}"}
-            storage_replace_response = request(socket_path, "POST", "/api/v1/storage/main/replace", body=storage_replace, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})
+            storage_replace_response = request(socket_path, "POST", "/api/v1/storage/main/replace", body=storage_replace, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": storage_headers["ETag"]})
             assert storage_replace_response[0] == 200, storage_replace_response
-            assert request(socket_path, "POST", "/api/v1/storage/main/replace", body=storage_replace | {"confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            assert request(socket_path, "POST", "/api/v1/storage/main/replace", body=storage_replace | {"confirmation": "wrong"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": storage_headers["ETag"]})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[24]["operation"] == "create" and admin_requests[24]["backend"] == "zfs"
             assert admin_requests[25]["operation"] == "expand" and admin_requests[25]["disk_ids"] == [first, second]
