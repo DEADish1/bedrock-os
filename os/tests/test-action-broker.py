@@ -42,6 +42,11 @@ def snapshot_request(request_id, operation="create", confirmation="CREATE SNAPSH
             "snapshot": "clean-install", "operation": operation, "confirmation": confirmation}
 
 
+def console_request(request_id, confirmation="OPEN CONSOLE VM test-vm"):
+    return {"schema": 1, "request_id": request_id, "action": "vm-console-open", "name": "test-vm",
+            "confirmation": confirmation}
+
+
 def clone_request(request_id):
     return {"schema": 1, "request_id": request_id, "action": "vm-clone", "source": "test-vm",
             "name": "copy-vm", "confirmation": "CLONE VM test-vm AS copy-vm"}
@@ -173,6 +178,9 @@ def main():
         admin_helper = work / "admin-helper"
         admin_helper.write_text("#!/bin/sh\ncat \"$1\" >> \"$BEDROCK_VM_ADMIN_CALLS\"\n", encoding="utf-8")
         admin_helper.chmod(0o755)
+        console_helper = work / "console-helper"
+        console_helper.write_text("#!/bin/sh\nnow=$(date +%s)\nprintf '{\"schema\":1,\"status\":\"authorized\",\"vm\":\"test-vm\",\"token\":\"%064d\",\"expires_at\":%s,\"one_time\":true,\"transport\":\"vnc-websocket\",\"websocket_path\":\"/api/v1/vms/test-vm/console\"}\\n' 1 $((now+60))\n", encoding="utf-8")
+        console_helper.chmod(0o755)
         environment = os.environ | {
             "BEDROCK_ACTION_BROKER_TEST_MODE": "1", "BEDROCK_ACTION_BROKER_EXPECTED_UID": str(os.getuid()),
             "BEDROCK_ACTION_BROKER_SOCKET": str(socket_path), "BEDROCK_ACTION_BROKER_STATE": str(state),
@@ -190,6 +198,7 @@ def main():
             "BEDROCK_ACTION_BROKER_IMAGE_ATTACHMENT_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_NETWORK_ATTACHMENT_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_PASSTHROUGH_HELPER": str(admin_helper),
+            "BEDROCK_ACTION_BROKER_CONSOLE_SESSION_HELPER": str(console_helper),
             "BEDROCK_ACTION_BROKER_IMAGE_CONVERSION_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_IMAGE_IMPORT_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_BACKUP_HELPER": str(admin_helper),
@@ -258,6 +267,13 @@ def main():
             assert exchange(socket_path, snapshot_request(snapshot_id))["replayed"] is True
             assert exchange(socket_path, snapshot_request(str(uuid.uuid4()), confirmation="CREATE SNAPSHOT wrong FOR VM test-vm"))["error"]["code"] == "invalid-vm-snapshot"
             assert json.loads(snapshot_calls.read_text(encoding="utf-8")) == {"schema": 1, "name": "test-vm", "snapshot": "clean-install", "action": "create", "confirmation": "CREATE SNAPSHOT clean-install FOR VM test-vm"}
+            assert not any(vm_requests.iterdir())
+            console_id = str(uuid.uuid4())
+            console_result = exchange(socket_path, console_request(console_id))
+            assert console_result["status"] == "succeeded" and console_result["replayed"] is False
+            assert console_result["session"]["token"] == "0" * 63 + "1" and console_result["session"]["one_time"] is True
+            assert exchange(socket_path, console_request(console_id))["replayed"] is True
+            assert exchange(socket_path, console_request(str(uuid.uuid4()), "OPEN CONSOLE VM other"))["error"]["code"] == "invalid-vm-console"
             assert not any(vm_requests.iterdir())
             clone_id = str(uuid.uuid4())
             assert exchange(socket_path, clone_request(clone_id))["status"] == "succeeded"

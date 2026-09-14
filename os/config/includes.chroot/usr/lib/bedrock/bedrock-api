@@ -115,6 +115,10 @@ def broker_action(request_id: str, broker_request: dict) -> dict:
         raise OSError("invalid broker response")
     if result.get("status") == "succeeded" and set(result) == {"schema", "request_id", "status", "replayed"} and type(result["replayed"]) is bool:
         return result
+    session = result.get("session")
+    session_fields = {"schema", "status", "vm", "token", "expires_at", "one_time", "transport", "websocket_path"}
+    if result.get("status") == "succeeded" and result.get("replayed") is False and set(result) == {"schema", "request_id", "status", "replayed", "session"} and isinstance(session, dict) and set(session) == session_fields and session.get("schema") == 1 and session.get("status") == "authorized" and re.fullmatch(r"[0-9a-f]{64}", session.get("token", "")) and type(session.get("expires_at")) is int and session.get("one_time") is True and session.get("transport") == "vnc-websocket":
+        return result
     error = result.get("error")
     if result.get("status") in {"rejected", "failed"} and isinstance(error, dict) and set(error) == {"code", "message"} and error.get("code") in {
         "idempotency-conflict", "action-failed", "internal-error"
@@ -133,7 +137,16 @@ def update_policy_action(request_id: str, body: object) -> dict:
     ):
         raise ValueError("invalid update-policy request")
     return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "update-policy",
-                         "setting": setting, "value": value, "beta_risk_acknowledged": acknowledged})
+                                     "setting": setting, "value": value, "beta_risk_acknowledged": acknowledged})
+
+def vm_console_session_action(request_id: str, name: str, body: object) -> dict:
+    if not re.fullmatch(r"[a-z][a-z0-9-]{0,30}[a-z0-9]", name) or not isinstance(body, dict) or set(body) != {"schema", "confirmation"} or body.get("schema") != 1 or not isinstance(body.get("confirmation"), str) or not hmac.compare_digest(body["confirmation"], f"OPEN CONSOLE VM {name}"):
+        raise ValueError("invalid VM console request")
+    result = broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "vm-console-open", "name": name, "confirmation": body["confirmation"]})
+    session = result.get("session")
+    if result.get("replayed") is not False or not isinstance(session, dict) or session.get("vm") != name or session.get("websocket_path") != f"/api/v1/vms/{name}/console":
+        raise ValueError("console authorization cannot be replayed")
+    return result
 
 def vm_control_action(request_id: str, name: str, body: object) -> dict:
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,30}[a-z0-9]", name) or not isinstance(body, dict) or set(body) != {"schema", "operation", "confirmation"} or body.get("schema") != 1:
@@ -982,6 +995,7 @@ class Handler(BaseHTTPRequestHandler):
         images = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/images", self.path)
         networks = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/networks", self.path)
         passthrough = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/passthrough", self.path)
+        console_session = re.fullmatch(r"/api/v1/vms/([a-z][a-z0-9-]{0,30}[a-z0-9])/console-sessions", self.path)
         remote_device = re.fullmatch(r"/api/v1/remote/devices/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})", self.path)
         pairing_approval = re.fullmatch(r"/api/v1/remote/pairings/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})/approve", self.path)
         image_conversion = re.fullmatch(r"/api/v1/images/([a-z][a-z0-9-]{0,30}[a-z0-9])/convert", self.path)
@@ -999,7 +1013,7 @@ class Handler(BaseHTTPRequestHandler):
         app_control = re.fullmatch(r"/api/v1/apps/([a-z][a-z0-9-]{0,31})/power", self.path)
         app_update = re.fullmatch(r"/api/v1/apps/([a-z][a-z0-9-]{0,31})/update", self.path)
         app_install = re.fullmatch(r"/api/v1/apps/([a-z][a-z0-9-]{0,31})/install", self.path)
-        if not create and not storage_create and not nas_identity_create and not power and not snapshots and not clone and not resources and not images and not networks and not passthrough and not remote_device and not pairing_approval and not image_conversion and not image_import and not backup_run and not backup_restore_latest and not backup_create and not storage_scrub and not storage_export and not storage_import and not storage_expand and not storage_replace and not nas_membership_add and not nas_credential_rotate and not app_control and not app_update and not app_install:
+        if not create and not storage_create and not nas_identity_create and not power and not snapshots and not clone and not resources and not images and not networks and not passthrough and not console_session and not remote_device and not pairing_approval and not image_conversion and not image_import and not backup_run and not backup_restore_latest and not backup_create and not storage_scrub and not storage_export and not storage_import and not storage_expand and not storage_replace and not nas_membership_add and not nas_credential_rotate and not app_control and not app_update and not app_install:
             self.send_json(405, {"schema": 1, "error": "method-not-allowed"})
             return
         if remote_device or pairing_approval:
@@ -1009,7 +1023,7 @@ class Handler(BaseHTTPRequestHandler):
             except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
                 self.send_json(503, {"schema": 1, "error": "remote-status-unavailable"})
                 return
-        if create or power or snapshots or clone or resources or images or networks or passthrough:
+        if create or power or snapshots or clone or resources or images or networks or passthrough or console_session:
             try:
                 if not self.require_match(vm_feed()):
                     return
@@ -1074,6 +1088,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = vm_attachment_action(self.headers.get("Idempotency-Key", ""), target, body, "image" if images else "network")
             elif passthrough:
                 result = vm_passthrough_action(self.headers.get("Idempotency-Key", ""), passthrough.group(1), body)
+            elif console_session:
+                result = vm_console_session_action(self.headers.get("Idempotency-Key", ""), console_session.group(1), body)
             elif remote_device:
                 result = remote_device_action(self.headers.get("Idempotency-Key", ""), remote_device.group(1), body)
             elif pairing_approval:

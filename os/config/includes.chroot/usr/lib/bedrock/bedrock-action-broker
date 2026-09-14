@@ -40,6 +40,7 @@ def environment():
         "image_attachment_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_IMAGE_ATTACHMENT_HELPER", "/usr/lib/bedrock/manage-vm-image-attachment")),
         "network_attachment_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_NETWORK_ATTACHMENT_HELPER", "/usr/lib/bedrock/manage-vm-network-attachment")),
         "passthrough_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_PASSTHROUGH_HELPER", "/usr/lib/bedrock/change-vm-passthrough")),
+        "console_session_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_CONSOLE_SESSION_HELPER", "/usr/lib/bedrock/create-vm-console-session")),
         "image_conversion_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_IMAGE_CONVERSION_HELPER", "/usr/lib/bedrock/change-vm-image")),
         "image_import_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_IMAGE_IMPORT_HELPER", "/usr/lib/bedrock/import-uploaded-vm-image")),
         "backup_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_BACKUP_HELPER", "/usr/lib/bedrock/change-backup")),
@@ -112,6 +113,13 @@ def parse_request(raw):
         if confirmation != expected:
             raise RequestError("invalid-vm-snapshot", "exact snapshot confirmation is required")
         details = {"schema": 1, "name": name, "snapshot": snapshot, "action": operation, "confirmation": confirmation}
+    elif request.get("action") == "vm-console-open":
+        if set(request) != {"schema", "request_id", "action", "name", "confirmation"}:
+            raise RequestError("invalid-request", "request fields do not match the VM console schema")
+        name, confirmation = request["name"], request["confirmation"]
+        if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,30}[a-z0-9]", name) or confirmation != f"OPEN CONSOLE VM {name}":
+            raise RequestError("invalid-vm-console", "VM name or exact console confirmation is invalid")
+        details = {"schema": 1, "vm": name, "confirmation": confirmation}
     elif request.get("action") == "vm-clone":
         if set(request) != {"schema", "request_id", "action", "source", "name", "confirmation"}:
             raise RequestError("invalid-request", "request fields do not match the vm-clone schema")
@@ -313,7 +321,7 @@ def load_state(path):
         if fields not in ({"request_id", "request_sha256", "action", "status"},
                           {"request_id", "request_sha256", "action", "status", "created_unix"}):
             raise RuntimeError("action result state contains an invalid result")
-        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough", "image-convert", "image-import", "backup-run", "backup-restore-latest", "backup-create", "storage-scrub", "storage-export", "storage-import", "storage-create", "storage-expand", "storage-replace", "nas-identity-create", "nas-membership-add", "nas-credential-rotate", "app-control", "remote-device", "remote-pairing-approve"} or item["status"] not in {"pending", "succeeded", "failed"}:
+        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-console-open", "vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough", "image-convert", "image-import", "backup-run", "backup-restore-latest", "backup-create", "storage-scrub", "storage-export", "storage-import", "storage-create", "storage-expand", "storage-replace", "nas-identity-create", "nas-membership-add", "nas-credential-rotate", "app-control", "remote-device", "remote-pairing-approve"} or item["status"] not in {"pending", "succeeded", "failed"}:
             raise RuntimeError("action result state contains an unsupported result")
         if item["status"] != "succeeded" and "created_unix" not in item:
             raise RuntimeError("incomplete action result lacks a creation time")
@@ -341,6 +349,41 @@ def save_state(path, state):
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+
+
+def execute_console_session(request, request_file, settings, helper_environment):
+    request_directory = settings["vm_requests"]
+    request_directory.mkdir(parents=True, exist_ok=True, mode=0o750)
+    if request_directory.is_symlink() or not request_directory.is_dir():
+        raise RuntimeError("VM request directory is unsafe")
+    path = request_directory / f"{request['name']}-console-open.json"
+    if path.exists() or path.is_symlink():
+        raise RuntimeError("VM console request path already exists")
+    descriptor, temporary = tempfile.mkstemp(prefix=".vm-console.", dir=request_directory)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(request_file, stream, sort_keys=True, separators=(",", ":"))
+            stream.write("\n"); stream.flush(); os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        completed = subprocess.run(
+            [str(settings["console_session_helper"]), str(path)], stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30,
+            env=helper_environment, close_fds=True,
+        )
+        if completed.returncode != 0 or len(completed.stdout) > 4096:
+            return completed.returncode or 1, None
+        try:
+            session = json.loads(completed.stdout.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return 1, None
+        expected = {"schema", "status", "vm", "token", "expires_at", "one_time", "transport", "websocket_path"}
+        if not isinstance(session, dict) or set(session) != expected or session.get("schema") != 1 or session.get("status") != "authorized" or session.get("vm") != request["name"] or not re.fullmatch(r"[0-9a-f]{64}", session.get("token", "")) or type(session.get("expires_at")) is not int or session["expires_at"] <= int(time.time()) or session.get("one_time") is not True or session.get("transport") != "vnc-websocket" or session.get("websocket_path") != f"/api/v1/vms/{request['name']}/console":
+            return 1, None
+        return 0, session
+    finally:
+        if os.path.exists(temporary): os.unlink(temporary)
+        if path.exists() and not path.is_symlink(): path.unlink()
 
 
 def execute_vm(request, request_file, settings, helper_environment):
@@ -598,6 +641,13 @@ def execute(raw, settings):
             helper_environment["BEDROCK_VM_ADMIN_CALLS"] = os.environ["BEDROCK_VM_ADMIN_CALLS"]
         helper_environment["BEDROCK_API_TASK_TEST_MODE"] = "1"
         helper_environment["BEDROCK_API_TASK_STATE_DIR"] = os.environ["BEDROCK_API_TASK_STATE_DIR"]
+    if request["action"] == "vm-console-open":
+        completed_code, session = execute_console_session(request, details, settings, helper_environment)
+        result_entry["status"] = "succeeded" if completed_code == 0 else "failed"
+        save_state(settings["state"], state)
+        if completed_code != 0 or session is None:
+            raise RequestError("action-failed", "guarded VM console helper rejected the action")
+        return response(request["request_id"], "succeeded", replayed=False, session=session)
     if request["action"] == "vm-control":
         completed_code = execute_vm(request, details, settings, helper_environment)
         result_entry["status"] = "succeeded" if completed_code == 0 else "failed"

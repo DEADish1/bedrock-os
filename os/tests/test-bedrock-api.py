@@ -162,6 +162,9 @@ def main() -> None:
         (vm_definitions / "test-vm.xml").write_text("<domain/>\n", encoding="utf-8")
         admin_action_helper.write_text("#!/bin/sh\ncat \"$1\" >> \"$BEDROCK_VM_ADMIN_CALLS\"\n", encoding="utf-8")
         admin_action_helper.chmod(0o755)
+        console_action_helper = work / "console-helper"
+        console_action_helper.write_text("#!/bin/sh\nnow=$(date +%s)\nprintf '{\"schema\":1,\"status\":\"authorized\",\"vm\":\"test-vm\",\"token\":\"%064d\",\"expires_at\":%s,\"one_time\":true,\"transport\":\"vnc-websocket\",\"websocket_path\":\"/api/v1/vms/test-vm/console\"}\\n' 1 $((now+60))\n", encoding="utf-8")
+        console_action_helper.chmod(0o755)
         tokens.write_text(json.dumps({"schema": 1, "tokens": [{
             "name": "test-client", "sha256": hashlib.sha256(TOKEN.encode()).hexdigest(),
             "created_at": "2026-08-31T00:00:00Z", "revoked": False,
@@ -229,6 +232,7 @@ def main() -> None:
             "BEDROCK_ACTION_BROKER_APP_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_NETWORK_ATTACHMENT_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_PASSTHROUGH_HELPER": str(admin_action_helper),
+            "BEDROCK_ACTION_BROKER_CONSOLE_SESSION_HELPER": str(console_action_helper),
             "BEDROCK_ACTION_BROKER_REMOTE_DEVICE_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_REMOTE_PAIRING_APPROVAL_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_REMOTE_REQUESTS": str(vm_action_requests),
@@ -262,7 +266,7 @@ def main() -> None:
             assert request(socket_path, "GET", "/api/v1/health")[0] == 200
             schema_status, schema_body = request(socket_path, "GET", "/api/v1/openapi.json")
             assert schema_status == 200 and schema_body["openapi"] == "3.1.0"
-            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/apps/{id}", "/api/v1/apps/{id}/install", "/api/v1/apps/{id}/power", "/api/v1/apps/{id}/update", "/api/v1/backups", "/api/v1/backups/{id}/create", "/api/v1/backups/{id}/restore-latest", "/api/v1/backups/{id}/run", "/api/v1/groups/{id}/members", "/api/v1/hardware", "/api/v1/images", "/api/v1/images/{name}/convert", "/api/v1/images/{name}/import", "/api/v1/images/{name}/upload", "/api/v1/remote/devices", "/api/v1/remote/devices/{id}", "/api/v1/remote/pairings/{id}/approve", "/api/v1/settings", "/api/v1/storage", "/api/v1/storage/{id}/expand", "/api/v1/storage/{id}/export", "/api/v1/storage/{id}/import", "/api/v1/storage/{id}/replace", "/api/v1/storage/{id}/scrub", "/api/v1/users", "/api/v1/users/{id}/rotate-credential", "/api/v1/virtualization/capabilities", "/api/v1/virtualization/passthrough-candidates", "/api/v1/vms", "/api/v1/vms/{name}", "/api/v1/vms/{name}/clone", "/api/v1/vms/{name}/images", "/api/v1/vms/{name}/networks", "/api/v1/vms/{name}/passthrough", "/api/v1/vms/{name}/power", "/api/v1/vms/{name}/resources", "/api/v1/vms/{name}/snapshots"}
+            assert set(schema_body["paths"]) == {"/api/v1/openapi.json", "/api/v1/health", "/api/v1/dashboard", "/api/v1/tasks", "/api/v1/alerts", "/api/v1/audit", "/api/v1/apps", "/api/v1/apps/{id}", "/api/v1/apps/{id}/install", "/api/v1/apps/{id}/power", "/api/v1/apps/{id}/update", "/api/v1/backups", "/api/v1/backups/{id}/create", "/api/v1/backups/{id}/restore-latest", "/api/v1/backups/{id}/run", "/api/v1/groups/{id}/members", "/api/v1/hardware", "/api/v1/images", "/api/v1/images/{name}/convert", "/api/v1/images/{name}/import", "/api/v1/images/{name}/upload", "/api/v1/remote/devices", "/api/v1/remote/devices/{id}", "/api/v1/remote/pairings/{id}/approve", "/api/v1/settings", "/api/v1/storage", "/api/v1/storage/{id}/expand", "/api/v1/storage/{id}/export", "/api/v1/storage/{id}/import", "/api/v1/storage/{id}/replace", "/api/v1/storage/{id}/scrub", "/api/v1/users", "/api/v1/users/{id}/rotate-credential", "/api/v1/virtualization/capabilities", "/api/v1/virtualization/passthrough-candidates", "/api/v1/vms", "/api/v1/vms/{name}", "/api/v1/vms/{name}/clone", "/api/v1/vms/{name}/console-sessions", "/api/v1/vms/{name}/images", "/api/v1/vms/{name}/networks", "/api/v1/vms/{name}/passthrough", "/api/v1/vms/{name}/power", "/api/v1/vms/{name}/resources", "/api/v1/vms/{name}/snapshots"}
             assert schema_body["security"] == [{"bearerAuth": []}]
             assert set(schema_body["paths"]["/api/v1/settings"]) == {"get", "put"}
             assert set(schema_body["paths"]["/api/v1/users"]) == {"get", "post"}
@@ -320,6 +324,14 @@ def main() -> None:
             assert request(socket_path, "POST", "/api/v1/vms/test-vm/power", body=vm_action_body, extra_headers=vm_action_headers)[1]["replayed"] is True
             assert request(socket_path, "POST", "/api/v1/vms/test-vm/power", body=vm_action_body | {"confirmation": "START VM other"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": vm_headers["ETag"]})[0] == 400
             assert json.loads(vm_action_calls.read_text(encoding="utf-8")) == {"schema": 1, "name": "test-vm", "action": "start", "confirmation": "START VM test-vm"}
+            console_id = str(uuid.uuid4())
+            console_body = {"schema": 1, "confirmation": "OPEN CONSOLE VM test-vm"}
+            console_headers = {"Content-Type": "application/json", "Idempotency-Key": console_id, "If-Match": vm_headers["ETag"]}
+            console_status, console_result = request(socket_path, "POST", "/api/v1/vms/test-vm/console-sessions", body=console_body, extra_headers=console_headers)
+            assert console_status == 200 and console_result["session"]["token"] == "0" * 63 + "1"
+            assert console_result["session"]["websocket_path"] == "/api/v1/vms/test-vm/console" and console_result["session"]["one_time"] is True
+            assert request(socket_path, "POST", "/api/v1/vms/test-vm/console-sessions", body=console_body, extra_headers=console_headers)[0] == 400
+            assert request(socket_path, "POST", "/api/v1/vms/test-vm/console-sessions", body={"schema": 1, "confirmation": "OPEN CONSOLE VM other"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": vm_headers["ETag"]})[0] == 400
             snapshot_action_id = str(uuid.uuid4())
             snapshot_action_body = {"schema": 1, "snapshot": "clean-install", "operation": "restore", "confirmation": "RESTORE SNAPSHOT clean-install FOR VM test-vm"}
             snapshot_action_headers = {"Content-Type": "application/json", "Idempotency-Key": snapshot_action_id, "If-Match": vm_headers["ETag"]}
