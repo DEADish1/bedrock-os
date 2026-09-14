@@ -309,61 +309,63 @@ def main() -> None:
             assert candidate_body["assignments"] == [{"vm": "private-name", "kind": "usb", "devices": ["1-2"]}]
             assert "1-1" not in json.dumps(candidate_body) and "busnum" not in json.dumps(candidate_body) and "plan_sha256" not in json.dumps(candidate_body)
             assert not any(secret in json.dumps(hardware_body) for secret in ["must-not-leak", "/dev/sda", "00:11:22:33:44:55", "0000:01:00.0", "0x1002"])
-            vm_status, vm_body = request(socket_path, "GET", "/api/v1/vms")
+            vm_status, vm_body, vm_headers = request(socket_path, "GET", "/api/v1/vms", include_headers=True)
             assert vm_status == 200 and vm_body["domains"][0]["name"] == "private-name" and vm_body["domains"][0]["snapshot_count"] == 2
             vm_action_id = str(uuid.uuid4())
             vm_action_body = {"schema": 1, "operation": "start", "confirmation": "START VM test-vm"}
-            vm_action_headers = {"Content-Type": "application/json", "Idempotency-Key": vm_action_id}
+            assert request(socket_path, "POST", "/api/v1/vms/test-vm/power", body=vm_action_body, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 428
+            assert request(socket_path, "POST", "/api/v1/vms/test-vm/power", body=vm_action_body, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": '"sha256-' + "0" * 64 + '"'})[0] == 412
+            vm_action_headers = {"Content-Type": "application/json", "Idempotency-Key": vm_action_id, "If-Match": vm_headers["ETag"]}
             assert request(socket_path, "POST", "/api/v1/vms/test-vm/power", body=vm_action_body, extra_headers=vm_action_headers) == (200, {"schema": 1, "request_id": vm_action_id, "status": "succeeded", "replayed": False})
             assert request(socket_path, "POST", "/api/v1/vms/test-vm/power", body=vm_action_body, extra_headers=vm_action_headers)[1]["replayed"] is True
-            assert request(socket_path, "POST", "/api/v1/vms/test-vm/power", body=vm_action_body | {"confirmation": "START VM other"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            assert request(socket_path, "POST", "/api/v1/vms/test-vm/power", body=vm_action_body | {"confirmation": "START VM other"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": vm_headers["ETag"]})[0] == 400
             assert json.loads(vm_action_calls.read_text(encoding="utf-8")) == {"schema": 1, "name": "test-vm", "action": "start", "confirmation": "START VM test-vm"}
             snapshot_action_id = str(uuid.uuid4())
             snapshot_action_body = {"schema": 1, "snapshot": "clean-install", "operation": "restore", "confirmation": "RESTORE SNAPSHOT clean-install FOR VM test-vm"}
-            snapshot_action_headers = {"Content-Type": "application/json", "Idempotency-Key": snapshot_action_id}
+            snapshot_action_headers = {"Content-Type": "application/json", "Idempotency-Key": snapshot_action_id, "If-Match": vm_headers["ETag"]}
             assert request(socket_path, "POST", "/api/v1/vms/test-vm/snapshots", body=snapshot_action_body, extra_headers=snapshot_action_headers)[0] == 200
             assert request(socket_path, "POST", "/api/v1/vms/test-vm/snapshots", body=snapshot_action_body, extra_headers=snapshot_action_headers)[1]["replayed"] is True
-            assert request(socket_path, "POST", "/api/v1/vms/test-vm/snapshots", body=snapshot_action_body | {"confirmation": "RESTORE SNAPSHOT other FOR VM test-vm"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            assert request(socket_path, "POST", "/api/v1/vms/test-vm/snapshots", body=snapshot_action_body | {"confirmation": "RESTORE SNAPSHOT other FOR VM test-vm"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": vm_headers["ETag"]})[0] == 400
             assert json.loads(snapshot_action_calls.read_text(encoding="utf-8"))["action"] == "restore"
             clone_id = str(uuid.uuid4())
             clone_body = {"schema": 1, "name": "copy-vm", "confirmation": "CLONE VM test-vm AS copy-vm"}
-            clone_headers = {"Content-Type": "application/json", "Idempotency-Key": clone_id}
+            clone_headers = {"Content-Type": "application/json", "Idempotency-Key": clone_id, "If-Match": vm_headers["ETag"]}
             assert request(socket_path, "POST", "/api/v1/vms/test-vm/clone", body=clone_body, extra_headers=clone_headers)[0] == 200
             assert request(socket_path, "POST", "/api/v1/vms/test-vm/clone", body=clone_body, extra_headers=clone_headers)[1]["replayed"] is True
             delete_id = str(uuid.uuid4())
             delete_body = {"schema": 1, "confirmation": "DELETE VM test-vm AND STORAGE"}
-            delete_headers = {"Content-Type": "application/json", "Idempotency-Key": delete_id}
+            delete_headers = {"Content-Type": "application/json", "Idempotency-Key": delete_id, "If-Match": vm_headers["ETag"]}
             assert request(socket_path, "DELETE", "/api/v1/vms/test-vm", body=delete_body, extra_headers=delete_headers)[0] == 200
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[0]["source"] == "test-vm" and admin_requests[0]["name"] == "copy-vm"
             assert admin_requests[1]["action"] == "delete" and len(admin_requests[1]["definition_sha256"]) == 64
             resource_id = str(uuid.uuid4())
             resource_body = {"schema": 1, "vcpus": 6, "memory_mib": 12288, "boot_order": ["cdrom", "disk"], "confirmation": "UPDATE VM test-vm CPU 6 MEMORY 12288 BOOT cdrom,disk"}
-            resource_headers = {"Content-Type": "application/json", "Idempotency-Key": resource_id}
+            resource_headers = {"Content-Type": "application/json", "Idempotency-Key": resource_id, "If-Match": vm_headers["ETag"]}
             assert request(socket_path, "POST", "/api/v1/vms/test-vm/resources", body=resource_body, extra_headers=resource_headers)[0] == 200
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[2]["memory_mib"] == 12288 and admin_requests[2]["boot_order"] == ["cdrom", "disk"]
             create_id = str(uuid.uuid4())
             create_body = {"schema": 1, "name": "new-vm", "vcpus": 4, "memory_mib": 8192, "disk_size_gib": 64, "autostart": False, "confirmation": "CREATE VM new-vm"}
-            create_headers = {"Content-Type": "application/json", "Idempotency-Key": create_id}
+            create_headers = {"Content-Type": "application/json", "Idempotency-Key": create_id, "If-Match": vm_headers["ETag"]}
             assert request(socket_path, "POST", "/api/v1/vms", body=create_body, extra_headers=create_headers)[0] == 200
             assert request(socket_path, "POST", "/api/v1/vms", body=create_body, extra_headers=create_headers)[1]["replayed"] is True
-            assert request(socket_path, "POST", "/api/v1/vms", body=create_body | {"confirmation": "CREATE VM other"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            assert request(socket_path, "POST", "/api/v1/vms", body=create_body | {"confirmation": "CREATE VM other"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": vm_headers["ETag"]})[0] == 400
             image_attachment_id = str(uuid.uuid4())
             image_attachment_body = {"schema": 1, "image": "installer", "operation": "attach", "confirmation": "ATTACH IMAGE installer TO VM test-vm"}
-            image_attachment_headers = {"Content-Type": "application/json", "Idempotency-Key": image_attachment_id}
+            image_attachment_headers = {"Content-Type": "application/json", "Idempotency-Key": image_attachment_id, "If-Match": vm_headers["ETag"]}
             assert request(socket_path, "POST", "/api/v1/vms/test-vm/images", body=image_attachment_body, extra_headers=image_attachment_headers)[0] == 200
             assert request(socket_path, "POST", "/api/v1/vms/test-vm/images", body=image_attachment_body, extra_headers=image_attachment_headers)[1]["replayed"] is True
             network_attachment_id = str(uuid.uuid4())
             network_attachment_body = {"schema": 1, "network": "lab", "operation": "detach", "confirmation": "DETACH NETWORK lab FROM VM test-vm"}
-            assert request(socket_path, "POST", "/api/v1/vms/test-vm/networks", body=network_attachment_body, extra_headers={"Content-Type": "application/json", "Idempotency-Key": network_attachment_id})[0] == 200
-            assert request(socket_path, "POST", "/api/v1/vms/test-vm/networks", body=network_attachment_body | {"confirmation": "DETACH NETWORK other FROM VM test-vm"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            assert request(socket_path, "POST", "/api/v1/vms/test-vm/networks", body=network_attachment_body, extra_headers={"Content-Type": "application/json", "Idempotency-Key": network_attachment_id, "If-Match": vm_headers["ETag"]})[0] == 200
+            assert request(socket_path, "POST", "/api/v1/vms/test-vm/networks", body=network_attachment_body | {"confirmation": "DETACH NETWORK other FROM VM test-vm"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": vm_headers["ETag"]})[0] == 400
             passthrough_id = str(uuid.uuid4())
             passthrough_body = {"schema": 1, "kind": "usb", "devices": ["1-2"], "operation": "assign", "review_confirmation": "REVIEW USB PASSTHROUGH VM test-vm DEVICES 1-2", "confirmation": "ASSIGN USB PASSTHROUGH VM test-vm DEVICES 1-2"}
-            passthrough_headers = {"Content-Type": "application/json", "Idempotency-Key": passthrough_id}
+            passthrough_headers = {"Content-Type": "application/json", "Idempotency-Key": passthrough_id, "If-Match": vm_headers["ETag"]}
             assert request(socket_path, "POST", "/api/v1/vms/test-vm/passthrough", body=passthrough_body, extra_headers=passthrough_headers)[0] == 200
             assert request(socket_path, "POST", "/api/v1/vms/test-vm/passthrough", body=passthrough_body, extra_headers=passthrough_headers)[1]["replayed"] is True
-            assert request(socket_path, "POST", "/api/v1/vms/test-vm/passthrough", body=passthrough_body | {"confirmation": "ASSIGN USB PASSTHROUGH VM wrong DEVICES 1-2"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+            assert request(socket_path, "POST", "/api/v1/vms/test-vm/passthrough", body=passthrough_body | {"confirmation": "ASSIGN USB PASSTHROUGH VM wrong DEVICES 1-2"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": vm_headers["ETag"]})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[3]["name"] == "new-vm" and admin_requests[3]["disk_size_gib"] == 64
             assert admin_requests[4] == {"schema": 1, "vm": "test-vm", "image": "installer", "action": "attach", "confirmation": "ATTACH IMAGE installer TO VM test-vm"}

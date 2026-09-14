@@ -1009,6 +1009,13 @@ class Handler(BaseHTTPRequestHandler):
             except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
                 self.send_json(503, {"schema": 1, "error": "remote-status-unavailable"})
                 return
+        if create or power or snapshots or clone or resources or images or networks or passthrough:
+            try:
+                if not self.require_match(vm_feed()):
+                    return
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                self.send_json(503, {"schema": 1, "error": "vms-unavailable"})
+                return
         if app_control or app_update or app_install:
             try:
                 if not self.require_match(app_feed()):
@@ -1111,6 +1118,13 @@ class Handler(BaseHTTPRequestHandler):
                     return
             except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
                 self.send_json(503, {"schema": 1, "error": "apps-unavailable"})
+                return
+        if target:
+            try:
+                if not self.require_match(vm_feed()):
+                    return
+            except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+                self.send_json(503, {"schema": 1, "error": "vms-unavailable"})
                 return
         if self.headers.get("Transfer-Encoding") is not None or self.headers.get("Content-Type") != "application/json":
             self.send_json(400, {"schema": 1, "error": "invalid-request"})
