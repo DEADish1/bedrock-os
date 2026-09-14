@@ -17,9 +17,11 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 TOOL = ROOT / "os/config/includes.chroot/usr/lib/bedrock/bedrock-noise-transport"
 
 
-def load_tool(private: pathlib.Path, gateway: pathlib.Path):
+def load_tool(private: pathlib.Path, gateway: pathlib.Path, api_socket: pathlib.Path, api_token: pathlib.Path):
     os.environ["BEDROCK_NOISE_PRIVATE_KEY"] = str(private)
     os.environ["BEDROCK_NOISE_GATEWAY"] = str(gateway)
+    os.environ["BEDROCK_NOISE_API_SOCKET"] = str(api_socket)
+    os.environ["BEDROCK_NOISE_API_TOKEN_FILE"] = str(api_token)
     loader = importlib.machinery.SourceFileLoader("bedrock_noise_transport", str(TOOL))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
@@ -57,6 +59,20 @@ def gateway_once(path: pathlib.Path, seen: list[dict], ready: threading.Event) -
             seen.append(value)
             connection.sendall(json.dumps({"schema": 1, "status": "accepted", "action": value["action"]},
                                           separators=(",", ":")).encode() + b"\n")
+
+
+def api_once(path: pathlib.Path, seen: list[bytes], ready: threading.Event) -> None:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+        server.bind(str(path)); server.listen(1); ready.set()
+        connection, _ = server.accept()
+        with connection:
+            raw = b""
+            while b"\r\n\r\n" not in raw:
+                raw += connection.recv(4096)
+            seen.append(raw)
+            body = b'{"schema":1,"status":"ok"}'
+            connection.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nETag: \"safe\"\r\nContent-Length: " +
+                               str(len(body)).encode() + b"\r\nConnection: close\r\n\r\n" + body)
 
 
 def exchange(module, private_raw: bytes, request: dict, corrupt: bool = False,
@@ -117,7 +133,9 @@ def main() -> None:
         private = work / "server-private-key.pem"
         private.write_bytes(pem)
         private.chmod(0o600)
-        module = load_tool(private, work / "gateway.sock")
+        api_token = work / "api-token"
+        api_token.write_text("a" * 64 + "\n", encoding="ascii")
+        module = load_tool(private, work / "gateway.sock", work / "api.sock", api_token)
 
         client = x25519.X25519PrivateKey.generate()
         client_raw = client.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw,
@@ -142,6 +160,24 @@ def main() -> None:
                                                     "device_id": "62345678-1234-4123-8123-123456789abc"},
                                required_device=device)
         assert response is None
+
+        api_seen: list[bytes] = []
+        ready = threading.Event()
+        api = threading.Thread(target=api_once, args=(module.API_SOCKET, api_seen, ready))
+        api.start(); ready.wait(2)
+        proxied = module.api_exchange({"schema": 1, "action": "api", "method": "GET",
+                                      "path": "/api/v1/health", "headers": {}, "body": ""},
+                                     module.load_api_token())
+        api.join(2)
+        assert proxied == {"schema": 1, "status": 200, "content_type": "application/json",
+                           "etag": '"safe"', "body": "eyJzY2hlbWEiOjEsInN0YXR1cyI6Im9rIn0="}
+        assert b"Authorization: Bearer " + b"a" * 64 in api_seen[0]
+        try:
+            module.api_exchange({"schema": 1, "action": "api", "method": "GET", "path": "/api/v1/health",
+                                 "headers": {"Authorization": "Bearer exposed"}, "body": ""}, "a" * 64)
+            raise AssertionError("client-supplied authorization was accepted")
+        except module.ProtocolError:
+            pass
     print("Noise XX transport identity-binding tests passed.")
 
 

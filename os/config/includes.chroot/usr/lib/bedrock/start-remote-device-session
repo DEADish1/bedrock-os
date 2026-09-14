@@ -11,25 +11,45 @@ printf '%s' "$session" | grep -Eq "$id_pattern" || { printf 'error: session iden
 if [ "${BEDROCK_REMOTE_LAUNCH_TEST_MODE:-0}" = 1 ]; then
   runner=${BEDROCK_REMOTE_LAUNCH_SYSTEMD_RUN:?test systemd-run is required}
   key=${BEDROCK_REMOTE_LAUNCH_PRIVATE_KEY:?test private key is required}
+  api_token=${BEDROCK_REMOTE_LAUNCH_API_TOKEN_FILE:?test API token file is required}
   transport=${BEDROCK_REMOTE_LAUNCH_TRANSPORT:-/usr/lib/bedrock/bedrock-noise-transport}
+  cleanup_token=0
 else
   [ "$(id -u)" -eq 0 ] || { printf 'error: remote session launch requires root\n' >&2; exit 1; }
   runner=/usr/bin/systemd-run
   key=/var/lib/bedrock/remote/server-private-key.pem
   transport=/usr/lib/bedrock/bedrock-noise-transport
+  token_name="remote-$(printf '%s' "$session" | tr -d '-' | cut -c1-24)"
+  credential_directory=/run/bedrock-remote-credentials
+  install -d -m 0700 "$credential_directory"
+  api_token=$(mktemp "$credential_directory/.api-token.XXXXXX")
+  cleanup_token=1
+  cleanup() {
+    status=$?
+    /usr/lib/bedrock/manage-api-tokens revoke "$token_name" >/dev/null 2>&1 || true
+    rm -f "$api_token"
+    exit "$status"
+  }
+  trap cleanup EXIT INT TERM
+  /usr/lib/bedrock/create-api-token "$token_name" | jq -er '.token' > "$api_token"
+  chmod 0600 "$api_token"
 fi
 [ -f "$key" ] && [ ! -L "$key" ] || { printf 'error: remote server identity is unavailable\n' >&2; exit 1; }
+[ -f "$api_token" ] && [ ! -L "$api_token" ] || { printf 'error: remote API credential is unavailable\n' >&2; exit 1; }
 
 unit="bedrock-remote-session-$device-$session.service"
 target="bedrock-remote-device@$device.target"
-exec "$runner" --quiet --wait --pipe --collect --service-type=exec \
+"$runner" --quiet --wait --pipe --collect --service-type=exec \
   --unit="$unit" \
   --property="PartOf=$target" \
   --property="After=bedrock-pairing-gateway.service" \
   --property="User=bedrock-remote" \
   --property="Group=bedrock-remote" \
+  --property="SupplementaryGroups=bedrock-api" \
   --property="LoadCredential=server-private-key:$key" \
+  --property="LoadCredential=api-token:$api_token" \
   --property="Environment=BEDROCK_NOISE_PRIVATE_KEY=%d/server-private-key" \
+  --property="Environment=BEDROCK_NOISE_API_TOKEN_FILE=%d/api-token" \
   --property="NoNewPrivileges=yes" \
   --property="PrivateDevices=yes" \
   --property="PrivateTmp=yes" \
@@ -41,4 +61,14 @@ exec "$runner" --quiet --wait --pipe --collect --service-type=exec \
   --property="RestrictSUIDSGID=yes" \
   --property="LockPersonality=yes" \
   --property="MemoryDenyWriteExecute=yes" \
+  --property="RuntimeMaxSec=3600" \
+  --property="MemoryMax=134217728" \
+  --property="TasksMax=16" \
   "$transport" --require-device "$device"
+status=$?
+if [ "$cleanup_token" -eq 1 ]; then
+  trap - EXIT INT TERM
+  /usr/lib/bedrock/manage-api-tokens revoke "$token_name" >/dev/null
+  rm -f "$api_token"
+fi
+exit "$status"

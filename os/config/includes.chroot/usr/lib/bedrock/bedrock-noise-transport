@@ -1,6 +1,9 @@
 #!/usr/bin/python3
 """One bounded Bedrock control exchange over a Noise XX connected stream."""
 
+import base64
+import binascii
+import http.client
 import json
 import os
 import pathlib
@@ -8,6 +11,7 @@ import re
 import socket
 import struct
 import sys
+import time
 
 from cryptography.hazmat.primitives import serialization
 from noise.connection import Keypair, NoiseConnection
@@ -17,10 +21,19 @@ PROTOCOL = b"Noise_XX_25519_ChaChaPoly_SHA256"
 PROLOGUE = b"bedrock-remote-control-v1|initiator=client|responder=server"
 PRIVATE_KEY = pathlib.Path(os.environ.get("BEDROCK_NOISE_PRIVATE_KEY", "/var/lib/bedrock/remote/server-private-key.pem"))
 GATEWAY = pathlib.Path(os.environ.get("BEDROCK_NOISE_GATEWAY", "/run/bedrock-pairing/gateway.sock"))
+API_SOCKET = pathlib.Path(os.environ.get("BEDROCK_NOISE_API_SOCKET", "/run/bedrock-api/api.sock"))
+API_TOKEN_FILE = os.environ.get("BEDROCK_NOISE_API_TOKEN_FILE")
 MAX_HANDSHAKE = 65535
 MAX_PLAINTEXT = 61440
 MAX_GATEWAY_RESPONSE = 4096
+MAX_API_BODY = 32768
+MAX_RECORDS = 1048576
+MAX_DIRECTION_BYTES = 1073741824
+MAX_AGE_SECONDS = 3600
+REKEY_RECORDS = 65536
 DEVICE_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+API_PATH = re.compile(r"^/api/v1/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]{0,1024}$")
+API_HEADERS = {"content-type", "idempotency-key", "if-match", "x-bedrock-image-type"}
 
 
 class ProtocolError(Exception):
@@ -103,6 +116,56 @@ def gateway_exchange(value: dict) -> dict:
     return response
 
 
+def load_api_token() -> str:
+    if not API_TOKEN_FILE:
+        raise ProtocolError("API credential is unavailable")
+    path = pathlib.Path(API_TOKEN_FILE)
+    if not path.is_file() or path.is_symlink():
+        raise ProtocolError("API credential is unavailable")
+    token = path.read_text(encoding="ascii").strip()
+    if not re.fullmatch(r"[0-9a-f]{64}", token):
+        raise ProtocolError("API credential is invalid")
+    return token
+
+
+def api_exchange(value: dict, token: str) -> dict:
+    if set(value) != {"schema", "action", "method", "path", "headers", "body"} or value.get("schema") != 1 or value.get("action") != "api":
+        raise ProtocolError("invalid API request")
+    method, path, headers, encoded_body = value["method"], value["path"], value["headers"], value["body"]
+    if method not in {"GET", "POST", "PUT", "DELETE"} or not isinstance(path, str) or not API_PATH.fullmatch(path):
+        raise ProtocolError("invalid API route")
+    if not isinstance(headers, dict) or len(headers) > 4 or any(not isinstance(key, str) or key.lower() not in API_HEADERS or not isinstance(item, str) or len(item) > 256 or "\r" in item or "\n" in item for key, item in headers.items()):
+        raise ProtocolError("invalid API headers")
+    if len({key.lower() for key in headers}) != len(headers) or not isinstance(encoded_body, str):
+        raise ProtocolError("invalid API request")
+    try:
+        body = base64.b64decode(encoded_body, validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise ProtocolError("invalid API body") from error
+    if len(body) > MAX_API_BODY or (method == "GET" and body):
+        raise ProtocolError("invalid API body")
+
+    lines = [f"{method} {path} HTTP/1.1", "Host: bedrock.local", f"Authorization: Bearer {token}",
+             "Connection: close", f"Content-Length: {len(body)}"]
+    lines.extend(f"{key}: {item}" for key, item in headers.items())
+    raw = ("\r\n".join(lines) + "\r\n\r\n").encode("ascii") + body
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(10)
+        client.connect(str(API_SOCKET))
+        client.sendall(raw)
+        response = http.client.HTTPResponse(client)
+        response.begin()
+        response_body = response.read(MAX_API_BODY + 1)
+        if len(response_body) > MAX_API_BODY or response.read(1):
+            raise ProtocolError("API response is too large")
+        content_type = response.getheader("Content-Type", "")
+        etag = response.getheader("ETag")
+        if content_type and len(content_type) > 128 or etag is not None and (len(etag) > 128 or "\r" in etag or "\n" in etag):
+            raise ProtocolError("invalid API response headers")
+        return {"schema": 1, "status": response.status, "content_type": content_type,
+                "etag": etag, "body": base64.b64encode(response_body).decode("ascii")}
+
+
 def serve(input_stream, output_stream, required_device: str | None = None) -> None:
     noise = NoiseConnection.from_name(PROTOCOL)
     noise.set_as_responder()
@@ -131,6 +194,34 @@ def serve(input_stream, output_stream, required_device: str | None = None) -> No
     request["client_public_key"] = proven_key
     response = gateway_exchange(request)
     write_frame(output_stream, bytes(noise.encrypt(pack_record(response, 0))))
+    if required_device is None or response.get("status") != "authorized" or response.get("device_id") != required_device:
+        return
+
+    token = load_api_token()
+    started = time.monotonic()
+    inbound_bytes = outbound_bytes = 0
+    sequence = 1
+    while sequence < MAX_RECORDS and time.monotonic() - started <= MAX_AGE_SECONDS:
+        try:
+            encrypted = read_frame(input_stream, MAX_PLAINTEXT + 16)
+        except ProtocolError as error:
+            if str(error) == "truncated stream":
+                return
+            raise
+        inbound_bytes += len(encrypted)
+        if inbound_bytes > MAX_DIRECTION_BYTES:
+            raise ProtocolError("inbound byte limit exceeded")
+        api_request = unpack_record(bytes(noise.decrypt(encrypted)), sequence)
+        api_response = api_exchange(api_request, token)
+        encrypted_response = bytes(noise.encrypt(pack_record(api_response, sequence)))
+        outbound_bytes += len(encrypted_response)
+        if outbound_bytes > MAX_DIRECTION_BYTES:
+            raise ProtocolError("outbound byte limit exceeded")
+        write_frame(output_stream, encrypted_response)
+        sequence += 1
+        if sequence % REKEY_RECORDS == 0:
+            noise.rekey_inbound_cipher()
+            noise.rekey_outbound_cipher()
 
 
 def main() -> None:
