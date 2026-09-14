@@ -36,6 +36,7 @@ openssl
 ovmf
 pciutils
 podman
+python3-noiseprotocol
 python3-minimal
 qemu-system-x86
 qemu-utils

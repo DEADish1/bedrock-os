@@ -159,6 +159,7 @@ sh -n "$OS_DIR/scripts/create-spdx-sbom.sh"
 python3 -c 'compile(open(__import__("sys").argv[1], encoding="utf-8").read(), __import__("sys").argv[1], "exec")' "$OS_DIR/config/includes.chroot/usr/lib/bedrock/bedrock-api"
 python3 -c 'compile(open(__import__("sys").argv[1], encoding="utf-8").read(), __import__("sys").argv[1], "exec")' "$OS_DIR/config/includes.chroot/usr/lib/bedrock/bedrock-action-broker"
 python3 -c 'compile(open(__import__("sys").argv[1], encoding="utf-8").read(), __import__("sys").argv[1], "exec")' "$OS_DIR/config/includes.chroot/usr/lib/bedrock/bedrock-pairing-gateway"
+python3 -c 'compile(open(__import__("sys").argv[1], encoding="utf-8").read(), __import__("sys").argv[1], "exec")' "$OS_DIR/config/includes.chroot/usr/lib/bedrock/bedrock-noise-transport"
 sh -n "$OS_DIR/config/includes.chroot/usr/sbin/bedrock-update-settings"
 sh -n "$OS_DIR/config/includes.chroot/usr/sbin/bedrock-setup-updates"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/collect-hardware-inventory"
@@ -260,6 +261,12 @@ sh "$OS_DIR/tests/test-remote-transport-policy.sh"
 sh "$OS_DIR/tests/test-remote-pairing.sh"
 sh "$OS_DIR/tests/test-remote-identity.sh"
 python3 "$OS_DIR/tests/test-remote-pairing-gateway.py"
+if python3 -c 'import noise, cryptography' >/dev/null 2>&1; then
+  python3 "$OS_DIR/tests/test-noise-transport.py"
+else
+  grep -qx 'python3-noiseprotocol' "$OS_DIR/config/package-lists/bedrock.list.chroot" || { printf 'error: Noise transport runtime is not packaged\n' >&2; exit 1; }
+  printf 'Noise transport integration test deferred to the packaged Debian runtime.\n'
+fi
 sh "$OS_DIR/tests/test-remote-devices.sh"
 sh "$OS_DIR/tests/test-remote-status.sh"
 sh "$OS_DIR/tests/test-remote-device-change.sh"

@@ -1,0 +1,142 @@
+#!/usr/bin/python3
+"""One bounded Bedrock control exchange over a Noise XX connected stream."""
+
+import json
+import os
+import pathlib
+import socket
+import struct
+import sys
+
+from cryptography.hazmat.primitives import serialization
+from noise.connection import Keypair, NoiseConnection
+from noise.exceptions import NoiseHandshakeError, NoiseInvalidMessage, NoiseValidationError, NoiseValueError
+
+PROTOCOL = b"Noise_XX_25519_ChaChaPoly_SHA256"
+PROLOGUE = b"bedrock-remote-control-v1|initiator=client|responder=server"
+PRIVATE_KEY = pathlib.Path(os.environ.get("BEDROCK_NOISE_PRIVATE_KEY", "/var/lib/bedrock/remote/server-private-key.pem"))
+GATEWAY = pathlib.Path(os.environ.get("BEDROCK_NOISE_GATEWAY", "/run/bedrock-pairing/gateway.sock"))
+MAX_HANDSHAKE = 65535
+MAX_PLAINTEXT = 61440
+MAX_GATEWAY_RESPONSE = 4096
+
+
+class ProtocolError(Exception):
+    pass
+
+
+def read_exact(stream, count: int) -> bytes:
+    chunks = bytearray()
+    while len(chunks) < count:
+        chunk = stream.read(count - len(chunks))
+        if not chunk:
+            raise ProtocolError("truncated stream")
+        chunks.extend(chunk)
+    return bytes(chunks)
+
+
+def read_frame(stream, maximum: int) -> bytes:
+    size = struct.unpack("!I", read_exact(stream, 4))[0]
+    if size == 0 or size > maximum:
+        raise ProtocolError("invalid frame length")
+    return read_exact(stream, size)
+
+
+def write_frame(stream, value: bytes) -> None:
+    stream.write(struct.pack("!I", len(value)) + value)
+    stream.flush()
+
+
+def load_private_key(path: pathlib.Path) -> bytes:
+    if not path.is_file() or path.is_symlink():
+        raise ProtocolError("private identity is unavailable")
+    key = serialization.load_pem_private_key(path.read_bytes(), password=None)
+    return key.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw,
+                             serialization.NoEncryption())
+
+
+def unpack_record(plain: bytes, expected_sequence: int) -> dict:
+    if len(plain) < 13:
+        raise ProtocolError("short record")
+    version, sequence, size = struct.unpack("!BQI", plain[:13])
+    body = plain[13:]
+    if version != 1 or sequence != expected_sequence or size != len(body) or size > MAX_PLAINTEXT - 13:
+        raise ProtocolError("invalid authenticated record")
+    try:
+        value = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ProtocolError("invalid control message") from error
+    if not isinstance(value, dict) or value.get("schema") != 1:
+        raise ProtocolError("unsupported control message")
+    return value
+
+
+def pack_record(value: dict, sequence: int) -> bytes:
+    body = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    if len(body) > MAX_PLAINTEXT - 13:
+        raise ProtocolError("response is too large")
+    return struct.pack("!BQI", 1, sequence, len(body)) + body
+
+
+def gateway_exchange(value: dict) -> dict:
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii")
+    if len(raw) > 1024:
+        raise ProtocolError("gateway request is too large")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(5)
+        client.connect(str(GATEWAY))
+        client.sendall(raw)
+        client.shutdown(socket.SHUT_WR)
+        result = bytearray()
+        while len(result) <= MAX_GATEWAY_RESPONSE:
+            chunk = client.recv(min(1024, MAX_GATEWAY_RESPONSE + 1 - len(result)))
+            if not chunk:
+                break
+            result.extend(chunk)
+    if len(result) > MAX_GATEWAY_RESPONSE:
+        raise ProtocolError("gateway response is too large")
+    response = json.loads(bytes(result).decode("utf-8"))
+    if not isinstance(response, dict) or response.get("schema") != 1:
+        raise ProtocolError("invalid gateway response")
+    return response
+
+
+def serve(input_stream, output_stream) -> None:
+    noise = NoiseConnection.from_name(PROTOCOL)
+    noise.set_as_responder()
+    noise.set_prologue(PROLOGUE)
+    noise.set_keypair_from_private_bytes(Keypair.STATIC, load_private_key(PRIVATE_KEY))
+    noise.start_handshake()
+    noise.read_message(read_frame(input_stream, MAX_HANDSHAKE))
+    write_frame(output_stream, bytes(noise.write_message()))
+    noise.read_message(read_frame(input_stream, MAX_HANDSHAKE))
+    if not noise.handshake_finished:
+        raise ProtocolError("incomplete handshake")
+    remote = noise.noise_protocol.handshake_state.rs
+    if remote is None or len(remote.public_bytes) != 32:
+        raise ProtocolError("missing client identity")
+
+    encrypted = read_frame(input_stream, MAX_PLAINTEXT + 16)
+    request = unpack_record(bytes(noise.decrypt(encrypted)), 0)
+    if request.get("action") not in {"request", "redeem", "authorize"}:
+        raise ProtocolError("unsupported action")
+    supplied = request.get("client_public_key")
+    proven_key = remote.public_bytes.hex()
+    if supplied is not None and supplied != proven_key:
+        raise ProtocolError("client identity mismatch")
+    request["client_public_key"] = proven_key
+    response = gateway_exchange(request)
+    write_frame(output_stream, bytes(noise.encrypt(pack_record(response, 0))))
+
+
+def main() -> None:
+    try:
+        serve(sys.stdin.buffer, sys.stdout.buffer)
+    except (BrokenPipeError, OSError, ProtocolError, NoiseHandshakeError, NoiseInvalidMessage,
+            NoiseValidationError, NoiseValueError, ValueError, json.JSONDecodeError):
+        # The connected peer gets only a closed stream; details must not become a remote oracle.
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

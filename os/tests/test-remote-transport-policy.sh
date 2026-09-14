@@ -5,7 +5,7 @@ policy="$ROOT/os/config/includes.chroot/usr/share/bedrock/remote/transport-polic
 [ -f "$policy" ] && [ ! -L "$policy" ]
 jq -e '
   (keys|sort)==(["authorization","identity","implementation","noise_protocol","outer_transport","pairing","records","rehandshake","relay","schema","status"]|sort) and
-  .schema==1 and .status=="design-approved-implementation-pending" and
+  .schema==1 and .status=="server-noise-control-implemented-relay-pending" and
   .noise_protocol=="Noise_XX_25519_ChaChaPoly_SHA256" and
   .outer_transport=={minimum_tls:"1.3",zero_rtt:false,relay_is_end_to_end_trusted:false} and
   .identity.server_static_key=="x25519" and .identity.per_device_static_key=="x25519" and .identity.oidc_can_approve_devices==false and
