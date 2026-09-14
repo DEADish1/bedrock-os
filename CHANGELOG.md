@@ -4,6 +4,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Added a guarded embedded noVNC console dialog for running virtual machines. It requests a one-time, ETag-bound authorization and carries the short-lived token only in the WebSocket subprotocol rather than a URL.
 - Added strong ETag/If-Match concurrency protection to every management mutation family—update policy, remote trust, applications, backups, virtual machines, protected storage, images, users, and groups—including explicit missing/stale precondition responses and browser refresh behavior.
 - Added authenticated, exact-confirmation VM console-session authorization through the root action broker. Tokens are returned once, expire after 60 seconds, remain hash-only at rest, and cannot be recovered through an idempotency replay.
 - Added the server-side remote-pairing bootstrap gateway: an AF_UNIX-only, peer-isolated, size/rate-bounded request, redemption, and exact paired-key session-authorization boundary with indistinguishable failures, no approval capability, and no pairing secrets in child-process arguments. Successful authorization rejects expired/revoked devices, records last-seen time, and starts the device's revocation-controlled systemd target. Added crash-recoverable X25519 server identity provisioning and end-to-end gateway tests for approval gating, single use, key binding, session binding, oversized input, and forbidden operations.

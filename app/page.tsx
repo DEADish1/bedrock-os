@@ -1,124 +1,6401 @@
-'use client';
-import {useEffect,useEffectEvent,useState} from 'react';
+"use client";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
+import type RFB from "@novnc/novnc";
 
-const capacityLabel=(bytes:number)=>bytes>=1e12?`${(bytes/1e12).toFixed(1)} TB`:`${Math.max(1,Math.round(bytes/1e9))} GB`;
-const Tip=({children}:{children:string})=><span className="tip" tabIndex={0}>?<span>{children}</span></span>;
-function NasCredentialActions({data,token,setData,notify}:{data:UserFeed|null;token:string;setData:(value:UserFeed|null)=>void;notify:(value:string)=>void}){const [selected,setSelected]=useState(''),[confirmation,setConfirmation]=useState(''),[working,setWorking]=useState(false),[error,setError]=useState(''),candidate=data?.users.find(item=>item.name===selected&&item.credential_candidate),phrase=candidate?`ROTATE NAS CREDENTIAL ${candidate.name}`:'';const rotate=async()=>{if(!candidate||confirmation!==phrase)return;setWorking(true);setError('');try{const response=await fetch(`/api/v1/users/${candidate.name}/rotate-credential`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID(),'If-Match':data?.etag??''},body:JSON.stringify({schema:1,confirmation})});if(!response.ok)throw new Error(response.status===412?'Users and groups changed since they were loaded. Review the latest state and try again.':response.status===422?'The staged credential is no longer available, or rotation failed.':'Bedrock rejected credential rotation.');const refreshed=await fetch('/api/v1/users',{headers:{Authorization:`Bearer ${token}`},cache:'no-store'});if(!refreshed.ok)throw new Error('Credential rotated, but refreshed status is unavailable.');const next=await refreshed.json() as Omit<UserFeed,'etag'>;setData({...next,etag:refreshed.headers.get('ETag')??''});setSelected('');setConfirmation('');notify('NAS credential rotated')}catch(reason){setError(reason instanceof Error?reason.message:'NAS credential rotation failed.')}finally{setWorking(false)}};if(!data)return null;const candidates=data.users.filter(item=>item.credential_candidate);return <div className="panel resource-editor"><Section title="Rotate storage credential" copy="Apply a password staged locally by the root administrator"/>{candidates.length===0?<Empty text="No root-staged credential is ready. Stage one locally before rotating it here."/>:<><div className="resource-fields"><label>User<select value={selected} onChange={event=>{setSelected(event.target.value);setConfirmation('');setError('')}}><option value="">Choose staged credential</option>{candidates.map(item=><option key={item.name}>{item.name}</option>)}</select></label></div>{phrase&&<label className="resource-confirm">Type <b>{phrase}</b><input autoComplete="off" value={confirmation} onChange={event=>setConfirmation(event.target.value)} onKeyDown={event=>event.key==='Enter'&&confirmation===phrase&&rotate()}/></label>}{error&&<p className="form-error" role="alert">{error}</p>}<button className="primary" disabled={working||!candidate||confirmation!==phrase} onClick={rotate}>{working?'Rotating…':'Rotate credential'}</button></>}</div>}
-function NasMembershipActions({data,token,setData,notify}:{data:UserFeed|null;token:string;setData:(value:UserFeed|null)=>void;notify:(value:string)=>void}){const [user,setUser]=useState(''),[group,setGroup]=useState(''),[confirmation,setConfirmation]=useState(''),[working,setWorking]=useState(false),[error,setError]=useState(''),phrase=user&&group?`ADD NAS USER ${user} TO GROUP ${group}`:'';const add=async()=>{if(!phrase||confirmation!==phrase)return;setWorking(true);setError('');try{const response=await fetch(`/api/v1/groups/${group}/members`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID(),'If-Match':data?.etag??''},body:JSON.stringify({schema:1,user,confirmation})});if(!response.ok)throw new Error(response.status===412?'Users and groups changed since they were loaded. Review the latest state and try again.':response.status===422?'The selected user or group changed, or membership could not be applied.':'Bedrock rejected the membership change.');const refreshed=await fetch('/api/v1/users',{headers:{Authorization:`Bearer ${token}`},cache:'no-store'});if(!refreshed.ok)throw new Error('Membership changed, but refreshed status is unavailable.');const next=await refreshed.json() as Omit<UserFeed,'etag'>;setData({...next,etag:refreshed.headers.get('ETag')??''});setUser('');setGroup('');setConfirmation('');notify('NAS group membership added')}catch(reason){setError(reason instanceof Error?reason.message:'NAS membership change failed.')}finally{setWorking(false)}};if(!data)return null;return <div className="panel resource-editor"><Section title="Add group member" copy="Grant an existing NAS user membership in an access group"/>{data.users.length===0||data.groups.length===0?<Empty text="Create at least one NAS user and one group before adding membership."/>:<><div className="resource-fields"><label>User<select value={user} onChange={event=>{setUser(event.target.value);setConfirmation('');setError('')}}><option value="">Choose user</option>{data.users.map(item=><option key={item.name}>{item.name}</option>)}</select></label><label>Group<select value={group} onChange={event=>{setGroup(event.target.value);setConfirmation('');setError('')}}><option value="">Choose group</option>{data.groups.map(item=><option key={item.name}>{item.name}</option>)}</select></label></div>{phrase&&<label className="resource-confirm">Type <b>{phrase}</b><input autoComplete="off" value={confirmation} onChange={event=>setConfirmation(event.target.value)} onKeyDown={event=>event.key==='Enter'&&confirmation===phrase&&add()}/></label>}{error&&<p className="form-error" role="alert">{error}</p>}<button className="primary" disabled={working||!phrase||confirmation!==phrase} onClick={add}>{working?'Adding member…':'Add group member'}</button></>}</div>}
-function NasIdentityActions({data,token,setData,notify}:{data:UserFeed|null;token:string;setData:(value:UserFeed|null)=>void;notify:(value:string)=>void}){const [kind,setKind]=useState<'user'|'group'>('user'),[name,setName]=useState(''),[confirmation,setConfirmation]=useState(''),[working,setWorking]=useState(false),[error,setError]=useState(''),valid=/^[a-z][a-z0-9_-]{0,31}$/.test(name)&&!data?.users.some(item=>item.name===name)&&!data?.groups.some(item=>item.name===name),phrase=valid?`CREATE NAS ${kind.toUpperCase()} ${name}`:'';const create=async()=>{if(!valid||confirmation!==phrase)return;setWorking(true);setError('');try{const response=await fetch('/api/v1/users',{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID(),'If-Match':data?.etag??''},body:JSON.stringify({schema:1,kind,name,confirmation})});if(!response.ok)throw new Error(response.status===412?'Users and groups changed since they were loaded. Review the latest state and try again.':response.status===422?'That user or group already exists, or account creation failed.':'Bedrock rejected NAS identity creation.');const refreshed=await fetch('/api/v1/users',{headers:{Authorization:`Bearer ${token}`},cache:'no-store'});if(!refreshed.ok)throw new Error('The identity was created, but refreshed status is unavailable.');const next=await refreshed.json() as Omit<UserFeed,'etag'>;setData({...next,etag:refreshed.headers.get('ETag')??''});setName('');setConfirmation('');notify(`NAS ${kind} created`)}catch(reason){setError(reason instanceof Error?reason.message:'NAS identity creation failed.')}finally{setWorking(false)}};if(!data)return null;return <div className="panel resource-editor"><Section title="Create storage identity" copy="Local NAS users and access groups with fixed safe account policy"/><div className="resource-fields"><label>Identity type<select value={kind} onChange={event=>{setKind(event.target.value as 'user'|'group');setConfirmation('');setError('')}}><option value="user">User</option><option value="group">Group</option></select></label><label>Name<input value={name} placeholder={kind==='user'?'alex':'family'} onChange={event=>{setName(event.target.value);setConfirmation('');setError('')}}/></label></div>{name&&!valid&&<p className="form-error" role="alert">Use a unique lowercase name with letters, numbers, underscores, or hyphens.</p>}{phrase&&<label className="resource-confirm">Type <b>{phrase}</b><input autoComplete="off" value={confirmation} onChange={event=>setConfirmation(event.target.value)} onKeyDown={event=>event.key==='Enter'&&confirmation===phrase&&create()}/></label>}{error&&<p className="form-error" role="alert">{error}</p>}<button className="primary" disabled={working||!valid||confirmation!==phrase} onClick={create}>{working?'Creating…':`Create NAS ${kind}`}</button></div>}
-function StorageActions({data,token,setData,notify}:{data:StorageFeed|null;token:string;setData:(value:StorageFeed|null)=>void;notify:(value:string)=>void}){type Operation='scrub'|'export'|'import';const [selected,setSelected]=useState(''),[operation,setOperation]=useState<Operation>('scrub'),[confirmation,setConfirmation]=useState(''),[working,setWorking]=useState(false),[error,setError]=useState(''),pool=data?.managed_pools.find(item=>item.name===selected),allowed=pool&&(operation==='import'?pool.state==='exported':operation==='export'?pool.state==='online'||pool.state==='degraded':pool.state!=='exported'),phrase=allowed?`${operation.toUpperCase()} STORAGE ${selected}`:'';const apply=async()=>{if(!pool||!allowed||confirmation!==phrase)return;setWorking(true);setError('');try{const response=await fetch(`/api/v1/storage/${selected}/${operation}`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID(),'If-Match':data?.etag??''},body:JSON.stringify({schema:1,confirmation})});if(!response.ok)throw new Error(response.status===412?'Storage changed since it was loaded. Review the latest state and try again.':response.status===422?'The storage group changed or cannot perform that operation in its current state.':'Bedrock rejected the storage operation.');const refreshed=await fetch('/api/v1/storage',{headers:{Authorization:`Bearer ${token}`},cache:'no-store'});if(!refreshed.ok)throw new Error('The operation completed, but refreshed storage status is unavailable.');const next=await refreshed.json() as Omit<StorageFeed,'etag'>;setData({...next,etag:refreshed.headers.get('ETag')??''});setSelected('');setConfirmation('');notify(`Storage ${operation} completed`)}catch(reason){setError(reason instanceof Error?reason.message:'Storage operation failed.')}finally{setWorking(false)}};if(!data)return null;return <div className="panel resource-editor"><Section title="Storage operations" copy="Scrub, safely disconnect, or reconnect a managed storage group"/>{data.managed_pools.length===0?<Empty text="No managed storage groups are available."/>:<><div className="resource-fields"><label>Operation<select value={operation} onChange={event=>{setOperation(event.target.value as Operation);setSelected('');setConfirmation('');setError('')}}><option value="scrub">Integrity scrub</option><option value="export">Safely disconnect</option><option value="import">Reconnect</option></select></label><label>Storage group<select value={selected} onChange={event=>{setSelected(event.target.value);setConfirmation('');setError('')}}><option value="">Choose protected storage</option>{data.managed_pools.filter(item=>operation==='import'?item.state==='exported':operation==='export'?item.state==='online'||item.state==='degraded':item.state!=='exported').map(item=><option key={item.name} value={item.name}>{item.name} · {item.backend} {item.layout} · {item.state}</option>)}</select></label></div>{phrase&&<label className="resource-confirm">Type <b>{phrase}</b><input autoComplete="off" value={confirmation} onChange={event=>setConfirmation(event.target.value)} onKeyDown={event=>event.key==='Enter'&&confirmation===phrase&&apply()}/></label>}{error&&<p className="form-error" role="alert">{error}</p>}<button className="primary" disabled={working||!phrase||confirmation!==phrase} onClick={apply}>{working?'Applying…':operation==='scrub'?'Start integrity scrub':operation==='export'?'Safely disconnect storage':'Reconnect storage'}</button></>}</div>}
-function StorageProvisioning({data,token,setData,notify}:{data:StorageFeed|null;token:string;setData:(value:StorageFeed|null)=>void;notify:(value:string)=>void}){type Operation='create'|'expand'|'replace';const [operation,setOperation]=useState<Operation>('create'),[name,setName]=useState(''),[backend,setBackend]=useState<'zfs'|'mdraid'>('zfs'),[layout,setLayout]=useState('mirror'),[poolName,setPoolName]=useState(''),[diskIds,setDiskIds]=useState<string[]>([]),[oldDisk,setOldDisk]=useState(''),[newDisk,setNewDisk]=useState(''),[confirmation,setConfirmation]=useState(''),[working,setWorking]=useState(false),[error,setError]=useState('');if(!data)return null;const available=data.disk_candidates.filter(item=>item.eligible),pool=data.managed_pools.find(item=>item.name===poolName),target=operation==='create'?name:poolName,ids=diskIds.join(','),selectedLayout=operation==='create'?layout:pool?.layout??'',minimum=selectedLayout==='raidz2'||selectedLayout==='raid6'||selectedLayout==='raid10'?4:selectedLayout==='raidz1'||selectedLayout==='raid5'?3:2,validCount=operation==='expand'&&pool?.backend==='mdraid'?diskIds.length>=1:diskIds.length>=minimum&&(selectedLayout!=='raid10'||diskIds.length%2===0)&&(selectedLayout!=='mirror'||diskIds.length<=3),validName=/^[a-z][a-z0-9_-]{0,31}$/.test(name)&&!data.managed_pools.some(item=>item.name===name),phrase=operation==='create'&&validName&&validCount?`CREATE STORAGE ${name} USING ${ids}`:operation==='expand'&&pool&&validCount?`EXPAND STORAGE ${poolName} USING ${ids}`:operation==='replace'&&pool&&oldDisk&&newDisk?`REPLACE STORAGE ${poolName} MEMBER ${oldDisk} WITH ${newDisk}`:'',layouts=backend==='zfs'?['mirror','raidz1','raidz2']:['raid1','raid5','raid6','raid10'];const reset=()=>{setDiskIds([]);setOldDisk('');setNewDisk('');setConfirmation('');setError('')};const toggle=(id:string)=>setDiskIds(value=>value.includes(id)?value.filter(item=>item!==id):[...value,id]);const apply=async()=>{if(!phrase||confirmation!==phrase)return;setWorking(true);setError('');try{const url=operation==='create'?'/api/v1/storage':`/api/v1/storage/${poolName}/${operation}`,body=operation==='create'?{schema:1,id:name,backend,layout,disk_ids:diskIds,confirmation}:operation==='expand'?{schema:1,disk_ids:diskIds,confirmation}:{schema:1,old_disk_id:oldDisk,new_disk_id:newDisk,confirmation};const response=await fetch(url,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID(),'If-Match':data?.etag??''},body:JSON.stringify(body)});if(!response.ok)throw new Error(response.status===412?'Storage changed since it was loaded. Review the latest state and try again.':response.status===422?'Disk eligibility or storage state changed. Refresh and review before trying again.':'Bedrock rejected the storage change.');const refreshed=await fetch('/api/v1/storage',{headers:{Authorization:`Bearer ${token}`},cache:'no-store'});if(!refreshed.ok)throw new Error('The change completed, but refreshed storage status is unavailable.');const next=await refreshed.json() as Omit<StorageFeed,'etag'>;setData({...next,etag:refreshed.headers.get('ETag')??''});reset();setName('');setPoolName('');notify(`Storage ${operation} completed`)}catch(reason){setError(reason instanceof Error?reason.message:'Storage change failed.')}finally{setWorking(false)}};return <div className="panel resource-editor"><Section title="Change protected storage" copy="Create, expand, or replace disks using privacy-safe identities"/><div className="resource-fields"><label>Change<select value={operation} onChange={event=>{setOperation(event.target.value as Operation);reset()}}><option value="create">Create protected storage</option><option value="expand">Expand storage</option><option value="replace">Replace a member</option></select></label>{operation==='create'?<><label>Name<input value={name} maxLength={32} placeholder="media" onChange={event=>{setName(event.target.value.toLowerCase());setConfirmation('')}}/></label><label>Technology<select value={backend} onChange={event=>{const value=event.target.value as 'zfs'|'mdraid';setBackend(value);setLayout(value==='zfs'?'mirror':'raid1');setConfirmation('')}}><option value="zfs">ZFS</option><option value="mdraid">Linux RAID</option></select></label><label>Protection<select value={layout} onChange={event=>{setLayout(event.target.value);setConfirmation('')}}>{layouts.map(item=><option key={item} value={item}>{item}</option>)}</select></label></>:<label>Storage group<select value={poolName} onChange={event=>{setPoolName(event.target.value);reset()}}><option value="">Choose protected storage</option>{data.managed_pools.filter(item=>operation==='expand'?item.state==='online':item.state==='online'||item.state==='degraded').map(item=><option key={item.name} value={item.name}>{item.name} · {item.backend} {item.layout}</option>)}</select></label>}</div>{operation==='replace'&&pool&&<div className="resource-fields"><label>Current member<select value={oldDisk} onChange={event=>{setOldDisk(event.target.value);setConfirmation('')}}><option value="">Choose member</option>{pool.members.map(id=><option key={id} value={id}>{id}</option>)}</select></label><label>Replacement disk<select value={newDisk} onChange={event=>{setNewDisk(event.target.value);setConfirmation('')}}><option value="">Choose healthy unused disk</option>{available.map(disk=><option key={disk.id} value={disk.id}>{disk.model} · {capacityLabel(disk.size_bytes)} · {disk.id}</option>)}</select></label></div>}{operation!=='replace'&&<div className="candidate-list" aria-label="Available storage disks">{available.length===0?<Empty text="No healthy unused disks are available."/>:available.map(disk=><label key={disk.id} className="drive"><input type="checkbox" checked={diskIds.includes(disk.id)} onChange={()=>{toggle(disk.id);setConfirmation('')}}/><div><strong>{disk.model}</strong><p>{capacityLabel(disk.size_bytes)} · {disk.transport} · {disk.id}</p></div><span className="ready">healthy</span></label>)}</div>}{operation!=='replace'&&diskIds.length>0&&!validCount&&<p className="form-error" role="status">This protection layout needs a valid complete disk set before confirmation.</p>}{phrase&&<><div className="note"><span><b>Permanent storage change.</b> Creating, expanding, or replacing can erase selected disks. Confirm that a current backup exists.</span></div><label className="resource-confirm">Type <b>{phrase}</b><input autoComplete="off" value={confirmation} onChange={event=>setConfirmation(event.target.value)} onKeyDown={event=>event.key==='Enter'&&confirmation===phrase&&apply()}/></label></>}{error&&<p className="form-error" role="alert">{error}</p>}<button className="primary" disabled={working||!target||!phrase||confirmation!==phrase} onClick={apply}>{working?'Applying…':operation==='create'?'Erase disks and create storage':operation==='expand'?'Expand protected storage':'Replace storage member'}</button></div>}
-export default function Home(){
- const [page,setPage]=useState('Overview'),[toast,setToast]=useState('');
- const [token,setToken]=useState(''),[authToken,setAuthToken]=useState(''),[connection,setConnection]=useState<'idle'|'loading'|'connected'|'offline'|'reconnecting'|'error'>('idle'),[dashboard,setDashboard]=useState<DashboardData|null>(null),[apps,setApps]=useState<AppFeed|null>(null),[backups,setBackups]=useState<BackupFeed|null>(null),[hardware,setHardware]=useState<HardwareData|null>(null),[vms,setVms]=useState<VmFeed|null>(null),[passthrough,setPassthrough]=useState<PassthroughFeed|null>(null),[images,setImages]=useState<ImageFeed|null>(null),[storage,setStorage]=useState<StorageFeed|null>(null),[remote,setRemote]=useState<RemoteDeviceFeed|null>(null),[tasks,setTasks]=useState<TaskFeed|null>(null),[alerts,setAlerts]=useState<AlertFeed|null>(null),[audit,setAudit]=useState<AuditFeed|null>(null),[settings,setSettings]=useState<SettingsFeed|null>(null),[users,setUsers]=useState<UserFeed|null>(null);
- const notify=(s:string)=>{setToast(s);setTimeout(()=>setToast(''),2400)};
- const connect=async(automatic=false)=>{const credential=token||authToken;if(!credential)return;if(typeof navigator!=='undefined'&&!navigator.onLine){setConnection('offline');return}setConnection(automatic?'reconnecting':'loading');const headers={Authorization:`Bearer ${credential}`};try{const [dashboardResponse,appsResponse,backupsResponse,hardwareResponse,vmsResponse,passthroughResponse,imagesResponse,storageResponse,remoteResponse,tasksResponse,alertsResponse,auditResponse,settingsResponse,usersResponse]=await Promise.all([fetch('/api/v1/dashboard',{headers,cache:'no-store'}),fetch('/api/v1/apps',{headers,cache:'no-store'}),fetch('/api/v1/backups',{headers,cache:'no-store'}),fetch('/api/v1/hardware',{headers,cache:'no-store'}),fetch('/api/v1/vms',{headers,cache:'no-store'}),fetch('/api/v1/virtualization/passthrough-candidates',{headers,cache:'no-store'}),fetch('/api/v1/images',{headers,cache:'no-store'}),fetch('/api/v1/storage',{headers,cache:'no-store'}),fetch('/api/v1/remote/devices',{headers,cache:'no-store'}),fetch('/api/v1/tasks',{headers,cache:'no-store'}),fetch('/api/v1/alerts',{headers,cache:'no-store'}),fetch('/api/v1/audit',{headers,cache:'no-store'}),fetch('/api/v1/settings',{headers,cache:'no-store'}),fetch('/api/v1/users',{headers,cache:'no-store'})]);if(dashboardResponse.status===401||dashboardResponse.status===403)throw new Error('unauthorized');if(!dashboardResponse.ok)throw new Error('unavailable');const value=await dashboardResponse.json() as DashboardData;if(value.schema!==1||typeof value.partial!=='boolean'||!value.components)throw new Error('invalid');setDashboard(value);if(appsResponse.ok){const next=await appsResponse.json() as Omit<AppFeed,"etag">;setApps({...next,etag:appsResponse.headers.get("ETag")??""})}else setApps(null);if(backupsResponse.ok){const next=await backupsResponse.json() as Omit<BackupFeed,"etag">;setBackups({...next,etag:backupsResponse.headers.get("ETag")??""})}else setBackups(null);setHardware(hardwareResponse.ok?await hardwareResponse.json() as HardwareData:null);if(vmsResponse.ok){const next=await vmsResponse.json() as Omit<VmFeed,"etag">;setVms({...next,etag:vmsResponse.headers.get("ETag")??""})}else setVms(null);setPassthrough(passthroughResponse.ok?await passthroughResponse.json() as PassthroughFeed:null);if(imagesResponse.ok){const next=await imagesResponse.json() as Omit<ImageFeed,"etag">;setImages({...next,etag:imagesResponse.headers.get("ETag")??""})}else setImages(null);if(storageResponse.ok){const next=await storageResponse.json() as Omit<StorageFeed,"etag">;setStorage({...next,etag:storageResponse.headers.get("ETag")??""})}else setStorage(null);if(remoteResponse.ok){const next=await remoteResponse.json() as Omit<RemoteDeviceFeed,"etag">;setRemote({...next,etag:remoteResponse.headers.get("ETag")??""})}else setRemote(null);setTasks(tasksResponse.ok?await tasksResponse.json() as TaskFeed:null);setAlerts(alertsResponse.ok?await alertsResponse.json() as AlertFeed:null);setAudit(auditResponse.ok?await auditResponse.json() as AuditFeed:null);if(settingsResponse.ok){const next=await settingsResponse.json() as Omit<SettingsFeed,"etag">;setSettings({...next,etag:settingsResponse.headers.get("ETag")??""})}else setSettings(null);if(usersResponse.ok){const next=await usersResponse.json() as Omit<UserFeed,"etag">;setUsers({...next,etag:usersResponse.headers.get("ETag")??""})}else setUsers(null);setAuthToken(credential);setToken('');setConnection('connected')}catch(reason){if(reason instanceof Error&&reason.message==='unauthorized'){setDashboard(null);setApps(null);setBackups(null);setHardware(null);setVms(null);setPassthrough(null);setImages(null);setStorage(null);setRemote(null);setTasks(null);setAlerts(null);setAudit(null);setSettings(null);setUsers(null);setAuthToken('');setToken('');setConnection('error')}else if(authToken){setConnection('offline')}else{setToken('');setConnection('error')}}};
- const reconnect=useEffectEvent(()=>void connect(true));
- useEffect(()=>{if(!authToken)return;const online=()=>reconnect(),offline=()=>setConnection('offline');window.addEventListener('online',online);window.addEventListener('offline',offline);const refresh=window.setInterval(()=>{if(document.visibilityState==='visible')reconnect()},30000);return()=>{window.removeEventListener('online',online);window.removeEventListener('offline',offline);window.clearInterval(refresh)}},[authToken]);
- return <main className="shell">
-  <aside><button className="logo" onClick={()=>setPage('Overview')} aria-label="Bedrock home"><img src="/brand/logo-horizontal-static.svg" alt="Bedrock Server OS"/></button><p>SYSTEM</p>{[['⌂','Overview'],['▣','Virtual machines'],['◫','Storage'],['◉','Image library'],['⬡','Apps'],['↻','Backup'],['◔','Activity']].map(x=><button className={page===x[1]?'active':''} key={x[1]} onClick={()=>setPage(x[1])}><i>{x[0]}</i>{x[1]}{x[1]==='Virtual machines'&&vms&&<em>{vms.domains.length}</em>}</button>)}<p>MANAGE</p>{[['⌁','Remote access'],['♧','Users'],['▤','Hardware'],['☷','Project status'],['⚙','Settings'],['?','Help']].map(x=><button className={page===x[1]?'active':''} key={x[1]} onClick={()=>setPage(x[1])}><i>{x[0]}</i>{x[1]}</button>)}<footer><span className={connection==='connected'?'online':''}/><div><strong>{connection==='connected'?'Bedrock connected':connection==='reconnecting'?'Reconnecting…':connection==='offline'?'Bedrock offline':'Bedrock management'}</strong><small>{connection==='offline'?'Changes are paused':'Authenticated local API'}</small></div></footer></aside>
-  <section className="work"><header><div>home-server <span>/</span> <strong>{page}</strong></div><nav>⌕　◔　<b>DM</b></nav></header><div className={`content ${connection==='offline'||connection==='reconnecting'?'management-paused':''}`}>
-   {page==='Overview'&&<Overview create={()=>setPage('Virtual machines')} download={()=>setPage('Get Bedrock')} token={token} setToken={setToken} connection={connection} connect={()=>void connect()} dashboard={dashboard}/>}
-   {page==='Virtual machines'&&<><VMs data={vms} connected={connection==='connected'} token={authToken} setData={setVms} notify={notify}/><VMCreateEditor data={vms} token={authToken} setData={setVms} notify={notify}/><VMResourceEditor data={vms} token={authToken} setData={setVms} notify={notify}/><VMAttachmentEditor data={vms} images={images} token={authToken} setData={setVms} notify={notify}/><VMPassthroughEditor data={vms} candidates={passthrough} token={authToken} setCandidates={setPassthrough} notify={notify}/></>}
-   {page==='Storage'&&<><Storage data={storage} connected={connection==='connected'}/><StorageAdvanced data={storage}/><StorageProvisioning data={storage} token={authToken} setData={setStorage} notify={notify}/><StorageActions data={storage} token={authToken} setData={setStorage} notify={notify}/></>}
-   {page==='Image library'&&<Images data={images} connected={connection==='connected'} token={authToken} setData={setImages} notify={notify}/>}
-   {page==='Apps'&&<AppControls data={apps} connected={connection==='connected'} token={authToken} setData={setApps} notify={notify}/>}
-   {page==='Backup'&&<BackupControls data={backups} connected={connection==='connected'} token={authToken} setData={setBackups} notify={notify}/>}
-   {page==='Hardware'&&<Hardware data={hardware} connected={connection==='connected'}/>}
-   {page==='Remote access'&&<Remote data={remote} connected={connection==='connected'} token={authToken} setData={setRemote} notify={notify}/>}
-   {page==='Activity'&&<Activity tasks={tasks} alerts={alerts} audit={audit} connected={connection==='connected'}/>}
-   {page==='Settings'&&<Settings data={settings} connected={connection==='connected'} token={authToken} setData={setSettings} notify={notify}/>}
-   {page==='Help'&&<Help/>}
-   {page==='Users'&&<><Users data={users} connected={connection==='connected'}/><NasIdentityActions data={users} token={authToken} setData={setUsers} notify={notify}/><NasMembershipActions data={users} token={authToken} setData={setUsers} notify={notify}/><NasCredentialActions data={users} token={authToken} setData={setUsers} notify={notify}/></>}
-   {page==='Project status'&&<ProjectStatus/>}
-   {page==='Get Bedrock'&&<Download notify={notify}/>}
-  </div></section>
-  {toast&&<div className="toast" role="status" aria-live="polite">✓ {toast}</div>}
- </main>
+const capacityLabel = (bytes: number) =>
+  bytes >= 1e12
+    ? `${(bytes / 1e12).toFixed(1)} TB`
+    : `${Math.max(1, Math.round(bytes / 1e9))} GB`;
+const Tip = ({ children }: { children: string }) => (
+  <span className="tip" tabIndex={0}>
+    ?<span>{children}</span>
+  </span>
+);
+function NasCredentialActions({
+  data,
+  token,
+  setData,
+  notify,
+}: {
+  data: UserFeed | null;
+  token: string;
+  setData: (value: UserFeed | null) => void;
+  notify: (value: string) => void;
+}) {
+  const [selected, setSelected] = useState(""),
+    [confirmation, setConfirmation] = useState(""),
+    [working, setWorking] = useState(false),
+    [error, setError] = useState(""),
+    candidate = data?.users.find(
+      (item) => item.name === selected && item.credential_candidate,
+    ),
+    phrase = candidate ? `ROTATE NAS CREDENTIAL ${candidate.name}` : "";
+  const rotate = async () => {
+    if (!candidate || confirmation !== phrase) return;
+    setWorking(true);
+    setError("");
+    try {
+      const response = await fetch(
+        `/api/v1/users/${candidate.name}/rotate-credential`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+            "Idempotency-Key": crypto.randomUUID(),
+            "If-Match": data?.etag ?? "",
+          },
+          body: JSON.stringify({ schema: 1, confirmation }),
+        },
+      );
+      if (!response.ok)
+        throw new Error(
+          response.status === 412
+            ? "Users and groups changed since they were loaded. Review the latest state and try again."
+            : response.status === 422
+              ? "The staged credential is no longer available, or rotation failed."
+              : "Bedrock rejected credential rotation.",
+        );
+      const refreshed = await fetch("/api/v1/users", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (!refreshed.ok)
+        throw new Error(
+          "Credential rotated, but refreshed status is unavailable.",
+        );
+      const next = (await refreshed.json()) as Omit<UserFeed, "etag">;
+      setData({ ...next, etag: refreshed.headers.get("ETag") ?? "" });
+      setSelected("");
+      setConfirmation("");
+      notify("NAS credential rotated");
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "NAS credential rotation failed.",
+      );
+    } finally {
+      setWorking(false);
+    }
+  };
+  if (!data) return null;
+  const candidates = data.users.filter((item) => item.credential_candidate);
+  return (
+    <div className="panel resource-editor">
+      <Section
+        title="Rotate storage credential"
+        copy="Apply a password staged locally by the root administrator"
+      />
+      {candidates.length === 0 ? (
+        <Empty text="No root-staged credential is ready. Stage one locally before rotating it here." />
+      ) : (
+        <>
+          <div className="resource-fields">
+            <label>
+              User
+              <select
+                value={selected}
+                onChange={(event) => {
+                  setSelected(event.target.value);
+                  setConfirmation("");
+                  setError("");
+                }}
+              >
+                <option value="">Choose staged credential</option>
+                {candidates.map((item) => (
+                  <option key={item.name}>{item.name}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {phrase && (
+            <label className="resource-confirm">
+              Type <b>{phrase}</b>
+              <input
+                autoComplete="off"
+                value={confirmation}
+                onChange={(event) => setConfirmation(event.target.value)}
+                onKeyDown={(event) =>
+                  event.key === "Enter" && confirmation === phrase && rotate()
+                }
+              />
+            </label>
+          )}
+          {error && (
+            <p className="form-error" role="alert">
+              {error}
+            </p>
+          )}
+          <button
+            className="primary"
+            disabled={working || !candidate || confirmation !== phrase}
+            onClick={rotate}
+          >
+            {working ? "Rotating…" : "Rotate credential"}
+          </button>
+        </>
+      )}
+    </div>
+  );
 }
-function Title({title,copy,action}:{title:string,copy:string,action?:React.ReactNode}){return <div className="title"><div><h1>{title}</h1><p>{copy}</p></div>{action}</div>}
-type DashboardData={schema:1;partial:boolean;components:Record<string,{status:string;data?:Record<string,unknown>}>};
-type AppSummary={id:string;name:string;network:'none'|'bridge';port_count:number;resources:{cpus:number;memory_mib:number;pids:number};update_policy:'manual'|'notify'};
-type AppFeed={schema:1;etag:string;apps:Array<AppSummary&{created_unix:number;running:boolean;update_available:boolean}>;install_candidates:Array<AppSummary>};
-type BackupSummary={id:string;name:string;kind:'local'|'remote';schedule:{frequency:'daily'|'weekly';hour_utc:number;weekday:number|null};retention:{daily:number;weekly:number;monthly:number}};
-type BackupFeed={schema:1;etag:string;plans:Array<BackupSummary&{created_unix:number;last_success_unix:number|null;has_snapshot:boolean}>;create_candidates:Array<BackupSummary>};
-type HardwareData={schema:1;cpu:{architecture:string;model:string;logical_processors:number;sockets:number;cores_per_socket:number;threads_per_core:number;virtualization:string;virtualization_supported:boolean};memory:{total_bytes:number};disks:Array<{model:string;vendor:string;size_bytes:number;rotational:boolean;transport:string;removable:boolean}>;storage_controllers:Array<{class:string;description:string}>;networks:Array<{mtu:number;state:string;link_type:string}>;gpus:Array<{vendor:string;driver:string;boot_vga:boolean;recognized_vendor:boolean}>;usb_device_count:number};
-type VmFeed={etag:string;schema:1;generated_unix:number;domains:Array<{name:string;state:'running'|'paused'|'shut off'|'crashed'|'in shutdown'|'pmsuspended';autostart:boolean;vcpus:number;memory_mib:number;boot_order:['disk']|['cdrom','disk'];snapshot_count:number;snapshots:string[];image_attachments:string[];network_attachments:string[]}>};
-type PassthroughFeed={schema:1;gpus:Array<{id:string;vendor:string;device_id:string;devices:string[]}>;usb_devices:Array<{id:string;vendor_id:string;product_id:string}>;assignments:Array<{vm:string;kind:'gpu'|'usb';devices:string[]}>};
-type ImageFeed={etag:string;schema:1;images:Array<{name:string;type:'iso'|'img'|'qcow2'|'vhdx'|'vmdk';sha256:string;size_bytes:number;converted:boolean}>;upload_candidates:Array<{name:string;type:'iso'|'img'|'qcow2'|'vhdx'|'vmdk';sha256:string;size_bytes:number}>};
-type StorageFeed={etag:string;schema:1;generated_unix:number;overall:'healthy'|'attention'|'limited';disks:Array<{model:string;size_bytes:number;transport:string;smart:{available:boolean;temperature_c:number|null;power_on_hours:number|null;health:'healthy'|'failing'|'standby'|'unknown'}}>;disk_candidates:Array<{id:string;model:string;size_bytes:number;transport:string;health:'healthy'|'failing'|'standby'|'unknown';eligible:boolean;reason:'available'|'system'|'removable'|'mounted'|'read-only'|'managed'|'too-small'|'failing'|'health-unknown'}>;managed_pools:Array<{name:string;backend:'zfs'|'mdraid';layout:string;state:'online'|'degraded'|'rebuilding'|'exported';members:string[]}>;software_raid:{md_arrays:Array<{name:string;level:string;state:string;expected_members:number;active_members:number;health:'healthy'|'degraded'|'unknown';sync:{action:null|'recovery'|'resync'|'reshape'|'check';percent:number}}>;zfs:{available:boolean;pools:Array<{name:string;size_bytes:number;allocated_bytes:number;free_bytes:number;health:string;status:'healthy'|'degraded'|'failing'|'unknown'}>}};hardware_raid:{controller_count:number;full_visibility_count:number;attention_count:number}};
-type RemoteDeviceFeed={schema:1;etag:string;devices:Array<{id:string;name:string;created_unix:number;expires_unix:number;revoked:boolean;expired:boolean;last_seen_unix:number|null}>;pending_requests:Array<{id:string;approved:boolean;expires_in_seconds:number}>};
-type TaskFeed={schema:1;generated_unix:number;tasks:Array<{id:string;kind:string;state:'queued'|'running'|'succeeded'|'failed'|'cancelled';created_unix:number;updated_unix:number;progress:{current:number;total:number;unit:'bytes'|'items'|'percent'|'steps'}}>};
-type AlertFeed={schema:1;generated_unix:number;attention_required:boolean;alerts:Array<{id:string;kind:string;severity:'warning'|'critical';first_seen_unix:number;last_seen_unix:number}>};
-type AuditFeed={schema:1;events:Array<{id:string;category:string;action:string;outcome:'succeeded'|'failed'|'denied';occurred_unix:number}>};
-type SettingsFeed={schema:1;updates:{automatic_checks:boolean;setup_choice_recorded:boolean;channel:'stable'|'beta';automatic_install:false};telemetry_enabled:false;etag:string};
-type UserFeed={etag:string;schema:1;users:Array<{name:string;credential_generation:number;created_unix:number;credential_rotated_unix:number|null;credential_candidate:boolean}>;groups:Array<{name:string;member_count:number;created_unix:number}>};
-function AppControls({data,connected,token,setData,notify}:{data:AppFeed|null;connected:boolean;token:string;setData:(value:AppFeed|null)=>void;notify:(value:string)=>void}){
- type Operation='start'|'stop'|'remove'|'update-latest'|'install-staged';type Choice={app:AppSummary;operation:Operation};
- const [selected,setSelected]=useState<Choice|null>(null),[confirmation,setConfirmation]=useState(''),[working,setWorking]=useState(false),[error,setError]=useState(''),phrase=selected?`${selected.operation==='update-latest'?'UPDATE':selected.operation==='install-staged'?'INSTALL':selected.operation.toUpperCase()} APPLICATION ${selected.app.id}`:'';
- const choose=(app:AppSummary,operation?:Operation)=>{const resolved=operation??('running' in app&&app.running?'stop':'start');setSelected({app,operation:resolved});setConfirmation('');setError('')};
- const perform=async()=>{if(!selected||confirmation!==phrase)return;setWorking(true);setError('');try{const removing=selected.operation==='remove',updating=selected.operation==='update-latest',installing=selected.operation==='install-staged',response=await fetch(`/api/v1/apps/${selected.app.id}${removing?'':updating?'/update':installing?'/install':'/power'}`,{method:removing?'DELETE':'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID(),'If-Match':data?.etag??''},body:JSON.stringify(removing||updating||installing?{schema:1,confirmation}:{schema:1,operation:selected.operation,confirmation})});if(!response.ok)throw new Error(response.status===412?'Applications changed since they were loaded. Review the latest state and try again.':response.status===422?(installing?'The staged manifest is no longer available or installation failed.':updating?'The update candidate changed or Bedrock restored the previous container after a failed update.':'The application runtime state changed or the guarded operation failed.'):'Bedrock rejected the application request.');const refreshed=await fetch('/api/v1/apps',{headers:{Authorization:`Bearer ${token}`},cache:'no-store'});if(!refreshed.ok)throw new Error('The application changed, but refreshed status is unavailable.');const next=await refreshed.json() as Omit<AppFeed,'etag'>;setData({...next,etag:refreshed.headers.get('ETag')??''});setSelected(null);notify(`Application ${selected.operation==='start'?'started':selected.operation==='stop'?'stopped':selected.operation==='remove'?'removed; data preserved':selected.operation==='install-staged'?'installed':'updated'}`)}catch(reason){setError(reason instanceof Error?reason.message:'Application action failed.')}finally{setWorking(false)}};
- const removing=selected?.operation==='remove';
- const updating=selected?.operation==='update-latest',installing=selected?.operation==='install-staged';
- return <><Title title="Apps" copy="Isolated services running with fixed resource and network limits."/><LiveState connected={connected} available={!!data} noun="application status"/>{data&&data.install_candidates.length>0&&<div className="panel"><Section title="Ready to install" copy={`${data.install_candidates.length} root-approved`}/>{data.install_candidates.map(app=><div className="drive" key={app.id}><b>＋</b><div><strong>{app.name}</strong><p>{app.resources.cpus} CPU · {app.resources.memory_mib} MiB · {app.network==='bridge'?`${app.port_count} published port${app.port_count===1?'':'s'}`:'No network'}</p></div><button onClick={()=>choose(app,'install-staged')}>Install</button></div>)}</div>}{data&&<div className="panel"><Section title="Installed apps" copy={`${data.apps.length} configured`}/>{data.apps.length===0?<Empty text="No isolated applications are installed."/>:data.apps.map(app=><div className="drive" key={app.id}><b>⬡</b><div><strong>{app.name}</strong><p>{app.resources.cpus} CPU · {app.resources.memory_mib} MiB · {app.network==='bridge'?`${app.port_count} published port${app.port_count===1?'':'s'}`:'No network'}</p></div><div className="settings-actions"><span className={app.running?'ready':'waiting'}>{app.running?'Running':'Stopped'} · {app.update_available?'Update available':app.update_policy==='notify'?'Current':'Manual updates'}</span>{app.update_available&&<button onClick={()=>choose(app,'update-latest')}>Update</button>}<button onClick={()=>choose(app)}>{app.running?'Stop':'Start'}</button><button onClick={()=>choose(app,'remove')}>Remove</button></div></div>)}</div>}{selected&&<div className="shade" role="presentation" onMouseDown={event=>event.target===event.currentTarget&&!working&&setSelected(null)}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="app-power-title"><header><h2 id="app-power-title">{selected.operation==='start'?'Start':selected.operation==='stop'?'Stop':updating?'Update':installing?'Install':'Remove'} {selected.app.name}</h2><button aria-label="Close" disabled={working} onClick={()=>setSelected(null)}>×</button></header><p>{installing?'Bedrock will install the root-approved pinned image using these fixed network and resource limits. Registry and digest details remain private.':updating?'Bedrock will use the root-verified candidate digest, recreate the same isolated sandbox, and restore the previous container if the update fails.':removing?'The isolated container and its configuration will be removed. Application data is preserved for recovery.':selected.operation==='stop'?'The service becomes unavailable, but its application data and configuration are preserved.':'The service starts inside its existing isolated container and fixed resource limits.'}</p><label>Type <b>{phrase}</b><input autoFocus autoComplete="off" value={confirmation} onChange={event=>setConfirmation(event.target.value)} onKeyDown={event=>event.key==='Enter'&&confirmation===phrase&&perform()}/></label>{error&&<p className="form-error" role="alert">{error}</p>}<footer><button disabled={working} onClick={()=>setSelected(null)}>Cancel</button><button className="primary" disabled={working||confirmation!==phrase} onClick={perform}>{working?'Applying…':selected.operation==='start'?'Start application':selected.operation==='stop'?'Stop application':updating?'Update application':installing?'Install application':'Remove application'}</button></footer></section></div>}</>;
+function NasMembershipActions({
+  data,
+  token,
+  setData,
+  notify,
+}: {
+  data: UserFeed | null;
+  token: string;
+  setData: (value: UserFeed | null) => void;
+  notify: (value: string) => void;
+}) {
+  const [user, setUser] = useState(""),
+    [group, setGroup] = useState(""),
+    [confirmation, setConfirmation] = useState(""),
+    [working, setWorking] = useState(false),
+    [error, setError] = useState(""),
+    phrase = user && group ? `ADD NAS USER ${user} TO GROUP ${group}` : "";
+  const add = async () => {
+    if (!phrase || confirmation !== phrase) return;
+    setWorking(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/v1/groups/${group}/members`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
+          "If-Match": data?.etag ?? "",
+        },
+        body: JSON.stringify({ schema: 1, user, confirmation }),
+      });
+      if (!response.ok)
+        throw new Error(
+          response.status === 412
+            ? "Users and groups changed since they were loaded. Review the latest state and try again."
+            : response.status === 422
+              ? "The selected user or group changed, or membership could not be applied."
+              : "Bedrock rejected the membership change.",
+        );
+      const refreshed = await fetch("/api/v1/users", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (!refreshed.ok)
+        throw new Error(
+          "Membership changed, but refreshed status is unavailable.",
+        );
+      const next = (await refreshed.json()) as Omit<UserFeed, "etag">;
+      setData({ ...next, etag: refreshed.headers.get("ETag") ?? "" });
+      setUser("");
+      setGroup("");
+      setConfirmation("");
+      notify("NAS group membership added");
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "NAS membership change failed.",
+      );
+    } finally {
+      setWorking(false);
+    }
+  };
+  if (!data) return null;
+  return (
+    <div className="panel resource-editor">
+      <Section
+        title="Add group member"
+        copy="Grant an existing NAS user membership in an access group"
+      />
+      {data.users.length === 0 || data.groups.length === 0 ? (
+        <Empty text="Create at least one NAS user and one group before adding membership." />
+      ) : (
+        <>
+          <div className="resource-fields">
+            <label>
+              User
+              <select
+                value={user}
+                onChange={(event) => {
+                  setUser(event.target.value);
+                  setConfirmation("");
+                  setError("");
+                }}
+              >
+                <option value="">Choose user</option>
+                {data.users.map((item) => (
+                  <option key={item.name}>{item.name}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Group
+              <select
+                value={group}
+                onChange={(event) => {
+                  setGroup(event.target.value);
+                  setConfirmation("");
+                  setError("");
+                }}
+              >
+                <option value="">Choose group</option>
+                {data.groups.map((item) => (
+                  <option key={item.name}>{item.name}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {phrase && (
+            <label className="resource-confirm">
+              Type <b>{phrase}</b>
+              <input
+                autoComplete="off"
+                value={confirmation}
+                onChange={(event) => setConfirmation(event.target.value)}
+                onKeyDown={(event) =>
+                  event.key === "Enter" && confirmation === phrase && add()
+                }
+              />
+            </label>
+          )}
+          {error && (
+            <p className="form-error" role="alert">
+              {error}
+            </p>
+          )}
+          <button
+            className="primary"
+            disabled={working || !phrase || confirmation !== phrase}
+            onClick={add}
+          >
+            {working ? "Adding member…" : "Add group member"}
+          </button>
+        </>
+      )}
+    </div>
+  );
 }
-function BackupControls({data,connected,token,setData,notify}:{data:BackupFeed|null;connected:boolean;token:string;setData:(value:BackupFeed|null)=>void;notify:(value:string)=>void}){
- type Operation='run'|'restore-latest'|'create';type Choice={plan:BackupSummary;operation:Operation};
- const weekday=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],[selected,setSelected]=useState<Choice|null>(null),[confirmation,setConfirmation]=useState(''),[working,setWorking]=useState(false),[error,setError]=useState('');
- const restoring=selected?.operation==='restore-latest',creating=selected?.operation==='create',phrase=selected?(restoring?`RESTORE LATEST BACKUP ${selected.plan.id}`:creating?`CREATE ENCRYPTED BACKUP ${selected.plan.id}`:`RUN ENCRYPTED BACKUP ${selected.plan.id}`):'';
- const choose=(plan:BackupSummary,operation:Operation)=>{setSelected({plan,operation});setConfirmation('');setError('')};
- const perform=async()=>{if(!selected||confirmation!==phrase)return;setWorking(true);setError('');try{const response=await fetch(`/api/v1/backups/${selected.plan.id}/${selected.operation}`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID(),'If-Match':data?.etag??''},body:JSON.stringify({schema:1,confirmation})});if(!response.ok)throw new Error(response.status===412?'Backup state changed since it was loaded. Review the latest plans and try again.':response.status===422?(restoring?'The latest snapshot is unavailable or the protected restore destination already exists.':creating?'The staged plan is unavailable or its encrypted repository could not be prepared.':'The plan is unavailable or the encrypted backup failed.'):'Bedrock rejected the backup request.');const refreshed=await fetch('/api/v1/backups',{headers:{Authorization:`Bearer ${token}`},cache:'no-store'});if(!refreshed.ok)throw new Error('The operation completed, but refreshed plan status is unavailable.');const next=await refreshed.json() as Omit<BackupFeed,'etag'>;setData({...next,etag:refreshed.headers.get('ETag')??''});setSelected(null);notify(restoring?'Latest backup restored':creating?'Encrypted backup plan created':'Encrypted backup completed')}catch(reason){setError(reason instanceof Error?reason.message:'Backup operation failed.')}finally{setWorking(false)}};
- return <><Title title="Backup" copy="Encrypted plans, schedules, retention, and guarded recovery."/><LiveState connected={connected} available={!!data} noun="backup status"/><div className="note"><span><b>Protected operations.</b> Backup creation, runs, and restore keep passwords, paths, repositories, and snapshot identities outside this interface.</span></div>{data&&data.create_candidates.length>0&&<div className="panel"><Section title="Ready to create" copy={`${data.create_candidates.length} root-approved`}/>{data.create_candidates.map(plan=><div className="drive" key={plan.id}><b>＋</b><div><strong>{plan.name}</strong><p>{plan.schedule.frequency==='daily'?'Daily':`${weekday[plan.schedule.weekday??0]} weekly`} at {String(plan.schedule.hour_utc).padStart(2,'0')}:00 UTC · {plan.kind} · retain {plan.retention.daily}/{plan.retention.weekly}/{plan.retention.monthly} daily/weekly/monthly</p></div><div className="settings-actions"><span className="waiting">Staged</span><button onClick={()=>choose(plan,'create')}>Create plan</button></div></div>)}</div>}{data&&<div className="panel"><Section title="Backup plans" copy={`${data.plans.length} configured`}/>{data.plans.length===0?<Empty text="No encrypted backup plans are configured."/>:data.plans.map(plan=><div className="drive" key={plan.id}><b>↻</b><div><strong>{plan.name}</strong><p>{plan.schedule.frequency==='daily'?'Daily':`${weekday[plan.schedule.weekday??0]} weekly`} at {String(plan.schedule.hour_utc).padStart(2,'0')}:00 UTC · {plan.kind}</p></div><div className="settings-actions"><span className={plan.has_snapshot?'ready':'waiting'}>{plan.has_snapshot?(plan.last_success_unix?`Protected ${new Date(plan.last_success_unix*1000).toLocaleDateString()}`:'Protected'):'Never run'}</span><button onClick={()=>choose(plan,'run')}>Run now</button>{plan.has_snapshot&&<button onClick={()=>choose(plan,'restore-latest')}>Restore latest</button>}</div></div>)}</div>}{selected&&<div className="shade" role="presentation" onMouseDown={event=>event.target===event.currentTarget&&!working&&setSelected(null)}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="backup-operation-title"><header><h2 id="backup-operation-title">{restoring?'Restore latest from':creating?'Create':'Run'} {selected.plan.name}</h2><button aria-label="Close" disabled={working} onClick={()=>setSelected(null)}>×</button></header><p>{restoring?'Bedrock restores the latest successful snapshot into a new fixed recovery folder. It will refuse to overwrite an existing restore.':creating?'The full source, repository, and initialization request was approved by root and remains private. Confirm to create this exact encrypted plan.':'This may transfer data and prune old snapshots according to the configured retention policy.'}</p><label>Type <b>{phrase}</b><input autoFocus autoComplete="off" value={confirmation} onChange={event=>setConfirmation(event.target.value)} onKeyDown={event=>event.key==='Enter'&&confirmation===phrase&&perform()}/></label>{error&&<p className="form-error" role="alert">{error}</p>}<footer><button disabled={working} onClick={()=>setSelected(null)}>Cancel</button><button className="primary" disabled={working||confirmation!==phrase} onClick={perform}>{working?(restoring?'Restoring…':creating?'Creating…':'Running backup…'):(restoring?'Restore latest backup':creating?'Create encrypted plan':'Run encrypted backup')}</button></footer></section></div>}</>;
+function NasIdentityActions({
+  data,
+  token,
+  setData,
+  notify,
+}: {
+  data: UserFeed | null;
+  token: string;
+  setData: (value: UserFeed | null) => void;
+  notify: (value: string) => void;
+}) {
+  const [kind, setKind] = useState<"user" | "group">("user"),
+    [name, setName] = useState(""),
+    [confirmation, setConfirmation] = useState(""),
+    [working, setWorking] = useState(false),
+    [error, setError] = useState(""),
+    valid =
+      /^[a-z][a-z0-9_-]{0,31}$/.test(name) &&
+      !data?.users.some((item) => item.name === name) &&
+      !data?.groups.some((item) => item.name === name),
+    phrase = valid ? `CREATE NAS ${kind.toUpperCase()} ${name}` : "";
+  const create = async () => {
+    if (!valid || confirmation !== phrase) return;
+    setWorking(true);
+    setError("");
+    try {
+      const response = await fetch("/api/v1/users", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
+          "If-Match": data?.etag ?? "",
+        },
+        body: JSON.stringify({ schema: 1, kind, name, confirmation }),
+      });
+      if (!response.ok)
+        throw new Error(
+          response.status === 412
+            ? "Users and groups changed since they were loaded. Review the latest state and try again."
+            : response.status === 422
+              ? "That user or group already exists, or account creation failed."
+              : "Bedrock rejected NAS identity creation.",
+        );
+      const refreshed = await fetch("/api/v1/users", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (!refreshed.ok)
+        throw new Error(
+          "The identity was created, but refreshed status is unavailable.",
+        );
+      const next = (await refreshed.json()) as Omit<UserFeed, "etag">;
+      setData({ ...next, etag: refreshed.headers.get("ETag") ?? "" });
+      setName("");
+      setConfirmation("");
+      notify(`NAS ${kind} created`);
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "NAS identity creation failed.",
+      );
+    } finally {
+      setWorking(false);
+    }
+  };
+  if (!data) return null;
+  return (
+    <div className="panel resource-editor">
+      <Section
+        title="Create storage identity"
+        copy="Local NAS users and access groups with fixed safe account policy"
+      />
+      <div className="resource-fields">
+        <label>
+          Identity type
+          <select
+            value={kind}
+            onChange={(event) => {
+              setKind(event.target.value as "user" | "group");
+              setConfirmation("");
+              setError("");
+            }}
+          >
+            <option value="user">User</option>
+            <option value="group">Group</option>
+          </select>
+        </label>
+        <label>
+          Name
+          <input
+            value={name}
+            placeholder={kind === "user" ? "alex" : "family"}
+            onChange={(event) => {
+              setName(event.target.value);
+              setConfirmation("");
+              setError("");
+            }}
+          />
+        </label>
+      </div>
+      {name && !valid && (
+        <p className="form-error" role="alert">
+          Use a unique lowercase name with letters, numbers, underscores, or
+          hyphens.
+        </p>
+      )}
+      {phrase && (
+        <label className="resource-confirm">
+          Type <b>{phrase}</b>
+          <input
+            autoComplete="off"
+            value={confirmation}
+            onChange={(event) => setConfirmation(event.target.value)}
+            onKeyDown={(event) =>
+              event.key === "Enter" && confirmation === phrase && create()
+            }
+          />
+        </label>
+      )}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+      <button
+        className="primary"
+        disabled={working || !valid || confirmation !== phrase}
+        onClick={create}
+      >
+        {working ? "Creating…" : `Create NAS ${kind}`}
+      </button>
+    </div>
+  );
 }
-function VMCreateEditor({data,token,setData,notify}:{data:VmFeed|null;token:string;setData:(value:VmFeed|null)=>void;notify:(value:string)=>void}){const [name,setName]=useState(''),[vcpus,setVcpus]=useState(2),[memory,setMemory]=useState(4096),[disk,setDisk]=useState(64),[autostart,setAutostart]=useState(false),[confirmation,setConfirmation]=useState(''),[working,setWorking]=useState(false),[error,setError]=useState('');const validName=/^[a-z][a-z0-9-]{0,30}[a-z0-9]$/.test(name)&&!data?.domains.some(vm=>vm.name===name),validResources=Number.isInteger(vcpus)&&vcpus>=1&&vcpus<=64&&Number.isInteger(memory)&&memory>=512&&memory<=262144&&memory%256===0&&Number.isInteger(disk)&&disk>=8&&disk<=4096,phrase=validName?`CREATE VM ${name}`:'';const create=async()=>{if(!phrase||confirmation!==phrase||!validResources)return;setWorking(true);setError('');try{const response=await fetch('/api/v1/vms',{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID(),'If-Match':data?.etag??''},body:JSON.stringify({schema:1,name,vcpus,memory_mib:memory,disk_size_gib:disk,autostart,confirmation})});if(!response.ok)throw new Error(response.status===412?'Virtual machines changed since they were loaded. Review the latest state and try again.':response.status===422?'The name, virtualization state, or available host capacity changed.':'Bedrock rejected VM creation.');const refreshed=await fetch('/api/v1/vms',{headers:{Authorization:`Bearer ${token}`},cache:'no-store'});if(!refreshed.ok)throw new Error('The VM was created, but refreshed status is unavailable.');const next=await refreshed.json() as Omit<VmFeed,'etag'>;setData({...next,etag:refreshed.headers.get('ETag')??''});setName('');setConfirmation('');notify('Virtual machine created')}catch(reason){setError(reason instanceof Error?reason.message:'VM creation failed.')}finally{setWorking(false)}};if(!data)return null;return <div className="panel resource-editor"><Section title="Create virtual machine" copy="A stopped UEFI guest with TPM 2.0 and host-capacity protection"/><div className="resource-fields create-fields"><label>Name<input value={name} placeholder="windows-vm" onChange={event=>{setName(event.target.value);setConfirmation('')}}/></label><label>vCPUs<input type="number" min="1" max="64" step="1" value={vcpus} onChange={event=>setVcpus(Number(event.target.value))}/></label><label>Memory (MiB)<input type="number" min="512" max="262144" step="256" value={memory} onChange={event=>setMemory(Number(event.target.value))}/></label><label>Disk (GiB)<input type="number" min="8" max="4096" step="1" value={disk} onChange={event=>setDisk(Number(event.target.value))}/></label></div><label className="risk create-autostart"><input type="checkbox" checked={autostart} onChange={event=>setAutostart(event.target.checked)}/> Start this VM automatically when Bedrock boots. The VM is not started during creation.</label>{phrase&&<label className="resource-confirm">Type <b>{phrase}</b><input autoComplete="off" value={confirmation} onChange={event=>setConfirmation(event.target.value)} onKeyDown={event=>event.key==='Enter'&&confirmation===phrase&&create()}/></label>}{name&&!validName&&<p className="form-error" role="alert">Use a unique lowercase name with letters, numbers, or hyphens.</p>}{error&&<p className="form-error" role="alert">{error}</p>}<button className="primary" disabled={working||!validName||!validResources||confirmation!==phrase} onClick={create}>{working?'Creating…':'Create stopped VM'}</button></div>}
-function VMResourceEditor({data,token,setData,notify}:{data:VmFeed|null;token:string;setData:(value:VmFeed|null)=>void;notify:(value:string)=>void}){const stopped=data?.domains.filter(vm=>vm.state==='shut off')??[];const [name,setName]=useState(''),[vcpus,setVcpus]=useState(1),[memory,setMemory]=useState(2048),[boot,setBoot]=useState<'disk'|'cdrom,disk'>('disk'),[confirmation,setConfirmation]=useState(''),[working,setWorking]=useState(false),[error,setError]=useState('');const selected=stopped.find(vm=>vm.name===name),phrase=selected?`UPDATE VM ${name} CPU ${vcpus} MEMORY ${memory} BOOT ${boot}`:'';const choose=(value:string)=>{const vm=stopped.find(item=>item.name===value);setName(value);setVcpus(vm?.vcpus??1);setMemory(vm?.memory_mib??2048);setBoot(vm?.boot_order.join(',')==='cdrom,disk'?'cdrom,disk':'disk');setConfirmation('');setError('')};const save=async()=>{if(!selected||confirmation!==phrase)return;setWorking(true);setError('');try{const response=await fetch(`/api/v1/vms/${name}/resources`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID(),'If-Match':data?.etag??''},body:JSON.stringify({schema:1,vcpus,memory_mib:memory,boot_order:boot.split(','),confirmation})});if(!response.ok)throw new Error(response.status===412?'Virtual machines changed since they were loaded. Review the latest state and try again.':response.status===422?'The VM state or available host capacity changed.':'Bedrock rejected the resource update.');const refreshed=await fetch('/api/v1/vms',{headers:{Authorization:`Bearer ${token}`},cache:'no-store'});if(!refreshed.ok)throw new Error('Resources changed, but refreshed VM status is unavailable.');const next=await refreshed.json() as Omit<VmFeed,'etag'>;setData({...next,etag:refreshed.headers.get('ETag')??''});setConfirmation('');notify('VM resources updated')}catch(reason){setError(reason instanceof Error?reason.message:'Resource update failed.')}finally{setWorking(false)}};if(!data)return null;return <div className="panel resource-editor"><Section title="Offline resource editor" copy="CPU, memory, and boot order with host-capacity protection"/>{stopped.length===0?<Empty text="Shut down a VM before changing its resources."/>:<><div className="resource-fields"><label>Virtual machine<select value={name} onChange={event=>choose(event.target.value)}><option value="">Choose a shut-off VM</option>{stopped.map(vm=><option key={vm.name} value={vm.name}>{vm.name}</option>)}</select></label><label>vCPUs<input type="number" min="1" max="64" step="1" disabled={!selected} value={vcpus} onChange={event=>setVcpus(Number(event.target.value))}/></label><label>Memory (MiB)<input type="number" min="512" max="262144" step="256" disabled={!selected} value={memory} onChange={event=>setMemory(Number(event.target.value))}/></label><label>Boot order<select disabled={!selected} value={boot} onChange={event=>setBoot(event.target.value as 'disk'|'cdrom,disk')}><option value="disk">Disk</option><option value="cdrom,disk">CD/DVD, then disk</option></select></label></div>{selected&&<><label className="resource-confirm">Type <b>{phrase}</b><input autoComplete="off" value={confirmation} onChange={event=>setConfirmation(event.target.value)} onKeyDown={event=>event.key==='Enter'&&confirmation===phrase&&save()}/></label>{error&&<p className="form-error" role="alert">{error}</p>}<button className="primary" disabled={working||confirmation!==phrase||!Number.isInteger(vcpus)||vcpus<1||vcpus>64||!Number.isInteger(memory)||memory<512||memory>262144||memory%256!==0} onClick={save}>{working?'Updating…':'Update resources'}</button></>}</>}</div>}
-function VMAttachmentEditor({data,images,token,setData,notify}:{data:VmFeed|null;images:ImageFeed|null;token:string;setData:(value:VmFeed|null)=>void;notify:(value:string)=>void}){type Kind='image'|'network';type Operation='attach'|'detach';const stopped=data?.domains.filter(vm=>vm.state==='shut off')??[];const [name,setName]=useState(''),[kind,setKind]=useState<Kind>('image'),[operation,setOperation]=useState<Operation>('attach'),[item,setItem]=useState(''),[confirmation,setConfirmation]=useState(''),[working,setWorking]=useState(false),[error,setError]=useState('');const vm=stopped.find(entry=>entry.name===name),attached=kind==='image'?vm?.image_attachments??[]:vm?.network_attachments??[],choices=operation==='detach'?attached:kind==='image'?images?.images.map(image=>image.name).filter(image=>!attached.includes(image))??[]:[],valid=/^[a-z][a-z0-9-]{0,30}[a-z0-9]$/.test(item),label=kind.toUpperCase(),phrase=vm&&valid?(operation==='attach'?`ATTACH ${label} ${item} TO VM ${name}`:`DETACH ${label} ${item} FROM VM ${name}`):'';const reset=(nextName=name,nextKind=kind,nextOperation=operation)=>{setName(nextName);setKind(nextKind);setOperation(nextOperation);setItem('');setConfirmation('');setError('')};const save=async()=>{if(!vm||!phrase||confirmation!==phrase)return;setWorking(true);setError('');try{const response=await fetch(`/api/v1/vms/${name}/${kind}s`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID(),'If-Match':data?.etag??''},body:JSON.stringify({schema:1,[kind]:item,operation,confirmation})});if(!response.ok)throw new Error(response.status===412?'Virtual machines changed since they were loaded. Review the latest state and try again.':response.status===422?'The VM, image, or network state changed.':'Bedrock rejected the attachment change.');const refreshed=await fetch('/api/v1/vms',{headers:{Authorization:`Bearer ${token}`},cache:'no-store'});if(!refreshed.ok)throw new Error('Attachment changed, but refreshed VM status is unavailable.');const next=await refreshed.json() as Omit<VmFeed,'etag'>;setData({...next,etag:refreshed.headers.get('ETag')??''});setItem('');setConfirmation('');notify(`${label[0]+label.slice(1).toLowerCase()} ${operation} completed`)}catch(reason){setError(reason instanceof Error?reason.message:'Attachment change failed.')}finally{setWorking(false)}};if(!data)return null;return <div className="panel resource-editor"><Section title="Offline attachments" copy="Verified images and isolated networks for shut-off virtual machines"/>{stopped.length===0?<Empty text="Shut down a VM before changing attachments."/>:<><div className="resource-fields attachment-fields"><label>Virtual machine<select value={name} onChange={event=>reset(event.target.value)}><option value="">Choose a shut-off VM</option>{stopped.map(entry=><option key={entry.name}>{entry.name}</option>)}</select></label><label>Attachment type<select value={kind} onChange={event=>reset(name,event.target.value as Kind)}><option value="image">Image</option><option value="network">Isolated network</option></select></label><label>Action<select value={operation} onChange={event=>reset(name,kind,event.target.value as Operation)}><option value="attach">Attach</option><option value="detach">Detach</option></select></label><label>{kind==='image'?'Managed image':'Managed network'}{kind==='network'&&operation==='attach'?<input disabled={!vm} value={item} placeholder="private-lan" onChange={event=>{setItem(event.target.value);setConfirmation('')}}/>:<select disabled={!vm} value={item} onChange={event=>{setItem(event.target.value);setConfirmation('')}}><option value="">Choose {kind}</option>{choices.map(choice=><option key={choice}>{choice}</option>)}</select>}</label></div>{vm&&<><p className="attachment-summary">Currently attached: {attached.length?attached.join(', '):`no ${kind}s`}</p>{phrase&&<label className="resource-confirm">Type <b>{phrase}</b><input autoComplete="off" value={confirmation} onChange={event=>setConfirmation(event.target.value)} onKeyDown={event=>event.key==='Enter'&&confirmation===phrase&&save()}/></label>}{error&&<p className="form-error" role="alert">{error}</p>}<button className="primary" disabled={working||!phrase||confirmation!==phrase} onClick={save}>{working?'Updating…':`${operation==='attach'?'Attach':'Detach'} ${kind}`}</button></>}</>}</div>}
-function Overview({create,download,token,setToken,connection,connect,dashboard}:{create:()=>void;download:()=>void;token:string;setToken:(v:string)=>void;connection:string;connect:()=>void;dashboard:DashboardData|null}){const storage=dashboard?.components.storage, vms=dashboard?.components.vms, hardware=dashboard?.components.hardware, updates=dashboard?.components.updates,transient=connection==='offline'||connection==='reconnecting';return <><div className="kicker">SERVER OVERVIEW</div><Title title={dashboard?'Your Bedrock server':'Connect to your server'} copy={dashboard?'Live health and workload information from the authenticated Bedrock API.':'Enter a local API token. It stays in memory only while this page is open.'} action={dashboard?<button className="primary" disabled={connection==='reconnecting'} onClick={connect}>{connection==='reconnecting'?'Reconnecting…':'Refresh'}</button>:undefined}/><div className={`connection ${connection}`}><span className="connectiondot"/><div><strong>{connection==='connected'?'Connected to Bedrock':connection==='loading'?'Connecting…':connection==='reconnecting'?'Reconnecting to Bedrock…':connection==='offline'?'Connection interrupted':connection==='error'?'Server unavailable':'Authentication required'}</strong><p>{connection==='error'?'Check that this page is served by your Bedrock server and that the token is active.':transient?'Last confirmed information remains visible but controls are paused. Bedrock will retry when connectivity returns.':'No sample health values are presented as live server data.'}</p></div>{!dashboard&&<><label><span>API token</span><input type="password" value={token} onChange={e=>setToken(e.target.value)} onKeyDown={e=>e.key==='Enter'&&token&&connect()} autoComplete="off"/></label><button className="primary" disabled={!token||connection==='loading'} onClick={connect}>Connect</button></>}</div>{dashboard&&<><div className="health"><b>{transient?'↻':dashboard.partial?'!':'✓'}</b><div><strong>{transient?'Waiting to reconnect':dashboard.partial?'Some services need attention':'Live server data available'}</strong><p>{transient?'Showing the last server-confirmed state; no mutation is reported complete while offline.':dashboard.partial?'Available sections remain usable while unavailable services are isolated.':'All reported dashboard components responded successfully.'}</p></div><small>{transient?'Last confirmed':'Authenticated API'}</small></div><div className="metrics"><Metric l="PROCESSOR" v={hardware?.status==='available'?String(hardware.data?.logical_processors??'—'):'—'} s="logical processors" w="0%" tip="Processor capacity reported by your Bedrock server."/><Metric l="MEMORY" v={hardware?.status==='available'?`${Math.round(Number(hardware.data?.memory_total_bytes??0)/1073741824)} GB`:'—'} s="installed" w="0%" tip="Installed memory reported by your Bedrock server."/><Metric l="STORAGE" v={storage?.status==='available'?String(storage.data?.overall??'Unknown'):'Unavailable'} s={storage?.status==='available'?`${String(storage.data?.disk_count??0)} disks`:'service offline'} w="0%" tip="Current protected-storage health from Bedrock."/><Metric l="VIRTUAL MACHINES" v={vms?.status==='available'?`${String(vms.data?.running??0)} running`:'Unavailable'} s={vms?.status==='available'?`${String(vms.data?.total??0)} managed`:'service offline'} w="0%" tip="Managed virtual machine status from Bedrock."/></div><div className="twocol"><div className="panel"><Section title="Update status" copy="Signed Bedrock release channel"/><p>{updates?.status==='available'?String(updates.data?.status??'Unknown'):'Update service unavailable'}</p></div><div className="panel"><Section title="Quick actions" copy="Available management areas"/><div className="quick"><button onClick={download}>⇩ <span><b>Get Bedrock</b><small>Create verified installation media</small></span>›</button><button onClick={create}>▣ <span><b>View virtual machines</b><small>Live lifecycle and resource status</small></span>›</button></div></div></div></>}</>}
-function Metric({l,v,s,w,tip}:{l:string,v:string,s:string,w:string,tip:string}){return <div className="metric"><label>{l} <Tip>{tip}</Tip></label><strong>{v}</strong><small>{s}</small><div className="bar"><i style={{width:w}}/></div></div>}
-function Section({title,copy}:{title:string,copy:string}){return <div className="section"><div><h2>{title}</h2><p>{copy}</p></div></div>}
-function Advanced({label,children}:{label:string;children:React.ReactNode}){return <details className="advanced"><summary>{label}</summary><div>{children}</div></details>}
-function VMPassthroughEditor({data,candidates,token,setCandidates,notify}:{data:VmFeed|null;candidates:PassthroughFeed|null;token:string;setCandidates:(value:PassthroughFeed|null)=>void;notify:(value:string)=>void}){type Kind='gpu'|'usb';type Operation='assign'|'remove';const stopped=data?.domains.filter(vm=>vm.state==='shut off')??[];const [name,setName]=useState(''),[kind,setKind]=useState<Kind>('usb'),[operation,setOperation]=useState<Operation>('assign'),[selection,setSelection]=useState(''),[review,setReview]=useState(''),[confirmation,setConfirmation]=useState(''),[working,setWorking]=useState(false),[error,setError]=useState('');const assignment=candidates?.assignments.find(item=>item.vm===name&&item.kind===kind),gpu=candidates?.gpus.find(item=>item.id===selection),devices=operation==='remove'?assignment?.devices??[]:kind==='gpu'?gpu?.devices??[]:selection?[selection]:[],ordered=[...devices].sort(),label=kind.toUpperCase(),reviewPhrase=name&&ordered.length?`REVIEW ${label} PASSTHROUGH VM ${name} DEVICES ${ordered.join(',')}`:'',actionPhrase=reviewPhrase?`${operation.toUpperCase()} ${label} PASSTHROUGH VM ${name} DEVICES ${ordered.join(',')}`:'';const reset=(nextName=name,nextKind=kind,nextOperation=operation)=>{setName(nextName);setKind(nextKind);setOperation(nextOperation);setSelection('');setReview('');setConfirmation('');setError('')};const save=async()=>{if(!reviewPhrase||review!==reviewPhrase||confirmation!==actionPhrase)return;setWorking(true);setError('');try{const response=await fetch(`/api/v1/vms/${name}/passthrough`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID(),'If-Match':data?.etag??''},body:JSON.stringify({schema:1,kind,devices:ordered,operation,review_confirmation:review,confirmation})});if(!response.ok)throw new Error(response.status===412?'Virtual machines changed since they were loaded. Review the latest state and try again.':response.status===422?'The VM or hardware safety state changed.':'Bedrock rejected the passthrough change.');const refreshed=await fetch('/api/v1/virtualization/passthrough-candidates',{headers:{Authorization:`Bearer ${token}`},cache:'no-store'});if(!refreshed.ok)throw new Error('Passthrough changed, but refreshed status is unavailable.');setCandidates(await refreshed.json() as PassthroughFeed);reset(name,kind,operation);notify(`${label} passthrough ${operation==='assign'?'assigned':'removed'}`)}catch(reason){setError(reason instanceof Error?reason.message:'Passthrough change failed.')}finally{setWorking(false)}};if(!data)return null;if(!candidates)return <div className="panel resource-editor"><Section title="Hardware passthrough" copy="Candidate inventory unavailable"/><Empty text="Safe passthrough candidates could not be loaded."/></div>;const choices=kind==='gpu'?candidates.gpus.map(item=>({id:item.id,label:`${item.vendor} ${item.device_id} · group ${item.devices.join(', ')}`})):candidates.usb_devices.map(item=>({id:item.id,label:`USB ${item.vendor_id}:${item.product_id} · ${item.id}`}));return <div className="panel resource-editor"><Section title="Hardware passthrough" copy="Offline GPU and USB assignment with hardware safety revalidation"/><div className="note"><span><b>High-impact change.</b> Bedrock excludes the boot GPU, hubs, storage, input, unauthorized, and host-critical USB devices. GPU assignment moves the complete IOMMU group away from the host.</span></div>{stopped.length===0?<Empty text="Shut down a VM before changing passthrough devices."/>:<><div className="resource-fields attachment-fields"><label>Virtual machine<select value={name} onChange={event=>reset(event.target.value)}><option value="">Choose a shut-off VM</option>{stopped.map(vm=><option key={vm.name}>{vm.name}</option>)}</select></label><label>Device type<select value={kind} onChange={event=>reset(name,event.target.value as Kind)}><option value="usb">USB</option><option value="gpu">GPU group</option></select></label><label>Action<select value={operation} onChange={event=>reset(name,kind,event.target.value as Operation)}><option value="assign">Assign</option><option value="remove">Remove</option></select></label><label>Safe selection{operation==='remove'?<input readOnly value={assignment?assignment.devices.join(', '):''} placeholder="No assignment"/>:<select disabled={!name} value={selection} onChange={event=>{setSelection(event.target.value);setReview('');setConfirmation('')}}><option value="">Choose {kind}</option>{choices.map(item=><option key={item.id} value={item.id}>{item.label}</option>)}</select>}</label></div>{name&&operation==='remove'&&!assignment&&<p className="form-error" role="alert">This VM has no {kind.toUpperCase()} passthrough assignment.</p>}{reviewPhrase&&<><label className="resource-confirm">Review and type <b>{reviewPhrase}</b><input autoComplete="off" value={review} onChange={event=>setReview(event.target.value)}/></label><label className="resource-confirm">Then type <b>{actionPhrase}</b><input autoComplete="off" value={confirmation} onChange={event=>setConfirmation(event.target.value)} onKeyDown={event=>event.key==='Enter'&&review===reviewPhrase&&confirmation===actionPhrase&&save()}/></label>{error&&<p className="form-error" role="alert">{error}</p>}<button className="primary" disabled={working||review!==reviewPhrase||confirmation!==actionPhrase} onClick={save}>{working?'Revalidating hardware…':`${operation==='assign'?'Assign':'Remove'} ${label} passthrough`}</button></>}</>}</div>}
-function VMs({data,connected,token,setData,notify}:{data:VmFeed|null;connected:boolean;token:string;setData:(value:VmFeed|null)=>void;notify:(value:string)=>void}){type PowerOperation='start'|'stop'|'restart'|'force-stop';type SnapshotOperation='create'|'restore'|'delete';type Selection={kind:'power';name:string;operation:PowerOperation}|{kind:'snapshot';name:string;operation:SnapshotOperation;snapshot:string}|{kind:'admin';name:string;operation:'clone';target:string}|{kind:'admin';name:string;operation:'delete'};const [selected,setSelected]=useState<Selection|null>(null),[snapshotName,setSnapshotName]=useState(''),[cloneName,setCloneName]=useState(''),[confirmation,setConfirmation]=useState(''),[working,setWorking]=useState(false),[error,setError]=useState('');const phrase=selected?(selected.kind==='power'?`${selected.operation==='force-stop'?'FORCE STOP':selected.operation.toUpperCase()} VM ${selected.name}`:selected.kind==='snapshot'?`${selected.operation.toUpperCase()} SNAPSHOT ${selected.snapshot} FOR VM ${selected.name}`:selected.operation==='clone'?`CLONE VM ${selected.name} AS ${selected.target}`:`DELETE VM ${selected.name} AND STORAGE`):'';const choose=(value:Selection)=>{setSelected(value);setConfirmation('');setError('')};const run=async()=>{if(!selected||confirmation!==phrase)return;setWorking(true);setError('');try{const snapshot=selected.kind==='snapshot',admin=selected.kind==='admin';const endpoint=admin?(selected.operation==='clone'?`/api/v1/vms/${selected.name}/clone`:`/api/v1/vms/${selected.name}`):`/api/v1/vms/${selected.name}/${snapshot?'snapshots':'power'}`;const body=snapshot?{schema:1,snapshot:selected.snapshot,operation:selected.operation,confirmation}:admin?(selected.operation==='clone'?{schema:1,name:selected.target,confirmation}:{schema:1,confirmation}):{schema:1,operation:selected.operation,confirmation};const response=await fetch(endpoint,{method:admin&&selected.operation==='delete'?'DELETE':'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID(),'If-Match':data?.etag??''},body:JSON.stringify(body)});if(!response.ok)throw new Error(response.status===412?'Virtual machines changed since they were loaded. Review the latest state and try again.':response.status===422?'The VM state changed or Bedrock could not complete the action.':'Bedrock rejected the VM action.');const refreshed=await fetch('/api/v1/vms',{headers:{Authorization:`Bearer ${token}`},cache:'no-store'});if(!refreshed.ok)throw new Error('The action completed, but refreshed VM status is unavailable.');const next=await refreshed.json() as Omit<VmFeed,'etag'>;setData({...next,etag:refreshed.headers.get('ETag')??''});notify(admin?`VM ${selected.operation} completed`:snapshot?`Snapshot ${selected.operation} completed`:`VM ${selected.operation.replace('-',' ')} completed`);setSelected(null);setSnapshotName('');setCloneName('')}catch(reason){setError(reason instanceof Error?reason.message:'VM action failed.')}finally{setWorking(false)}};const validSnapshot=/^[a-z][a-z0-9-]{0,30}[a-z0-9]$/.test(snapshotName),validClone=/^[a-z][a-z0-9-]{0,30}[a-z0-9]$/.test(cloneName)&&!data?.domains.some(vm=>vm.name===cloneName);return <><Title title="Virtual machines" copy="Live lifecycle, resource, snapshot, image, and network status."/><LiveState connected={connected} available={!!data} noun="virtual machine inventory"/><div className="note"><Tip>A virtual machine is a computer made from software. It runs its own operating system without changing Bedrock.</Tip><span><b>Protected controls.</b> Power, snapshots, cloning, and recoverable deletion require exact confirmation. Storage-changing actions are available only while a VM is shut off.</span></div>{data&&<div className="table vmtable"><div className="thead"><b>NAME</b><b>STATUS</b><b>RESOURCES</b><b>ATTACHMENTS</b><b>SNAPSHOTS</b><b>ACTIONS</b></div>{data.domains.length===0?<Empty text="No virtual machines are registered."/>:data.domains.map(vm=><div className="trow" key={vm.name}><span><b className="os">VM</b><strong>{vm.name}</strong></span><span><i className={vm.state==='running'?'live':'off'}/>{vm.state}</span><span>{vm.vcpus} vCPU · {(vm.memory_mib/1024).toFixed(vm.memory_mib%1024?1:0)} GB</span><span>{vm.image_attachments.length} images · {vm.network_attachments.length} networks</span><span className="snapshot-list">{vm.snapshots.length===0?<small>None</small>:vm.snapshots.map(snapshot=><span key={snapshot}><b>{snapshot}</b>{vm.state==='shut off'&&<><button onClick={()=>choose({kind:'snapshot',name:vm.name,operation:'restore',snapshot})}>Restore</button><button className="danger" onClick={()=>choose({kind:'snapshot',name:vm.name,operation:'delete',snapshot})}>Delete</button></>}</span>)}</span><span className="vm-actions">{vm.state==='shut off'&&<><button onClick={()=>choose({kind:'power',name:vm.name,operation:'start'})}>Start</button><label className="snapshot-create"><span>New snapshot name</span><input aria-label={`New snapshot name for ${vm.name}`} placeholder="pre-upgrade" value={snapshotName} onChange={event=>setSnapshotName(event.target.value)}/><button disabled={!validSnapshot||vm.snapshots.includes(snapshotName)} onClick={()=>choose({kind:'snapshot',name:vm.name,operation:'create',snapshot:snapshotName})}>Create snapshot</button></label><label className="snapshot-create"><span>Clone as</span><input aria-label={`Clone name for ${vm.name}`} placeholder="copy-vm" value={cloneName} onChange={event=>setCloneName(event.target.value)}/><button disabled={!validClone||cloneName===vm.name} onClick={()=>choose({kind:'admin',name:vm.name,operation:'clone',target:cloneName})}>Clone</button></label><button className="danger" onClick={()=>choose({kind:'admin',name:vm.name,operation:'delete'})}>Delete VM and storage</button></>}{vm.state==='running'&&<><button onClick={()=>choose({kind:'power',name:vm.name,operation:'stop'})}>Stop</button><button onClick={()=>choose({kind:'power',name:vm.name,operation:'restart'})}>Restart</button><button className="danger" onClick={()=>choose({kind:'power',name:vm.name,operation:'force-stop'})}>Force stop</button></>}{vm.state==='paused'&&<button className="danger" onClick={()=>choose({kind:'power',name:vm.name,operation:'force-stop'})}>Force stop</button>}</span></div>)}</div>}{selected&&<div className="shade" role="presentation" onMouseDown={event=>event.target===event.currentTarget&&!working&&setSelected(null)}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="vm-action-title"><header><h2 id="vm-action-title">{selected.operation.replace('-',' ')} {selected.kind==='snapshot'?`${selected.snapshot} on `:selected.kind==='admin'&&selected.operation==='clone'?`${selected.name} as ${selected.target}`:''}{selected.kind==='admin'&&selected.operation==='clone'?'':selected.name}</h2><button aria-label="Close" disabled={working} onClick={()=>setSelected(null)}>×</button></header><p>{selected.kind==='power'&&selected.operation==='force-stop'?'Force stop can cause guest data loss. Use it only when a graceful stop is impossible.':selected.kind==='snapshot'&&selected.operation==='restore'?'Restoring replaces the VM disk state with this snapshot. Changes made afterward will be lost.':selected.kind==='admin'&&selected.operation==='delete'?'The VM and its managed disk will leave active inventory and move to recoverable quarantine. Confirm only after checking backups.':'Bedrock will recheck the managed VM and verify the requested final state.'}</p><label>Type <b>{phrase}</b><input autoFocus autoComplete="off" value={confirmation} onChange={event=>setConfirmation(event.target.value)} onKeyDown={event=>event.key==='Enter'&&confirmation===phrase&&run()}/></label>{error&&<p className="form-error" role="alert">{error}</p>}<footer><button disabled={working} onClick={()=>setSelected(null)}>Cancel</button><button className="primary" disabled={working||confirmation!==phrase} onClick={run}>{working?'Working…':'Confirm action'}</button></footer></section></div>}</>}
-function Storage({data,connected}:{data:StorageFeed|null;connected:boolean}){const capacity=(bytes:number)=>capacityLabel(bytes);const pools=data?.software_raid.zfs.pools??[];const arrays=data?.software_raid.md_arrays??[];return <><Title title="Storage" copy="Live capacity, disk health, RAID state, and rebuild progress."/><LiveState connected={connected} available={!!data} noun="storage health"/><div className="note"><span><b>Protected storage.</b> Create, expand, replace, scrub, safely disconnect, and reconnect are guarded here with fresh disk checks and exact confirmation.</span></div>{data&&<><div className="metrics hardwaremetrics"><Metric l="OVERALL" v={data.overall} s="storage health" w={data.overall==='healthy'?'100%':data.overall==='attention'?'50%':'25%'} tip="Combined disk, software RAID, ZFS, and hardware RAID health."/><Metric l="RAW CAPACITY" v={capacity(data.disks.reduce((sum,disk)=>sum+disk.size_bytes,0))} s={`${data.disks.length} physical disk${data.disks.length===1?'':'s'}`} w="100%" tip="Total detected physical-disk capacity without exposing device paths or serial numbers."/><Metric l="SOFTWARE RAID" v={String(arrays.length+pools.length)} s={`${arrays.length} Linux RAID · ${pools.length} ZFS`} w={arrays.length+pools.length?'100%':'0%'} tip="Managed Linux RAID arrays and ZFS pools reported by Bedrock."/><Metric l="HARDWARE RAID" v={String(data.hardware_raid.controller_count)} s={`${data.hardware_raid.full_visibility_count} fully visible`} w={data.hardware_raid.controller_count?`${Math.round(data.hardware_raid.full_visibility_count/data.hardware_raid.controller_count*100)}%`:'0%'} tip="Hardware RAID monitoring depends on a supported vendor management tool."/></div><div className="twocol"><div className="panel"><Section title="Protected storage" copy={`${arrays.length+pools.length} software-managed group${arrays.length+pools.length===1?'':'s'}`}/>{arrays.length+pools.length===0?<Empty text="No software RAID arrays or ZFS pools were reported."/>:<>{arrays.map(array=><div className="drive" key={`md-${array.name}`}><b>MD</b><div><strong>{array.name}</strong><p>{array.level} · {array.active_members} of {array.expected_members} members · {array.state}</p></div><span className={array.health==='healthy'?'ready':'waiting'}>{array.sync.action?`${array.sync.action} ${array.sync.percent.toFixed(0)}%`:array.health}</span></div>)}{pools.map(pool=><div className="drive" key={`zfs-${pool.name}`}><b>ZFS</b><div><strong>{pool.name}</strong><p>{capacity(pool.allocated_bytes)} used · {capacity(pool.free_bytes)} free · {pool.health}</p></div><span className={pool.status==='healthy'?'ready':'waiting'}>{pool.status}</span></div>)}</>}</div><div className="panel"><Section title="RAID controller visibility" copy={`${data.hardware_raid.controller_count} controller${data.hardware_raid.controller_count===1?'':'s'} detected`}/><div className="hardwaretotals"><span><b>{data.hardware_raid.full_visibility_count}</b> fully monitored</span><span><b>{data.hardware_raid.attention_count}</b> need attention</span><span><b>{Math.max(0,data.hardware_raid.controller_count-data.hardware_raid.full_visibility_count)}</b> limited visibility</span></div></div></div><div className="panel"><Section title="Physical drives" copy={`${data.disks.filter(d=>d.smart.health==='healthy').length} healthy of ${data.disks.length}`}/>{data.disks.length===0?<Empty text="No physical disks were reported."/>:data.disks.map((disk,index)=><div className="drive" key={`${disk.model}-${index}`}><b>▱</b><div><strong>{disk.model||`Disk ${index+1}`}</strong><p>{capacity(disk.size_bytes)} · {disk.transport||'unknown connection'} · SMART {disk.smart.health}</p></div><span>{disk.smart.temperature_c===null?'—':`${disk.smart.temperature_c}°C`}</span></div>)}</div></>}</>}
-function StorageAdvanced({data}:{data:StorageFeed|null}){if(!data)return null;const pools=data.software_raid.zfs.pools,arrays=data.software_raid.md_arrays;return <Advanced label="Advanced storage details"><p className="advanced-intro">Storage health, rebuild state, and destructive warnings remain visible above. These optional details use privacy-safe identities instead of device paths or serial numbers.</p><div className="advanced-grid"><section><h2>Drive history</h2>{data.disks.length===0?<p>No drive history reported.</p>:<dl>{data.disks.map((disk,index)=><div key={index}><dt>{disk.model||`Disk ${index+1}`}</dt><dd>{disk.smart.available?(disk.smart.power_on_hours===null?'SMART hours unavailable':`${disk.smart.power_on_hours} power-on hours`):'SMART unavailable'}</dd></div>)}</dl>}</section><section><h2>Protected topology</h2>{data.managed_pools.length===0?<p>No managed topology reported.</p>:<dl>{data.managed_pools.map(pool=><div key={pool.name}><dt>{pool.name}</dt><dd>{pool.backend} {pool.layout} · {pool.members.length} members</dd></div>)}</dl>}</section><section><h2>Candidate review</h2>{data.disk_candidates.length===0?<p>No candidate disks reported.</p>:<dl>{data.disk_candidates.map(candidate=><div key={candidate.id}><dt>{candidate.id}</dt><dd>{candidate.eligible?'Eligible':candidate.reason.replace('-', ' ')}</dd></div>)}</dl>}</section><section><h2>Software storage</h2><dl><div><dt>OpenZFS tools</dt><dd>{data.software_raid.zfs.available?'Available':'Unavailable'}</dd></div><div><dt>Reported pools</dt><dd>{pools.length}</dd></div><div><dt>Linux RAID arrays</dt><dd>{arrays.length}</dd></div></dl></section></div></Advanced>}
-function Images({data,connected,token,setData,notify}:{data:ImageFeed|null;connected:boolean;token:string;setData:(value:ImageFeed|null)=>void;notify:(value:string)=>void}){
- const disks=data?.images.filter(image=>image.type!=='iso')??[],[source,setSource]=useState(''),[target,setTarget]=useState(''),[targetType,setTargetType]=useState<'qcow2'|'img'>('qcow2'),[confirmation,setConfirmation]=useState(''),[working,setWorking]=useState(false),[error,setError]=useState('');const selected=disks.find(image=>image.name===source),validTarget=/^[a-z][a-z0-9-]{0,30}[a-z0-9]$/.test(target)&&target!==source&&!data?.images.some(image=>image.name===target), [uploadName,setUploadName]=useState(''),[uploadType,setUploadType]=useState<'iso'|'img'|'qcow2'|'vhdx'|'vmdk'>('iso'),[uploadFile,setUploadFile]=useState<File|null>(null),[uploading,setUploading]=useState(false),[importCandidate,setImportCandidate]=useState<ImageFeed['upload_candidates'][number]|null>(null),[importConfirmation,setImportConfirmation]=useState(''),[discardCandidate,setDiscardCandidate]=useState<ImageFeed['upload_candidates'][number]|null>(null),[discardConfirmation,setDiscardConfirmation]=useState(''),phrase=selected&&validTarget?`CONVERT IMAGE ${source} ${selected.sha256} TO ${targetType.toUpperCase()} ${target}`:'';const size=(bytes:number)=>bytes>=1073741824?`${(bytes/1073741824).toFixed(1)} GiB`:`${Math.max(1,Math.round(bytes/1048576))} MiB`;
- const convert=async()=>{if(!selected||!phrase||confirmation!==phrase)return;setWorking(true);setError('');try{const response=await fetch(`/api/v1/images/${source}/convert`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID(),'If-Match':data?.etag??''},body:JSON.stringify({schema:1,target,target_type:targetType,source_sha256:selected.sha256,confirmation})});if(!response.ok)throw new Error(response.status===412?'Image state changed since it was loaded. Review the latest images and try again.':response.status===422?'The source image changed or conversion failed safety validation.':'Bedrock rejected the image conversion.');const refreshed=await fetch('/api/v1/images',{headers:{Authorization:`Bearer ${token}`},cache:'no-store'});if(!refreshed.ok)throw new Error('Conversion completed, but refreshed image status is unavailable.');const next=await refreshed.json() as Omit<ImageFeed,'etag'>;setData({...next,etag:refreshed.headers.get('ETag')??''});setSource('');setTarget('');setConfirmation('');notify('Verified image conversion completed')}catch(reason){setError(reason instanceof Error?reason.message:'Image conversion failed.')}finally{setWorking(false)}};
- const upload=async()=>{if(!uploadFile||!/^[a-z][a-z0-9-]{0,30}[a-z0-9]$/.test(uploadName))return;setUploading(true);setError('');try{const response=await fetch(`/api/v1/images/${uploadName}/upload`,{method:'PUT',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/octet-stream','If-Match':data?.etag??'','X-Bedrock-Image-Type':uploadType},body:uploadFile});if(!response.ok)throw new Error(response.status===412?'Image state changed since it was loaded. Review the latest images and try again.':response.status===409?'That image name already exists or has an upload awaiting review.':'Bedrock rejected the upload.');const refreshed=await fetch('/api/v1/images',{headers:{Authorization:`Bearer ${token}`},cache:'no-store'});if(!refreshed.ok)throw new Error('Upload completed, but its verification summary is unavailable.');const next=await refreshed.json() as Omit<ImageFeed,'etag'>;setData({...next,etag:refreshed.headers.get('ETag')??''});setUploadName('');setUploadFile(null);notify('Image uploaded and hashed for review')}catch(reason){setError(reason instanceof Error?reason.message:'Image upload failed.')}finally{setUploading(false)}};
- const importUpload=async()=>{if(!importCandidate||importConfirmation!==`IMPORT ${importCandidate.type.toUpperCase()} ${importCandidate.name} ${importCandidate.sha256}`)return;setWorking(true);setError('');try{const response=await fetch(`/api/v1/images/${importCandidate.name}/import`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID(),'If-Match':data?.etag??''},body:JSON.stringify({schema:1,confirmation:importConfirmation})});if(!response.ok)throw new Error(response.status===412?'Image state changed since it was loaded. Review the latest images and try again.':response.status===422?'The uploaded file failed format or checksum validation.':'Bedrock rejected the image import.');const refreshed=await fetch('/api/v1/images',{headers:{Authorization:`Bearer ${token}`},cache:'no-store'});if(!refreshed.ok)throw new Error('Import completed, but refreshed image status is unavailable.');const next=await refreshed.json() as Omit<ImageFeed,'etag'>;setData({...next,etag:refreshed.headers.get('ETag')??''});setImportCandidate(null);setImportConfirmation('');notify('Image verified and imported')}catch(reason){setError(reason instanceof Error?reason.message:'Image import failed.')}finally{setWorking(false)}};
- const discardUpload=async()=>{if(!discardCandidate||discardConfirmation!==`DISCARD IMAGE UPLOAD ${discardCandidate.name} ${discardCandidate.sha256}`)return;setWorking(true);setError('');try{const response=await fetch(`/api/v1/images/${discardCandidate.name}/upload`,{method:'DELETE',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','If-Match':data?.etag??''},body:JSON.stringify({schema:1,sha256:discardCandidate.sha256,confirmation:discardConfirmation})});if(!response.ok)throw new Error(response.status===412?'Image state changed since it was loaded. Review the latest images and try again.':response.status===409?'That upload is already being imported.':'Bedrock rejected the upload discard request.');const refreshed=await fetch('/api/v1/images',{headers:{Authorization:`Bearer ${token}`},cache:'no-store'});if(!refreshed.ok)throw new Error('Upload was discarded, but refreshed image status is unavailable.');const next=await refreshed.json() as Omit<ImageFeed,'etag'>;setData({...next,etag:refreshed.headers.get('ETag')??''});setDiscardCandidate(null);setDiscardConfirmation('');notify('Staged image upload discarded')}catch(reason){setError(reason instanceof Error?reason.message:'Image upload discard failed.')}finally{setWorking(false)}};
- return <><Title title="Image library" copy="Verified operating system installers and disk images ready for virtual machines."/><LiveState connected={connected} available={!!data} noun="image inventory"/><div className="note"><span><b>Protected image handling.</b> Uploads are hashed before review; import, discard, and conversion revalidate the selected bytes before changing managed state.</span></div>{error&&<p className="form-error" role="alert">{error}</p>}{data&&<><div className="panel resource-editor"><Section title="Upload an image" copy="Stage a local installer or disk image; Bedrock calculates its SHA-256"/><div className="resource-fields"><label>Image name<input value={uploadName} maxLength={32} placeholder="debian-installer" onChange={event=>{setUploadName(event.target.value);setError('')}}/></label><label>Format<select value={uploadType} onChange={event=>setUploadType(event.target.value as typeof uploadType)}><option value="iso">ISO</option><option value="img">Raw IMG</option><option value="qcow2">QCOW2</option><option value="vhdx">VHDX</option><option value="vmdk">VMDK</option></select></label><label>Local file<input type="file" onChange={event=>setUploadFile(event.target.files?.[0]??null)}/></label></div><button className="primary" disabled={uploading||!uploadFile||!/^[a-z][a-z0-9-]{0,30}[a-z0-9]$/.test(uploadName)||data.images.some(image=>image.name===uploadName)||data.upload_candidates.some(image=>image.name===uploadName)} onClick={upload}>{uploading?'Uploading and hashing…':'Upload for verification'}</button></div>{data.upload_candidates.length>0&&<div className="panel"><Section title="Uploads awaiting import" copy={`${data.upload_candidates.length} hashed and ready for review`}/>{data.upload_candidates.map(image=><div className="drive" key={image.name}><b className="os">{image.type.toUpperCase().slice(0,4)}</b><div><strong>{image.name}</strong><p>{size(image.size_bytes)} · SHA-256 {image.sha256}</p></div><span className="actions"><button onClick={()=>{setImportCandidate(image);setImportConfirmation('');setDiscardCandidate(null);setError('')}}>Review import</button><button onClick={()=>{setDiscardCandidate(image);setDiscardConfirmation('');setImportCandidate(null);setError('')}}>Discard</button></span></div>)}{importCandidate&&<><label className="resource-confirm">Type <b>IMPORT {importCandidate.type.toUpperCase()} {importCandidate.name} {importCandidate.sha256}</b><input autoComplete="off" value={importConfirmation} onChange={event=>setImportConfirmation(event.target.value)}/></label><button className="primary" disabled={working||importConfirmation!==`IMPORT ${importCandidate.type.toUpperCase()} ${importCandidate.name} ${importCandidate.sha256}`} onClick={importUpload}>{working?'Validating and importing…':'Verify and import image'}</button></>}{discardCandidate&&<><label className="resource-confirm">Type <b>DISCARD IMAGE UPLOAD {discardCandidate.name} {discardCandidate.sha256}</b><input autoComplete="off" value={discardConfirmation} onChange={event=>setDiscardConfirmation(event.target.value)}/></label><button className="danger" disabled={working||discardConfirmation!==`DISCARD IMAGE UPLOAD ${discardCandidate.name} ${discardCandidate.sha256}`} onClick={discardUpload}>{working?'Discarding…':'Discard staged upload'}</button></>}</div>}<div className="panel"><Section title="Verified images" copy={`${data.images.length} available`}/>{data.images.length===0?<Empty text="No verified images are available."/>:data.images.map(image=><div className="drive" key={image.name}><b className="os">{image.type.toUpperCase().slice(0,4)}</b><div><strong>{image.name}</strong><p>{image.type.toUpperCase()} · {size(image.size_bytes)} · SHA-256 {image.sha256.slice(0,12)}…</p></div><span className="ready">{image.converted?'Converted':'Imported'}</span></div>)}</div><div className="panel resource-editor"><Section title="Convert a disk image" copy="Create a verified raw or QCOW2 copy without changing the source"/>{disks.length===0?<Empty text="Import a disk image before converting it."/>:<><div className="resource-fields"><label>Source image<select value={source} onChange={event=>{setSource(event.target.value);setConfirmation('');setError('')}}><option value="">Choose an image</option>{disks.map(image=><option key={image.name} value={image.name}>{image.name} ({image.type.toUpperCase()})</option>)}</select></label><label>New image name<input value={target} maxLength={32} placeholder="converted-disk" onChange={event=>{setTarget(event.target.value);setConfirmation('')}}/></label><label>Target format<select value={targetType} onChange={event=>{setTargetType(event.target.value as 'qcow2'|'img');setConfirmation('')}}><option value="qcow2">QCOW2</option><option value="img">Raw IMG</option></select></label></div>{phrase&&<label className="resource-confirm">Type <b>{phrase}</b><input autoComplete="off" value={confirmation} onChange={event=>setConfirmation(event.target.value)} onKeyDown={event=>event.key==='Enter'&&confirmation===phrase&&convert()}/></label>}{error&&<p className="form-error" role="alert">{error}</p>}<button className="primary" disabled={working||!phrase||confirmation!==phrase} onClick={convert}>{working?'Converting…':'Convert and verify image'}</button></>}</div></>}<div className="note"><b>macOS guests are not supported.</b> Bedrock does not provide Apple software or offer macOS VM creation on current hosts.</div></>}
-function Hardware({data,connected}:{data:HardwareData|null;connected:boolean}){
- return <><Title title="Hardware" copy="Capacity and compatibility reported by this Bedrock server."/><LiveState connected={connected} available={!!data} noun="hardware inventory"/>{data&&<>
-  <div className="metrics hardwaremetrics"><Metric l="PROCESSOR" v={`${data.cpu.logical_processors} threads`} s={data.cpu.model} w="100%" tip="Processor model and logical thread count reported by Bedrock."/><Metric l="MEMORY" v={`${Math.round(data.memory.total_bytes/1073741824)} GB`} s="installed" w="100%" tip="Total installed memory available to the host."/><Metric l="DISKS" v={String(data.disks.length)} s={`${(data.disks.reduce((sum,disk)=>sum+disk.size_bytes,0)/1e12).toFixed(1)} TB raw`} w="100%" tip="Physical disks detected without exposing their device paths or serial numbers."/><Metric l="VIRTUALIZATION" v={data.cpu.virtualization_supported?'Ready':'Unavailable'} s={data.cpu.virtualization} w={data.cpu.virtualization_supported?'100%':'0%'} tip="Hardware acceleration capability reported by the processor."/></div>
-  <div className="twocol"><div className="panel"><Section title="Graphics" copy={`${data.gpus.length} adapter${data.gpus.length===1?'':'s'}`}/>{data.gpus.length===0?<Empty text="No supported graphics adapters were reported."/>:data.gpus.map((gpu,index)=><div className="drive" key={`${gpu.vendor}-${index}`}><b>▣</b><div><strong>{gpu.vendor} graphics</strong><p>{gpu.driver} driver · {gpu.boot_vga?'Host display':'Secondary adapter'}</p></div><span className={gpu.recognized_vendor?'ready':'waiting'}>{gpu.recognized_vendor?'Recognized':'Limited'}</span></div>)}</div><div className="panel"><Section title="Connections" copy="Privacy-safe totals"/><div className="hardwaretotals"><span><b>{data.networks.length}</b> network links</span><span><b>{data.storage_controllers.length}</b> storage controllers</span><span><b>{data.usb_device_count}</b> USB devices</span></div></div></div>
-  <Advanced label="Advanced hardware details"><p className="advanced-intro">Health and compatibility remain visible above. These optional details contain only privacy-safe topology and capability data.</p><div className="advanced-grid"><section><h2>Processor topology</h2><dl><div><dt>Architecture</dt><dd>{data.cpu.architecture}</dd></div><div><dt>Sockets</dt><dd>{data.cpu.sockets}</dd></div><div><dt>Cores per socket</dt><dd>{data.cpu.cores_per_socket}</dd></div><div><dt>Threads per core</dt><dd>{data.cpu.threads_per_core}</dd></div></dl></section><section><h2>Network links</h2>{data.networks.length===0?<p>No network links reported.</p>:<dl>{data.networks.map((link,index)=><div key={index}><dt>Link {index+1}</dt><dd>{link.link_type} · {link.state} · MTU {link.mtu}</dd></div>)}</dl>}</section><section><h2>Storage controllers</h2>{data.storage_controllers.length===0?<p>No storage controllers reported.</p>:<dl>{data.storage_controllers.map((controller,index)=><div key={index}><dt>{controller.class}</dt><dd>{controller.description}</dd></div>)}</dl>}</section><section><h2>Physical media</h2>{data.disks.length===0?<p>No physical media reported.</p>:<dl>{data.disks.map((disk,index)=><div key={index}><dt>{disk.vendor} {disk.model}</dt><dd>{disk.transport} · {disk.rotational?'rotational':'solid-state'}{disk.removable?' · removable':''}</dd></div>)}</dl>}</section></div></Advanced>
- </>}</>
+function StorageActions({
+  data,
+  token,
+  setData,
+  notify,
+}: {
+  data: StorageFeed | null;
+  token: string;
+  setData: (value: StorageFeed | null) => void;
+  notify: (value: string) => void;
+}) {
+  type Operation = "scrub" | "export" | "import";
+  const [selected, setSelected] = useState(""),
+    [operation, setOperation] = useState<Operation>("scrub"),
+    [confirmation, setConfirmation] = useState(""),
+    [working, setWorking] = useState(false),
+    [error, setError] = useState(""),
+    pool = data?.managed_pools.find((item) => item.name === selected),
+    allowed =
+      pool &&
+      (operation === "import"
+        ? pool.state === "exported"
+        : operation === "export"
+          ? pool.state === "online" || pool.state === "degraded"
+          : pool.state !== "exported"),
+    phrase = allowed ? `${operation.toUpperCase()} STORAGE ${selected}` : "";
+  const apply = async () => {
+    if (!pool || !allowed || confirmation !== phrase) return;
+    setWorking(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/v1/storage/${selected}/${operation}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
+          "If-Match": data?.etag ?? "",
+        },
+        body: JSON.stringify({ schema: 1, confirmation }),
+      });
+      if (!response.ok)
+        throw new Error(
+          response.status === 412
+            ? "Storage changed since it was loaded. Review the latest state and try again."
+            : response.status === 422
+              ? "The storage group changed or cannot perform that operation in its current state."
+              : "Bedrock rejected the storage operation.",
+        );
+      const refreshed = await fetch("/api/v1/storage", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (!refreshed.ok)
+        throw new Error(
+          "The operation completed, but refreshed storage status is unavailable.",
+        );
+      const next = (await refreshed.json()) as Omit<StorageFeed, "etag">;
+      setData({ ...next, etag: refreshed.headers.get("ETag") ?? "" });
+      setSelected("");
+      setConfirmation("");
+      notify(`Storage ${operation} completed`);
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Storage operation failed.",
+      );
+    } finally {
+      setWorking(false);
+    }
+  };
+  if (!data) return null;
+  return (
+    <div className="panel resource-editor">
+      <Section
+        title="Storage operations"
+        copy="Scrub, safely disconnect, or reconnect a managed storage group"
+      />
+      {data.managed_pools.length === 0 ? (
+        <Empty text="No managed storage groups are available." />
+      ) : (
+        <>
+          <div className="resource-fields">
+            <label>
+              Operation
+              <select
+                value={operation}
+                onChange={(event) => {
+                  setOperation(event.target.value as Operation);
+                  setSelected("");
+                  setConfirmation("");
+                  setError("");
+                }}
+              >
+                <option value="scrub">Integrity scrub</option>
+                <option value="export">Safely disconnect</option>
+                <option value="import">Reconnect</option>
+              </select>
+            </label>
+            <label>
+              Storage group
+              <select
+                value={selected}
+                onChange={(event) => {
+                  setSelected(event.target.value);
+                  setConfirmation("");
+                  setError("");
+                }}
+              >
+                <option value="">Choose protected storage</option>
+                {data.managed_pools
+                  .filter((item) =>
+                    operation === "import"
+                      ? item.state === "exported"
+                      : operation === "export"
+                        ? item.state === "online" || item.state === "degraded"
+                        : item.state !== "exported",
+                  )
+                  .map((item) => (
+                    <option key={item.name} value={item.name}>
+                      {item.name} · {item.backend} {item.layout} · {item.state}
+                    </option>
+                  ))}
+              </select>
+            </label>
+          </div>
+          {phrase && (
+            <label className="resource-confirm">
+              Type <b>{phrase}</b>
+              <input
+                autoComplete="off"
+                value={confirmation}
+                onChange={(event) => setConfirmation(event.target.value)}
+                onKeyDown={(event) =>
+                  event.key === "Enter" && confirmation === phrase && apply()
+                }
+              />
+            </label>
+          )}
+          {error && (
+            <p className="form-error" role="alert">
+              {error}
+            </p>
+          )}
+          <button
+            className="primary"
+            disabled={working || !phrase || confirmation !== phrase}
+            onClick={apply}
+          >
+            {working
+              ? "Applying…"
+              : operation === "scrub"
+                ? "Start integrity scrub"
+                : operation === "export"
+                  ? "Safely disconnect storage"
+                  : "Reconnect storage"}
+          </button>
+        </>
+      )}
+    </div>
+  );
 }
-function LiveState({connected,available,noun}:{connected:boolean;available:boolean;noun:string}){return <div className={`connection ${connected&&available?'connected':connected?'error':'idle'}`}><span className="connectiondot"/><div><strong>{!connected?'Connect from Overview':available?'Live server data':'Service unavailable'}</strong><p>{!connected?`Authenticate once to load ${noun}.`:available?'This view came from the authenticated Bedrock API.':`Bedrock is connected, but ${noun} could not be loaded.`}</p></div></div>}
-function Empty({text}:{text:string}){return <div className="empty"><b>○</b><span>{text}</span></div>}
-function Download({notify}:{notify:(s:string)=>void}){const [os,setOs]=useState('Windows');return <><button className="back">← Back to Bedrock</button><div className="download"><div><div className="kicker">Bedrock INSTALLER · v0.1.0</div><h1>Your server starts here.</h1><p>Turn an ordinary computer into private storage and a home for your virtual machines.</p>{['Download Bedrock Installer|A small tool that prepares your USB drive.','Choose a USB drive or DVD image|8 GB or larger is recommended.','Start the server and follow along|The guided setup explains every decision.'].map((x,i)=>{const a=x.split('|');return <div className="step" key={x}><b>{i+1}</b><span><strong>{a[0]}</strong><small>{a[1]}</small></span></div>})}</div><div className="installer"><div className="ilog"><b>H</b><span><strong>Bedrock Installer</strong><small>Create your installer safely</small></span></div><label>Your computer</label><div className="segments">{['Windows','macOS','Linux'].map(x=><button className={os===x?'sel':''} onClick={()=>setOs(x)} key={x}>{x}</button>)}</div><button className="writer" onClick={()=>notify(`Bedrock Installer for ${os} is being prepared`)}>⇩ Download for {os}</button><p>Version 0.1.0 · Open source · <a href="https://github.com" target="_blank">View on GitHub ↗</a></p><hr/><button className="iso" onClick={()=>notify('Direct ISO download is being prepared')}>Download ISO directly <Tip>Use this with another USB-writing app, a virtual machine, or burn it to a DVD.</Tip></button></div></div><div className="requirements"><span>✓ 64-bit Intel or AMD</span><span>✓ 8 GB RAM minimum</span><span>✓ 32 GB system drive</span><span>✓ Wired network recommended</span></div></>}
-function Remote({data,connected,token,setData,notify}:{data:RemoteDeviceFeed|null;connected:boolean;token:string;setData:(value:RemoteDeviceFeed|null)=>void;notify:(value:string)=>void}){
- type Operation='rename'|'expire'|'revoke';type Selection={device:RemoteDeviceFeed['devices'][number];operation:Operation};
- const [selected,setSelected]=useState<Selection|null>(null),[pairing,setPairing]=useState<RemoteDeviceFeed['pending_requests'][number]|null>(null),[name,setName]=useState(''),[expiry,setExpiry]=useState(''),[confirmation,setConfirmation]=useState(''),[working,setWorking]=useState(false),[error,setError]=useState('');
- const active=data?.devices.filter(device=>!device.revoked&&!device.expired).length??0,seen=(value:number|null)=>value===null?'Never connected':`Last seen ${new Date(value*1000).toLocaleString()}`,expiresUnix=expiry?Math.floor(new Date(expiry).getTime()/1000):0,phrase=selected?.operation==='revoke'?`REVOKE REMOTE DEVICE ${selected.device.id}`:selected?.operation==='expire'&&expiresUnix?`EXPIRE REMOTE DEVICE ${selected.device.id} AT ${expiresUnix}`:'';
- const choose=(device:RemoteDeviceFeed['devices'][number],operation:Operation)=>{setPairing(null);setSelected({device,operation});setName(device.name);setExpiry('');setConfirmation('');setError('')};
- const save=async()=>{if(!selected||(selected.operation==='rename'?!name.trim()||name.length>64:confirmation!==phrase))return;setWorking(true);setError('');try{const body=selected.operation==='rename'?{schema:1,operation:'rename',name:name.trim()}:selected.operation==='expire'?{schema:1,operation:'expire',expires_unix:expiresUnix,confirmation}:{schema:1,operation:'revoke',confirmation};const response=await fetch(`/api/v1/remote/devices/${selected.device.id}`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID(),'If-Match':data?.etag??''},body:JSON.stringify(body)});if(!response.ok)throw new Error(response.status===412?'Remote trust changed since it was loaded. Review the latest devices and try again.':response.status===422?'The device state or expiry policy changed.':'Bedrock rejected the trusted-device change.');const refreshed=await fetch('/api/v1/remote/devices',{headers:{Authorization:`Bearer ${token}`},cache:'no-store'});if(!refreshed.ok)throw new Error('The change completed, but refreshed device status is unavailable.');const next=await refreshed.json() as Omit<RemoteDeviceFeed,'etag'>;setData({...next,etag:refreshed.headers.get('ETag')??''});notify(`Remote device ${selected.operation} completed`);setSelected(null)}catch(reason){setError(reason instanceof Error?reason.message:'Remote device change failed.')}finally{setWorking(false)}};
- const approve=async()=>{const approval=pairing?`APPROVE REMOTE DEVICE ${pairing.id}`:'';if(!pairing||pairing.approved||confirmation!==approval)return;setWorking(true);setError('');try{const response=await fetch(`/api/v1/remote/pairings/${pairing.id}/approve`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID(),'If-Match':data?.etag??''},body:JSON.stringify({schema:1,confirmation})});if(!response.ok)throw new Error(response.status===412?'Pairing state changed since it was loaded. Review the latest request and try again.':response.status===422?'The pairing request expired or is no longer available.':'Bedrock rejected pairing approval.');const refreshed=await fetch('/api/v1/remote/devices',{headers:{Authorization:`Bearer ${token}`},cache:'no-store'});if(!refreshed.ok)throw new Error('Pairing was approved, but refreshed status is unavailable.');const next=await refreshed.json() as Omit<RemoteDeviceFeed,'etag'>;setData({...next,etag:refreshed.headers.get('ETag')??''});setPairing(null);notify('Remote pairing approved')}catch(reason){setError(reason instanceof Error?reason.message:'Pairing approval failed.')}finally{setWorking(false)}};
- return <><Title title="Remote access" copy="Trusted computers authorized to reach this Bedrock server." action={<span className="securebadge">● Device-specific trust</span>}/><LiveState connected={connected} available={!!data} noun="trusted-device status"/><div className="note"><span><b>Protected controls.</b> Pairing must originate on a client and then be approved here before its one-time code expires. Codes and client keys never appear in this interface.</span></div>{data&&<><div className="metrics hardwaremetrics"><Metric l="TRUSTED" v={String(active)} s="active devices" w={data.devices.length?`${Math.round(active/data.devices.length*100)}%`:'0%'} tip="Devices whose trust has not expired or been revoked."/><Metric l="REVOKED" v={String(data.devices.filter(device=>device.revoked).length)} s="access removed" w="0%" tip="Revoked devices cannot establish a new Bedrock session."/><Metric l="EXPIRED" v={String(data.devices.filter(device=>device.expired&&!device.revoked).length)} s="renewal required" w="0%" tip="Expired device credentials must be paired again before use."/></div><div className="panel devices"><Section title="Pending pairing requests" copy={`${data.pending_requests.length} awaiting completion`}/>{data.pending_requests.length===0?<Empty text="No client is waiting for pairing approval."/>:data.pending_requests.map(request=><div className="device" key={request.id}><b>⌁</b><div><strong>New client request</strong><p>ID {request.id} · expires in {Math.ceil(request.expires_in_seconds/60)} minute{Math.ceil(request.expires_in_seconds/60)===1?'':'s'}</p></div><div className="settings-actions"><span className={request.approved?'ready':'waiting'}>{request.approved?'Approved':'Needs approval'}</span>{!request.approved&&<button className="primary" onClick={()=>{setPairing(request);setConfirmation('');setError('')}}>Review</button>}</div></div>)}</div><div className="panel devices"><Section title="Trusted devices" copy={`${data.devices.length} registered`}/>{data.devices.length===0?<Empty text="No remote devices are paired."/>:data.devices.map(device=>{const status=device.revoked?'Revoked':device.expired?'Expired':'Trusted';return <div className="device" key={device.id}><b>⌁</b><div><strong>{device.name}</strong><p>{seen(device.last_seen_unix)} · Added {new Date(device.created_unix*1000).toLocaleDateString()} · Expires {new Date(device.expires_unix*1000).toLocaleDateString()}</p></div><div className="settings-actions"><span className={status==='Trusted'?'ready':'waiting'}>{status}</span><button onClick={()=>choose(device,'rename')}>Rename</button>{!device.revoked&&<><button onClick={()=>choose(device,'expire')}>Change expiry</button><button className="danger" onClick={()=>choose(device,'revoke')}>Revoke</button></>}</div></div>})}</div></>}<div className="note"><Tip>Approve only while you can compare the server fingerprint and one-time code shown by the client with the local server display.</Tip><span><b>Private by design.</b> Public keys, fingerprints, and pairing codes are never returned to this interface.</span></div>{pairing&&<div className="shade" role="presentation" onMouseDown={event=>event.target===event.currentTarget&&!working&&setPairing(null)}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="pairing-title"><header><h2 id="pairing-title">Approve remote pairing</h2><button aria-label="Close" disabled={working} onClick={()=>setPairing(null)}>×</button></header><p>Confirm the request ID, server fingerprint, and manual code directly with the client before approving. Approval alone does not reveal or redeem the code.</p><label>Type <b>APPROVE REMOTE DEVICE {pairing.id}</b><input autoFocus autoComplete="off" value={confirmation} onChange={event=>setConfirmation(event.target.value)}/></label>{error&&<p className="form-error" role="alert">{error}</p>}<footer><button disabled={working} onClick={()=>setPairing(null)}>Cancel</button><button className="primary" disabled={working||confirmation!==`APPROVE REMOTE DEVICE ${pairing.id}`} onClick={approve}>{working?'Approving…':'Approve pairing'}</button></footer></section></div>}{selected&&<div className="shade" role="presentation" onMouseDown={event=>event.target===event.currentTarget&&!working&&setSelected(null)}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="remote-device-title"><header><h2 id="remote-device-title">{selected.operation.replace('-',' ')} {selected.device.name}</h2><button aria-label="Close" disabled={working} onClick={()=>setSelected(null)}>×</button></header>{selected.operation==='rename'?<label>Device name<input autoFocus maxLength={64} value={name} onChange={event=>setName(event.target.value)}/></label>:selected.operation==='expire'?<><p>Choose a future expiry within one year. Existing sessions remain active until that time.</p><label>New expiry<input autoFocus type="datetime-local" value={expiry} onChange={event=>{setExpiry(event.target.value);setConfirmation('')}}/></label>{phrase&&<label>Type <b>{phrase}</b><input autoComplete="off" value={confirmation} onChange={event=>setConfirmation(event.target.value)}/></label>}</>:<><p>Revocation is permanent and immediately terminates active sessions for this device.</p><label>Type <b>{phrase}</b><input autoFocus autoComplete="off" value={confirmation} onChange={event=>setConfirmation(event.target.value)}/></label></>}{error&&<p className="form-error" role="alert">{error}</p>}<footer><button disabled={working} onClick={()=>setSelected(null)}>Cancel</button><button className={selected.operation==='revoke'?'danger primary':'primary'} disabled={working||(selected.operation==='rename'?!name.trim()||name.length>64:!phrase||confirmation!==phrase)} onClick={save}>{working?'Saving…':selected.operation==='revoke'?'Revoke device':'Save change'}</button></footer></section></div>}</>}
-function Activity({tasks,alerts,audit,connected}:{tasks:TaskFeed|null;alerts:AlertFeed|null;audit:AuditFeed|null;connected:boolean}){const available=[tasks,alerts,audit].filter(Boolean).length;const progress=(task:TaskFeed['tasks'][number])=>Math.min(100,Math.round(task.progress.current/task.progress.total*100));return <><Title title="Activity" copy="Live work, health alerts, and security-relevant history."/><LiveState connected={connected} available={available>0} noun="activity feeds"/>{connected&&available>0&&available<3&&<div className="note"><span><b>Partial data.</b> Available feeds remain visible while an unavailable service is isolated.</span></div>}<div className="twocol"><div className="panel"><Section title="Tasks" copy={tasks?`${tasks.tasks.length} retained`:'Unavailable'}/>{tasks?(tasks.tasks.length===0?<Empty text="No recent tasks."/>:tasks.tasks.map(task=><div className="drive" key={task.id}><b>◔</b><div><strong>{task.kind.replaceAll('-',' ')}</strong><p>{task.progress.current} of {task.progress.total} {task.progress.unit} · Updated {new Date(task.updated_unix*1000).toLocaleString()}</p><div className="milestonebar"><i style={{width:`${progress(task)}%`}}/></div></div><span className={task.state==='succeeded'?'ready':task.state==='running'?'waiting':''}>{task.state}</span></div>)):<Empty text="Task status is unavailable."/>}</div><div className="panel"><Section title="Active alerts" copy={alerts?`${alerts.alerts.length} require review`:'Unavailable'}/>{alerts?(alerts.alerts.length===0?<Empty text="No active health alerts."/>:alerts.alerts.map(alert=><div className="drive" key={alert.id}><b>!</b><div><strong>{alert.kind.replaceAll('-',' ')}</strong><p>First seen {new Date(alert.first_seen_unix*1000).toLocaleString()} · Updated {new Date(alert.last_seen_unix*1000).toLocaleString()}</p></div><span className="waiting">{alert.severity}</span></div>)):<Empty text="Alert status is unavailable."/>}</div></div><div className="panel"><Section title="Audit history" copy={audit?`${audit.events.length} recent events`:'Unavailable'}/>{audit?(audit.events.length===0?<Empty text="No audit events have been recorded."/>:audit.events.map(event=><div className="drive" key={event.id}><b>✓</b><div><strong>{event.category} · {event.action.replaceAll('-',' ')}</strong><p>{new Date(event.occurred_unix*1000).toLocaleString()} · Identifiers and command details are excluded</p></div><span className={event.outcome==='succeeded'?'ready':'waiting'}>{event.outcome}</span></div>)):<Empty text="Audit history is unavailable."/>}</div></>}
-function Settings({data,connected,token,setData,notify}:{data:SettingsFeed|null;connected:boolean;token:string;setData:(value:SettingsFeed|null)=>void;notify:(value:string)=>void}){const [saving,setSaving]=useState(false),[betaAck,setBetaAck]=useState(false),[error,setError]=useState('');const update=async(setting:'automatic_checks'|'channel',value:boolean|'stable'|'beta')=>{if(!data)return;setSaving(true);setError('');try{const response=await fetch('/api/v1/settings',{method:'PUT',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json','Idempotency-Key':crypto.randomUUID(),'If-Match':data.etag},body:JSON.stringify({schema:1,setting,value,beta_risk_acknowledged:value==='beta'&&betaAck})});if(!response.ok)throw new Error(response.status===412?'Settings changed since they were loaded. Review the latest values and try again.':response.status===409?'This change conflicts with an earlier request. Try again.':'Bedrock rejected the policy change.');const refreshed=await fetch('/api/v1/settings',{headers:{Authorization:`Bearer ${token}`},cache:'no-store'});if(!refreshed.ok)throw new Error('The change succeeded, but the refreshed policy is unavailable.');const next=await refreshed.json() as Omit<SettingsFeed,'etag'>;setData({...next,etag:refreshed.headers.get('ETag')??''});setBetaAck(false);notify('Update policy saved')}catch(reason){setError(reason instanceof Error?reason.message:'Policy change failed.')}finally{setSaving(false)}};return <><Title title="Settings" copy="Update and privacy policy for this Bedrock server."/><LiveState connected={connected} available={!!data} noun="settings policy"/>{data&&<><div className="note"><span><b>Safe updates.</b> Bedrock may check automatically, but installation always requires an administrator action after signature verification.</span></div>{error&&<div className="note settings-error" role="alert"><span><b>Change not saved.</b> {error}</span></div>}<div className="panel"><Section title="System policy" copy="Validated and applied by Bedrock"/><div className="drive settings-row"><b>↻</b><div><strong>Release channel</strong><p>{data.updates.channel==='stable'?'Stable releases only':'Beta releases accepted with explicit risk acknowledgement'}</p>{data.updates.channel!=='beta'&&<label className="risk"><input type="checkbox" checked={betaAck} onChange={event=>setBetaAck(event.target.checked)}/> I understand beta releases may be unstable.</label>}</div><div className="settings-actions"><span className={data.updates.channel==='stable'?'ready':'waiting'}>{data.updates.channel}</span>{data.updates.channel==='stable'?<button disabled={saving||!betaAck} onClick={()=>update('channel','beta')}>Use beta</button>:<button disabled={saving} onClick={()=>update('channel','stable')}>Use stable</button>}</div></div><div className="drive settings-row"><b>◔</b><div><strong>Automatic update checks</strong><p>{data.updates.setup_choice_recorded?'Administrator choice recorded':'Waiting for first-run administrator choice'}</p></div><div className="settings-actions"><span className={data.updates.automatic_checks?'ready':'waiting'}>{data.updates.automatic_checks?'Enabled':'Disabled'}</span><button disabled={saving} onClick={()=>update('automatic_checks',!data.updates.automatic_checks)}>{data.updates.automatic_checks?'Disable':'Enable'}</button></div></div><div className="drive"><b>↓</b><div><strong>Automatic installation</strong><p>Updates require an explicit administrator action after signature verification.</p></div><span className="ready">Never</span></div><div className="drive"><b>○</b><div><strong>Telemetry</strong><p>Bedrock does not send usage or diagnostic data automatically.</p></div><span className="ready">Disabled</span></div></div></>}</>}
-function Users({data,connected}:{data:UserFeed|null;connected:boolean}){return <><Title title="Users" copy="Managed storage accounts, groups, and credential-rotation status."/><LiveState connected={connected} available={!!data} noun="user and group inventory"/><div className="note"><span><b>Protected identities.</b> User and group creation and group membership are available here; credential rotation remains a guarded root-staged operation.</span></div>{data&&<><div className="metrics hardwaremetrics"><Metric l="USERS" v={String(data.users.length)} s="managed accounts" w={data.users.length?'100%':'0%'} tip="Accounts created through Bedrock storage management."/><Metric l="GROUPS" v={String(data.groups.length)} s="access groups" w={data.groups.length?'100%':'0%'} tip="Groups used to grant dataset and share access."/><Metric l="ROTATED" v={String(data.users.filter(user=>user.credential_rotated_unix!==null).length)} s="credentials renewed" w={data.users.length?`${Math.round(data.users.filter(user=>user.credential_rotated_unix!==null).length/data.users.length*100)}%`:'0%'} tip="Accounts whose managed storage credential has been rotated at least once."/></div><div className="twocol"><div className="panel"><Section title="Accounts" copy={`${data.users.length} configured`}/>{data.users.length===0?<Empty text="No managed storage accounts."/>:data.users.map(user=><div className="drive" key={user.name}><b>♧</b><div><strong>{user.name}</strong><p>Created {new Date(user.created_unix*1000).toLocaleDateString()} · Credential generation {user.credential_generation}</p></div><span className={user.credential_rotated_unix!==null?'ready':'waiting'}>{user.credential_rotated_unix===null?'Not rotated':`Rotated ${new Date(user.credential_rotated_unix*1000).toLocaleDateString()}`}</span></div>)}</div><div className="panel"><Section title="Groups" copy={`${data.groups.length} configured`}/>{data.groups.length===0?<Empty text="No access groups."/>:data.groups.map(group=><div className="drive" key={group.name}><b>◎</b><div><strong>{group.name}</strong><p>Created {new Date(group.created_unix*1000).toLocaleDateString()}</p></div><span>{group.member_count} member{group.member_count===1?'':'s'}</span></div>)}</div></div></>}<div className="note"><Tip>Member identities and share permissions are intentionally excluded from this summary.</Tip><span><b>Credentials stay private.</b> Passwords and hashes are never returned to the interface.</span></div></>}
-function Help(){const root='https://github.com/DEADish1/bedrock-os/blob/codex/latest-update/';const links=[['Install Bedrock','docs/INSTALLATION.md','Prepare verified media and install safely.'],['First-run setup','docs/FIRST-RUN-SETUP.md','Configure the administrator, network, time, and updates.'],['Administration','docs/ADMINISTRATION.md','Operate storage, guests, apps, backups, and updates.'],['Troubleshooting','docs/TROUBLESHOOTING.md','Diagnose problems without risking data.'],['Privacy and diagnostics','docs/DIAGNOSTICS.md','Review and create a consent-gated redacted support bundle.'],['Support policy','SUPPORT.md','Understand support boundaries and security reporting.']];return <><Title title="Help" copy="Bedrock operating guides and safe recovery paths."/><div className="panel helplinks"><Section title="Documentation" copy="Version-controlled project guidance"/>{links.map(([title,path,copy])=><a className="drive" href={`${root}${path}`} target="_blank" rel="noreferrer" key={path}><b>↗</b><div><strong>{title}</strong><p>{copy}</p></div><span>Open</span></a>)}</div><div className="note"><Tip>A diagnostic bundle excludes user files, credentials, pairing state, API tokens, command arguments, and raw logs.</Tip><span><b>Need support?</b> Start with Troubleshooting, then review the diagnostic bundle before sharing it.</span></div></>}
-function ProjectStatus(){const versions=[
- {v:'0.1',name:'Product definition',state:'Complete',done:8,total:8,items:['Brand and product language','Interactive product prototype','Versioned roadmap and update log','Hardware and architecture decisions']},
- {v:'0.2',name:'Bootable foundation',state:'Current',done:7,total:8,items:['Debian 13 base and kernel policy','UEFI boot and diagnostics','Immutable A/B system disk','Bootable ISO and USB image','Signed updates and rollback','Hardware discovery','Reproducible CI builds','Physical and VM platform tests']},
- {v:'0.3',name:'Installer and setup',state:'In progress',done:6,total:8,items:['Windows, macOS, and Linux installer','Safe target-drive confirmation','Verified media writing','First-run server setup']},
- {v:'0.4',name:'Storage and NAS',state:'Complete',done:10,total:10,items:['Storage pools and disk health','Software RAID and RAID-Z','Hardware RAID controller support','SMB, NFS, and Time Machine','Datasets, snapshots, and quotas','Users, groups, ACLs, and credentials','Guided create and expansion','Scrub, export, and safe import','Drive-failure replacement and rebuild','Interruption and integrity recovery']},
- {v:'0.5',name:'VMs and images',state:'Acceptance pending',done:8,total:8,items:['KVM/QEMU integration','VM lifecycle and snapshots','GPU and USB passthrough','Image import and conversion']},
- {v:'0.6',name:'Interface and API',state:'In progress',done:1,total:7,items:['Advanced details preserve health and safety','Authenticated server API','Real telemetry and tasks','Complete management areas']},
- {v:'0.7',name:'Remote clients',state:'In progress',done:1,total:8,items:['Encrypted remote transport threat model','QR and code pairing','Google identity option','Signed Windows and macOS clients']},
- {v:'0.8',name:'Backup and recovery',state:'In progress',done:5,total:7,items:['Encrypted backup and restore','Configuration recovery','Application isolation','Actionable health notifications','Consent-gated redacted diagnostics','UPS and maintenance safety','Full restore drills']},
- {v:'0.9',name:'Release candidate',state:'In progress',done:3,total:8,items:['Frozen 1.0 scope and hardware matrix','Complete operating and recovery documentation','License, privacy, support, and issue policies','Upgrade testing','Soak and failure testing','Security review and SBOM','Signed release candidate','Beta triage and checksums']},
- {v:'1.0',name:'Ready to ship',state:'Ship gate',done:0,total:8,items:['Signed OS and installers','Signed desktop clients','Public source and releases','Final acceptance and launch']}
- ];return <><Title title="Project status" copy="The path from product definition to a fully functional, ready-to-ship Bedrock 1.0." action={<span className="versionbadge">Current version <b>0.2.0-dev</b></span>}/><div className="progresshero"><div><div className="kicker">RELEASE PROGRESS</div><h2>Accessible advanced system details</h2><p>49 of 80 tracked release requirements are complete.</p></div><div className="bigprogress"><span style={{width:'61%'}}/></div><b>61%</b></div><div className="roadmap">{versions.map(x=><article className={x.state==='Current'?'current':''} key={x.v}><header><span>v{x.v}</span><div><h2>{x.name}</h2><p>{x.state} · {x.done} of {x.total} complete</p></div><b>{x.state==='Current'||x.state==='In progress'||x.state==='Acceptance pending'?'IN PROGRESS':x.state==='Complete'?'COMPLETE':x.state==='Ship gate'?'SHIP GATE':'PLANNED'}</b></header><div className="milestonebar"><i style={{width:`${x.done/x.total*100}%`}}/></div><ul>{x.items.map((item,i)=><li className={i<x.done?'complete':''} key={item}><span>{i<x.done?'✓':'○'}</span>{item}</li>)}</ul></article>)}</div><div className="updatepanel"><div><div className="kicker">LATEST UPDATE · 2026-09-13</div><h2>Accessible advanced system details</h2><p>Hardware and Storage now reveal optional privacy-safe topology and diagnostic detail with native keyboard controls while keeping health, compatibility, rebuild state, and destructive warnings visible at all times.</p></div><div><strong>Physical acceptance gates remain</strong><p>v0.2 still needs VMware, Hyper-V, physical Intel, and physical AMD boot reports. v0.3 needs disposable USB and system-disk evidence; v0.5 needs Linux and Windows guest evidence.</p></div></div><div className="note"><Tip>The complete checklist and change history live in PROJECT-ROADMAP.md and CHANGELOG.md in the project source.</Tip><span><b>Reviewable by design.</b> Each release must update the checklist, update log, website status, version metadata, and artifact checksums.</span></div></>}
+function StorageProvisioning({
+  data,
+  token,
+  setData,
+  notify,
+}: {
+  data: StorageFeed | null;
+  token: string;
+  setData: (value: StorageFeed | null) => void;
+  notify: (value: string) => void;
+}) {
+  type Operation = "create" | "expand" | "replace";
+  const [operation, setOperation] = useState<Operation>("create"),
+    [name, setName] = useState(""),
+    [backend, setBackend] = useState<"zfs" | "mdraid">("zfs"),
+    [layout, setLayout] = useState("mirror"),
+    [poolName, setPoolName] = useState(""),
+    [diskIds, setDiskIds] = useState<string[]>([]),
+    [oldDisk, setOldDisk] = useState(""),
+    [newDisk, setNewDisk] = useState(""),
+    [confirmation, setConfirmation] = useState(""),
+    [working, setWorking] = useState(false),
+    [error, setError] = useState("");
+  if (!data) return null;
+  const available = data.disk_candidates.filter((item) => item.eligible),
+    pool = data.managed_pools.find((item) => item.name === poolName),
+    target = operation === "create" ? name : poolName,
+    ids = diskIds.join(","),
+    selectedLayout = operation === "create" ? layout : (pool?.layout ?? ""),
+    minimum =
+      selectedLayout === "raidz2" ||
+      selectedLayout === "raid6" ||
+      selectedLayout === "raid10"
+        ? 4
+        : selectedLayout === "raidz1" || selectedLayout === "raid5"
+          ? 3
+          : 2,
+    validCount =
+      operation === "expand" && pool?.backend === "mdraid"
+        ? diskIds.length >= 1
+        : diskIds.length >= minimum &&
+          (selectedLayout !== "raid10" || diskIds.length % 2 === 0) &&
+          (selectedLayout !== "mirror" || diskIds.length <= 3),
+    validName =
+      /^[a-z][a-z0-9_-]{0,31}$/.test(name) &&
+      !data.managed_pools.some((item) => item.name === name),
+    phrase =
+      operation === "create" && validName && validCount
+        ? `CREATE STORAGE ${name} USING ${ids}`
+        : operation === "expand" && pool && validCount
+          ? `EXPAND STORAGE ${poolName} USING ${ids}`
+          : operation === "replace" && pool && oldDisk && newDisk
+            ? `REPLACE STORAGE ${poolName} MEMBER ${oldDisk} WITH ${newDisk}`
+            : "",
+    layouts =
+      backend === "zfs"
+        ? ["mirror", "raidz1", "raidz2"]
+        : ["raid1", "raid5", "raid6", "raid10"];
+  const reset = () => {
+    setDiskIds([]);
+    setOldDisk("");
+    setNewDisk("");
+    setConfirmation("");
+    setError("");
+  };
+  const toggle = (id: string) =>
+    setDiskIds((value) =>
+      value.includes(id) ? value.filter((item) => item !== id) : [...value, id],
+    );
+  const apply = async () => {
+    if (!phrase || confirmation !== phrase) return;
+    setWorking(true);
+    setError("");
+    try {
+      const url =
+          operation === "create"
+            ? "/api/v1/storage"
+            : `/api/v1/storage/${poolName}/${operation}`,
+        body =
+          operation === "create"
+            ? {
+                schema: 1,
+                id: name,
+                backend,
+                layout,
+                disk_ids: diskIds,
+                confirmation,
+              }
+            : operation === "expand"
+              ? { schema: 1, disk_ids: diskIds, confirmation }
+              : {
+                  schema: 1,
+                  old_disk_id: oldDisk,
+                  new_disk_id: newDisk,
+                  confirmation,
+                };
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
+          "If-Match": data?.etag ?? "",
+        },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok)
+        throw new Error(
+          response.status === 412
+            ? "Storage changed since it was loaded. Review the latest state and try again."
+            : response.status === 422
+              ? "Disk eligibility or storage state changed. Refresh and review before trying again."
+              : "Bedrock rejected the storage change.",
+        );
+      const refreshed = await fetch("/api/v1/storage", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (!refreshed.ok)
+        throw new Error(
+          "The change completed, but refreshed storage status is unavailable.",
+        );
+      const next = (await refreshed.json()) as Omit<StorageFeed, "etag">;
+      setData({ ...next, etag: refreshed.headers.get("ETag") ?? "" });
+      reset();
+      setName("");
+      setPoolName("");
+      notify(`Storage ${operation} completed`);
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Storage change failed.",
+      );
+    } finally {
+      setWorking(false);
+    }
+  };
+  return (
+    <div className="panel resource-editor">
+      <Section
+        title="Change protected storage"
+        copy="Create, expand, or replace disks using privacy-safe identities"
+      />
+      <div className="resource-fields">
+        <label>
+          Change
+          <select
+            value={operation}
+            onChange={(event) => {
+              setOperation(event.target.value as Operation);
+              reset();
+            }}
+          >
+            <option value="create">Create protected storage</option>
+            <option value="expand">Expand storage</option>
+            <option value="replace">Replace a member</option>
+          </select>
+        </label>
+        {operation === "create" ? (
+          <>
+            <label>
+              Name
+              <input
+                value={name}
+                maxLength={32}
+                placeholder="media"
+                onChange={(event) => {
+                  setName(event.target.value.toLowerCase());
+                  setConfirmation("");
+                }}
+              />
+            </label>
+            <label>
+              Technology
+              <select
+                value={backend}
+                onChange={(event) => {
+                  const value = event.target.value as "zfs" | "mdraid";
+                  setBackend(value);
+                  setLayout(value === "zfs" ? "mirror" : "raid1");
+                  setConfirmation("");
+                }}
+              >
+                <option value="zfs">ZFS</option>
+                <option value="mdraid">Linux RAID</option>
+              </select>
+            </label>
+            <label>
+              Protection
+              <select
+                value={layout}
+                onChange={(event) => {
+                  setLayout(event.target.value);
+                  setConfirmation("");
+                }}
+              >
+                {layouts.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </>
+        ) : (
+          <label>
+            Storage group
+            <select
+              value={poolName}
+              onChange={(event) => {
+                setPoolName(event.target.value);
+                reset();
+              }}
+            >
+              <option value="">Choose protected storage</option>
+              {data.managed_pools
+                .filter((item) =>
+                  operation === "expand"
+                    ? item.state === "online"
+                    : item.state === "online" || item.state === "degraded",
+                )
+                .map((item) => (
+                  <option key={item.name} value={item.name}>
+                    {item.name} · {item.backend} {item.layout}
+                  </option>
+                ))}
+            </select>
+          </label>
+        )}
+      </div>
+      {operation === "replace" && pool && (
+        <div className="resource-fields">
+          <label>
+            Current member
+            <select
+              value={oldDisk}
+              onChange={(event) => {
+                setOldDisk(event.target.value);
+                setConfirmation("");
+              }}
+            >
+              <option value="">Choose member</option>
+              {pool.members.map((id) => (
+                <option key={id} value={id}>
+                  {id}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Replacement disk
+            <select
+              value={newDisk}
+              onChange={(event) => {
+                setNewDisk(event.target.value);
+                setConfirmation("");
+              }}
+            >
+              <option value="">Choose healthy unused disk</option>
+              {available.map((disk) => (
+                <option key={disk.id} value={disk.id}>
+                  {disk.model} · {capacityLabel(disk.size_bytes)} · {disk.id}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      )}
+      {operation !== "replace" && (
+        <div className="candidate-list" aria-label="Available storage disks">
+          {available.length === 0 ? (
+            <Empty text="No healthy unused disks are available." />
+          ) : (
+            available.map((disk) => (
+              <label key={disk.id} className="drive">
+                <input
+                  type="checkbox"
+                  checked={diskIds.includes(disk.id)}
+                  onChange={() => {
+                    toggle(disk.id);
+                    setConfirmation("");
+                  }}
+                />
+                <div>
+                  <strong>{disk.model}</strong>
+                  <p>
+                    {capacityLabel(disk.size_bytes)} · {disk.transport} ·{" "}
+                    {disk.id}
+                  </p>
+                </div>
+                <span className="ready">healthy</span>
+              </label>
+            ))
+          )}
+        </div>
+      )}
+      {operation !== "replace" && diskIds.length > 0 && !validCount && (
+        <p className="form-error" role="status">
+          This protection layout needs a valid complete disk set before
+          confirmation.
+        </p>
+      )}
+      {phrase && (
+        <>
+          <div className="note">
+            <span>
+              <b>Permanent storage change.</b> Creating, expanding, or replacing
+              can erase selected disks. Confirm that a current backup exists.
+            </span>
+          </div>
+          <label className="resource-confirm">
+            Type <b>{phrase}</b>
+            <input
+              autoComplete="off"
+              value={confirmation}
+              onChange={(event) => setConfirmation(event.target.value)}
+              onKeyDown={(event) =>
+                event.key === "Enter" && confirmation === phrase && apply()
+              }
+            />
+          </label>
+        </>
+      )}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+      <button
+        className="primary"
+        disabled={working || !target || !phrase || confirmation !== phrase}
+        onClick={apply}
+      >
+        {working
+          ? "Applying…"
+          : operation === "create"
+            ? "Erase disks and create storage"
+            : operation === "expand"
+              ? "Expand protected storage"
+              : "Replace storage member"}
+      </button>
+    </div>
+  );
+}
+export default function Home() {
+  const [page, setPage] = useState("Overview"),
+    [toast, setToast] = useState("");
+  const [token, setToken] = useState(""),
+    [authToken, setAuthToken] = useState(""),
+    [connection, setConnection] = useState<
+      "idle" | "loading" | "connected" | "offline" | "reconnecting" | "error"
+    >("idle"),
+    [dashboard, setDashboard] = useState<DashboardData | null>(null),
+    [apps, setApps] = useState<AppFeed | null>(null),
+    [backups, setBackups] = useState<BackupFeed | null>(null),
+    [hardware, setHardware] = useState<HardwareData | null>(null),
+    [vms, setVms] = useState<VmFeed | null>(null),
+    [passthrough, setPassthrough] = useState<PassthroughFeed | null>(null),
+    [images, setImages] = useState<ImageFeed | null>(null),
+    [storage, setStorage] = useState<StorageFeed | null>(null),
+    [remote, setRemote] = useState<RemoteDeviceFeed | null>(null),
+    [tasks, setTasks] = useState<TaskFeed | null>(null),
+    [alerts, setAlerts] = useState<AlertFeed | null>(null),
+    [audit, setAudit] = useState<AuditFeed | null>(null),
+    [settings, setSettings] = useState<SettingsFeed | null>(null),
+    [users, setUsers] = useState<UserFeed | null>(null);
+  const notify = (s: string) => {
+    setToast(s);
+    setTimeout(() => setToast(""), 2400);
+  };
+  const connect = async (automatic = false) => {
+    const credential = token || authToken;
+    if (!credential) return;
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      setConnection("offline");
+      return;
+    }
+    setConnection(automatic ? "reconnecting" : "loading");
+    const headers = { Authorization: `Bearer ${credential}` };
+    try {
+      const [
+        dashboardResponse,
+        appsResponse,
+        backupsResponse,
+        hardwareResponse,
+        vmsResponse,
+        passthroughResponse,
+        imagesResponse,
+        storageResponse,
+        remoteResponse,
+        tasksResponse,
+        alertsResponse,
+        auditResponse,
+        settingsResponse,
+        usersResponse,
+      ] = await Promise.all([
+        fetch("/api/v1/dashboard", { headers, cache: "no-store" }),
+        fetch("/api/v1/apps", { headers, cache: "no-store" }),
+        fetch("/api/v1/backups", { headers, cache: "no-store" }),
+        fetch("/api/v1/hardware", { headers, cache: "no-store" }),
+        fetch("/api/v1/vms", { headers, cache: "no-store" }),
+        fetch("/api/v1/virtualization/passthrough-candidates", {
+          headers,
+          cache: "no-store",
+        }),
+        fetch("/api/v1/images", { headers, cache: "no-store" }),
+        fetch("/api/v1/storage", { headers, cache: "no-store" }),
+        fetch("/api/v1/remote/devices", { headers, cache: "no-store" }),
+        fetch("/api/v1/tasks", { headers, cache: "no-store" }),
+        fetch("/api/v1/alerts", { headers, cache: "no-store" }),
+        fetch("/api/v1/audit", { headers, cache: "no-store" }),
+        fetch("/api/v1/settings", { headers, cache: "no-store" }),
+        fetch("/api/v1/users", { headers, cache: "no-store" }),
+      ]);
+      if (dashboardResponse.status === 401 || dashboardResponse.status === 403)
+        throw new Error("unauthorized");
+      if (!dashboardResponse.ok) throw new Error("unavailable");
+      const value = (await dashboardResponse.json()) as DashboardData;
+      if (
+        value.schema !== 1 ||
+        typeof value.partial !== "boolean" ||
+        !value.components
+      )
+        throw new Error("invalid");
+      setDashboard(value);
+      if (appsResponse.ok) {
+        const next = (await appsResponse.json()) as Omit<AppFeed, "etag">;
+        setApps({ ...next, etag: appsResponse.headers.get("ETag") ?? "" });
+      } else setApps(null);
+      if (backupsResponse.ok) {
+        const next = (await backupsResponse.json()) as Omit<BackupFeed, "etag">;
+        setBackups({
+          ...next,
+          etag: backupsResponse.headers.get("ETag") ?? "",
+        });
+      } else setBackups(null);
+      setHardware(
+        hardwareResponse.ok
+          ? ((await hardwareResponse.json()) as HardwareData)
+          : null,
+      );
+      if (vmsResponse.ok) {
+        const next = (await vmsResponse.json()) as Omit<VmFeed, "etag">;
+        setVms({ ...next, etag: vmsResponse.headers.get("ETag") ?? "" });
+      } else setVms(null);
+      setPassthrough(
+        passthroughResponse.ok
+          ? ((await passthroughResponse.json()) as PassthroughFeed)
+          : null,
+      );
+      if (imagesResponse.ok) {
+        const next = (await imagesResponse.json()) as Omit<ImageFeed, "etag">;
+        setImages({ ...next, etag: imagesResponse.headers.get("ETag") ?? "" });
+      } else setImages(null);
+      if (storageResponse.ok) {
+        const next = (await storageResponse.json()) as Omit<
+          StorageFeed,
+          "etag"
+        >;
+        setStorage({
+          ...next,
+          etag: storageResponse.headers.get("ETag") ?? "",
+        });
+      } else setStorage(null);
+      if (remoteResponse.ok) {
+        const next = (await remoteResponse.json()) as Omit<
+          RemoteDeviceFeed,
+          "etag"
+        >;
+        setRemote({ ...next, etag: remoteResponse.headers.get("ETag") ?? "" });
+      } else setRemote(null);
+      setTasks(
+        tasksResponse.ok ? ((await tasksResponse.json()) as TaskFeed) : null,
+      );
+      setAlerts(
+        alertsResponse.ok ? ((await alertsResponse.json()) as AlertFeed) : null,
+      );
+      setAudit(
+        auditResponse.ok ? ((await auditResponse.json()) as AuditFeed) : null,
+      );
+      if (settingsResponse.ok) {
+        const next = (await settingsResponse.json()) as Omit<
+          SettingsFeed,
+          "etag"
+        >;
+        setSettings({
+          ...next,
+          etag: settingsResponse.headers.get("ETag") ?? "",
+        });
+      } else setSettings(null);
+      if (usersResponse.ok) {
+        const next = (await usersResponse.json()) as Omit<UserFeed, "etag">;
+        setUsers({ ...next, etag: usersResponse.headers.get("ETag") ?? "" });
+      } else setUsers(null);
+      setAuthToken(credential);
+      setToken("");
+      setConnection("connected");
+    } catch (reason) {
+      if (reason instanceof Error && reason.message === "unauthorized") {
+        setDashboard(null);
+        setApps(null);
+        setBackups(null);
+        setHardware(null);
+        setVms(null);
+        setPassthrough(null);
+        setImages(null);
+        setStorage(null);
+        setRemote(null);
+        setTasks(null);
+        setAlerts(null);
+        setAudit(null);
+        setSettings(null);
+        setUsers(null);
+        setAuthToken("");
+        setToken("");
+        setConnection("error");
+      } else if (authToken) {
+        setConnection("offline");
+      } else {
+        setToken("");
+        setConnection("error");
+      }
+    }
+  };
+  const reconnect = useEffectEvent(() => void connect(true));
+  useEffect(() => {
+    if (!authToken) return;
+    const online = () => reconnect(),
+      offline = () => setConnection("offline");
+    window.addEventListener("online", online);
+    window.addEventListener("offline", offline);
+    const refresh = window.setInterval(() => {
+      if (document.visibilityState === "visible") reconnect();
+    }, 30000);
+    return () => {
+      window.removeEventListener("online", online);
+      window.removeEventListener("offline", offline);
+      window.clearInterval(refresh);
+    };
+  }, [authToken]);
+  return (
+    <main className="shell">
+      <aside>
+        <button
+          className="logo"
+          onClick={() => setPage("Overview")}
+          aria-label="Bedrock home"
+        >
+          <img
+            src="/brand/logo-horizontal-static.svg"
+            alt="Bedrock Server OS"
+          />
+        </button>
+        <p>SYSTEM</p>
+        {[
+          ["⌂", "Overview"],
+          ["▣", "Virtual machines"],
+          ["◫", "Storage"],
+          ["◉", "Image library"],
+          ["⬡", "Apps"],
+          ["↻", "Backup"],
+          ["◔", "Activity"],
+        ].map((x) => (
+          <button
+            className={page === x[1] ? "active" : ""}
+            key={x[1]}
+            onClick={() => setPage(x[1])}
+          >
+            <i>{x[0]}</i>
+            {x[1]}
+            {x[1] === "Virtual machines" && vms && (
+              <em>{vms.domains.length}</em>
+            )}
+          </button>
+        ))}
+        <p>MANAGE</p>
+        {[
+          ["⌁", "Remote access"],
+          ["♧", "Users"],
+          ["▤", "Hardware"],
+          ["☷", "Project status"],
+          ["⚙", "Settings"],
+          ["?", "Help"],
+        ].map((x) => (
+          <button
+            className={page === x[1] ? "active" : ""}
+            key={x[1]}
+            onClick={() => setPage(x[1])}
+          >
+            <i>{x[0]}</i>
+            {x[1]}
+          </button>
+        ))}
+        <footer>
+          <span className={connection === "connected" ? "online" : ""} />
+          <div>
+            <strong>
+              {connection === "connected"
+                ? "Bedrock connected"
+                : connection === "reconnecting"
+                  ? "Reconnecting…"
+                  : connection === "offline"
+                    ? "Bedrock offline"
+                    : "Bedrock management"}
+            </strong>
+            <small>
+              {connection === "offline"
+                ? "Changes are paused"
+                : "Authenticated local API"}
+            </small>
+          </div>
+        </footer>
+      </aside>
+      <section className="work">
+        <header>
+          <div>
+            home-server <span>/</span> <strong>{page}</strong>
+          </div>
+          <nav>
+            ⌕　◔　<b>DM</b>
+          </nav>
+        </header>
+        <div
+          className={`content ${connection === "offline" || connection === "reconnecting" ? "management-paused" : ""}`}
+        >
+          {page === "Overview" && (
+            <Overview
+              create={() => setPage("Virtual machines")}
+              download={() => setPage("Get Bedrock")}
+              token={token}
+              setToken={setToken}
+              connection={connection}
+              connect={() => void connect()}
+              dashboard={dashboard}
+            />
+          )}
+          {page === "Virtual machines" && (
+            <>
+              <VMs
+                data={vms}
+                connected={connection === "connected"}
+                token={authToken}
+                setData={setVms}
+                notify={notify}
+              />
+              <VMCreateEditor
+                data={vms}
+                token={authToken}
+                setData={setVms}
+                notify={notify}
+              />
+              <VMResourceEditor
+                data={vms}
+                token={authToken}
+                setData={setVms}
+                notify={notify}
+              />
+              <VMAttachmentEditor
+                data={vms}
+                images={images}
+                token={authToken}
+                setData={setVms}
+                notify={notify}
+              />
+              <VMPassthroughEditor
+                data={vms}
+                candidates={passthrough}
+                token={authToken}
+                setCandidates={setPassthrough}
+                notify={notify}
+              />
+            </>
+          )}
+          {page === "Storage" && (
+            <>
+              <Storage data={storage} connected={connection === "connected"} />
+              <StorageAdvanced data={storage} />
+              <StorageProvisioning
+                data={storage}
+                token={authToken}
+                setData={setStorage}
+                notify={notify}
+              />
+              <StorageActions
+                data={storage}
+                token={authToken}
+                setData={setStorage}
+                notify={notify}
+              />
+            </>
+          )}
+          {page === "Image library" && (
+            <Images
+              data={images}
+              connected={connection === "connected"}
+              token={authToken}
+              setData={setImages}
+              notify={notify}
+            />
+          )}
+          {page === "Apps" && (
+            <AppControls
+              data={apps}
+              connected={connection === "connected"}
+              token={authToken}
+              setData={setApps}
+              notify={notify}
+            />
+          )}
+          {page === "Backup" && (
+            <BackupControls
+              data={backups}
+              connected={connection === "connected"}
+              token={authToken}
+              setData={setBackups}
+              notify={notify}
+            />
+          )}
+          {page === "Hardware" && (
+            <Hardware data={hardware} connected={connection === "connected"} />
+          )}
+          {page === "Remote access" && (
+            <Remote
+              data={remote}
+              connected={connection === "connected"}
+              token={authToken}
+              setData={setRemote}
+              notify={notify}
+            />
+          )}
+          {page === "Activity" && (
+            <Activity
+              tasks={tasks}
+              alerts={alerts}
+              audit={audit}
+              connected={connection === "connected"}
+            />
+          )}
+          {page === "Settings" && (
+            <Settings
+              data={settings}
+              connected={connection === "connected"}
+              token={authToken}
+              setData={setSettings}
+              notify={notify}
+            />
+          )}
+          {page === "Help" && <Help />}
+          {page === "Users" && (
+            <>
+              <Users data={users} connected={connection === "connected"} />
+              <NasIdentityActions
+                data={users}
+                token={authToken}
+                setData={setUsers}
+                notify={notify}
+              />
+              <NasMembershipActions
+                data={users}
+                token={authToken}
+                setData={setUsers}
+                notify={notify}
+              />
+              <NasCredentialActions
+                data={users}
+                token={authToken}
+                setData={setUsers}
+                notify={notify}
+              />
+            </>
+          )}
+          {page === "Project status" && <ProjectStatus />}
+          {page === "Get Bedrock" && <Download notify={notify} />}
+        </div>
+      </section>
+      {toast && (
+        <div className="toast" role="status" aria-live="polite">
+          ✓ {toast}
+        </div>
+      )}
+    </main>
+  );
+}
+function Title({
+  title,
+  copy,
+  action,
+}: {
+  title: string;
+  copy: string;
+  action?: React.ReactNode;
+}) {
+  return (
+    <div className="title">
+      <div>
+        <h1>{title}</h1>
+        <p>{copy}</p>
+      </div>
+      {action}
+    </div>
+  );
+}
+type DashboardData = {
+  schema: 1;
+  partial: boolean;
+  components: Record<
+    string,
+    { status: string; data?: Record<string, unknown> }
+  >;
+};
+type AppSummary = {
+  id: string;
+  name: string;
+  network: "none" | "bridge";
+  port_count: number;
+  resources: { cpus: number; memory_mib: number; pids: number };
+  update_policy: "manual" | "notify";
+};
+type AppFeed = {
+  schema: 1;
+  etag: string;
+  apps: Array<
+    AppSummary & {
+      created_unix: number;
+      running: boolean;
+      update_available: boolean;
+    }
+  >;
+  install_candidates: Array<AppSummary>;
+};
+type BackupSummary = {
+  id: string;
+  name: string;
+  kind: "local" | "remote";
+  schedule: {
+    frequency: "daily" | "weekly";
+    hour_utc: number;
+    weekday: number | null;
+  };
+  retention: { daily: number; weekly: number; monthly: number };
+};
+type BackupFeed = {
+  schema: 1;
+  etag: string;
+  plans: Array<
+    BackupSummary & {
+      created_unix: number;
+      last_success_unix: number | null;
+      has_snapshot: boolean;
+    }
+  >;
+  create_candidates: Array<BackupSummary>;
+};
+type HardwareData = {
+  schema: 1;
+  cpu: {
+    architecture: string;
+    model: string;
+    logical_processors: number;
+    sockets: number;
+    cores_per_socket: number;
+    threads_per_core: number;
+    virtualization: string;
+    virtualization_supported: boolean;
+  };
+  memory: { total_bytes: number };
+  disks: Array<{
+    model: string;
+    vendor: string;
+    size_bytes: number;
+    rotational: boolean;
+    transport: string;
+    removable: boolean;
+  }>;
+  storage_controllers: Array<{ class: string; description: string }>;
+  networks: Array<{ mtu: number; state: string; link_type: string }>;
+  gpus: Array<{
+    vendor: string;
+    driver: string;
+    boot_vga: boolean;
+    recognized_vendor: boolean;
+  }>;
+  usb_device_count: number;
+};
+type VmFeed = {
+  etag: string;
+  schema: 1;
+  generated_unix: number;
+  domains: Array<{
+    name: string;
+    state:
+      | "running"
+      | "paused"
+      | "shut off"
+      | "crashed"
+      | "in shutdown"
+      | "pmsuspended";
+    autostart: boolean;
+    vcpus: number;
+    memory_mib: number;
+    boot_order: ["disk"] | ["cdrom", "disk"];
+    snapshot_count: number;
+    snapshots: string[];
+    image_attachments: string[];
+    network_attachments: string[];
+  }>;
+};
+type PassthroughFeed = {
+  schema: 1;
+  gpus: Array<{
+    id: string;
+    vendor: string;
+    device_id: string;
+    devices: string[];
+  }>;
+  usb_devices: Array<{ id: string; vendor_id: string; product_id: string }>;
+  assignments: Array<{ vm: string; kind: "gpu" | "usb"; devices: string[] }>;
+};
+type ImageFeed = {
+  etag: string;
+  schema: 1;
+  images: Array<{
+    name: string;
+    type: "iso" | "img" | "qcow2" | "vhdx" | "vmdk";
+    sha256: string;
+    size_bytes: number;
+    converted: boolean;
+  }>;
+  upload_candidates: Array<{
+    name: string;
+    type: "iso" | "img" | "qcow2" | "vhdx" | "vmdk";
+    sha256: string;
+    size_bytes: number;
+  }>;
+};
+type StorageFeed = {
+  etag: string;
+  schema: 1;
+  generated_unix: number;
+  overall: "healthy" | "attention" | "limited";
+  disks: Array<{
+    model: string;
+    size_bytes: number;
+    transport: string;
+    smart: {
+      available: boolean;
+      temperature_c: number | null;
+      power_on_hours: number | null;
+      health: "healthy" | "failing" | "standby" | "unknown";
+    };
+  }>;
+  disk_candidates: Array<{
+    id: string;
+    model: string;
+    size_bytes: number;
+    transport: string;
+    health: "healthy" | "failing" | "standby" | "unknown";
+    eligible: boolean;
+    reason:
+      | "available"
+      | "system"
+      | "removable"
+      | "mounted"
+      | "read-only"
+      | "managed"
+      | "too-small"
+      | "failing"
+      | "health-unknown";
+  }>;
+  managed_pools: Array<{
+    name: string;
+    backend: "zfs" | "mdraid";
+    layout: string;
+    state: "online" | "degraded" | "rebuilding" | "exported";
+    members: string[];
+  }>;
+  software_raid: {
+    md_arrays: Array<{
+      name: string;
+      level: string;
+      state: string;
+      expected_members: number;
+      active_members: number;
+      health: "healthy" | "degraded" | "unknown";
+      sync: {
+        action: null | "recovery" | "resync" | "reshape" | "check";
+        percent: number;
+      };
+    }>;
+    zfs: {
+      available: boolean;
+      pools: Array<{
+        name: string;
+        size_bytes: number;
+        allocated_bytes: number;
+        free_bytes: number;
+        health: string;
+        status: "healthy" | "degraded" | "failing" | "unknown";
+      }>;
+    };
+  };
+  hardware_raid: {
+    controller_count: number;
+    full_visibility_count: number;
+    attention_count: number;
+  };
+};
+type RemoteDeviceFeed = {
+  schema: 1;
+  etag: string;
+  devices: Array<{
+    id: string;
+    name: string;
+    created_unix: number;
+    expires_unix: number;
+    revoked: boolean;
+    expired: boolean;
+    last_seen_unix: number | null;
+  }>;
+  pending_requests: Array<{
+    id: string;
+    approved: boolean;
+    expires_in_seconds: number;
+  }>;
+};
+type TaskFeed = {
+  schema: 1;
+  generated_unix: number;
+  tasks: Array<{
+    id: string;
+    kind: string;
+    state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+    created_unix: number;
+    updated_unix: number;
+    progress: {
+      current: number;
+      total: number;
+      unit: "bytes" | "items" | "percent" | "steps";
+    };
+  }>;
+};
+type AlertFeed = {
+  schema: 1;
+  generated_unix: number;
+  attention_required: boolean;
+  alerts: Array<{
+    id: string;
+    kind: string;
+    severity: "warning" | "critical";
+    first_seen_unix: number;
+    last_seen_unix: number;
+  }>;
+};
+type AuditFeed = {
+  schema: 1;
+  events: Array<{
+    id: string;
+    category: string;
+    action: string;
+    outcome: "succeeded" | "failed" | "denied";
+    occurred_unix: number;
+  }>;
+};
+type SettingsFeed = {
+  schema: 1;
+  updates: {
+    automatic_checks: boolean;
+    setup_choice_recorded: boolean;
+    channel: "stable" | "beta";
+    automatic_install: false;
+  };
+  telemetry_enabled: false;
+  etag: string;
+};
+type UserFeed = {
+  etag: string;
+  schema: 1;
+  users: Array<{
+    name: string;
+    credential_generation: number;
+    created_unix: number;
+    credential_rotated_unix: number | null;
+    credential_candidate: boolean;
+  }>;
+  groups: Array<{ name: string; member_count: number; created_unix: number }>;
+};
+function AppControls({
+  data,
+  connected,
+  token,
+  setData,
+  notify,
+}: {
+  data: AppFeed | null;
+  connected: boolean;
+  token: string;
+  setData: (value: AppFeed | null) => void;
+  notify: (value: string) => void;
+}) {
+  type Operation =
+    | "start"
+    | "stop"
+    | "remove"
+    | "update-latest"
+    | "install-staged";
+  type Choice = { app: AppSummary; operation: Operation };
+  const [selected, setSelected] = useState<Choice | null>(null),
+    [confirmation, setConfirmation] = useState(""),
+    [working, setWorking] = useState(false),
+    [error, setError] = useState(""),
+    phrase = selected
+      ? `${selected.operation === "update-latest" ? "UPDATE" : selected.operation === "install-staged" ? "INSTALL" : selected.operation.toUpperCase()} APPLICATION ${selected.app.id}`
+      : "";
+  const choose = (app: AppSummary, operation?: Operation) => {
+    const resolved =
+      operation ?? ("running" in app && app.running ? "stop" : "start");
+    setSelected({ app, operation: resolved });
+    setConfirmation("");
+    setError("");
+  };
+  const perform = async () => {
+    if (!selected || confirmation !== phrase) return;
+    setWorking(true);
+    setError("");
+    try {
+      const removing = selected.operation === "remove",
+        updating = selected.operation === "update-latest",
+        installing = selected.operation === "install-staged",
+        response = await fetch(
+          `/api/v1/apps/${selected.app.id}${removing ? "" : updating ? "/update" : installing ? "/install" : "/power"}`,
+          {
+            method: removing ? "DELETE" : "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+              "Idempotency-Key": crypto.randomUUID(),
+              "If-Match": data?.etag ?? "",
+            },
+            body: JSON.stringify(
+              removing || updating || installing
+                ? { schema: 1, confirmation }
+                : { schema: 1, operation: selected.operation, confirmation },
+            ),
+          },
+        );
+      if (!response.ok)
+        throw new Error(
+          response.status === 412
+            ? "Applications changed since they were loaded. Review the latest state and try again."
+            : response.status === 422
+              ? installing
+                ? "The staged manifest is no longer available or installation failed."
+                : updating
+                  ? "The update candidate changed or Bedrock restored the previous container after a failed update."
+                  : "The application runtime state changed or the guarded operation failed."
+              : "Bedrock rejected the application request.",
+        );
+      const refreshed = await fetch("/api/v1/apps", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (!refreshed.ok)
+        throw new Error(
+          "The application changed, but refreshed status is unavailable.",
+        );
+      const next = (await refreshed.json()) as Omit<AppFeed, "etag">;
+      setData({ ...next, etag: refreshed.headers.get("ETag") ?? "" });
+      setSelected(null);
+      notify(
+        `Application ${selected.operation === "start" ? "started" : selected.operation === "stop" ? "stopped" : selected.operation === "remove" ? "removed; data preserved" : selected.operation === "install-staged" ? "installed" : "updated"}`,
+      );
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Application action failed.",
+      );
+    } finally {
+      setWorking(false);
+    }
+  };
+  const removing = selected?.operation === "remove";
+  const updating = selected?.operation === "update-latest",
+    installing = selected?.operation === "install-staged";
+  return (
+    <>
+      <Title
+        title="Apps"
+        copy="Isolated services running with fixed resource and network limits."
+      />
+      <LiveState
+        connected={connected}
+        available={!!data}
+        noun="application status"
+      />
+      {data && data.install_candidates.length > 0 && (
+        <div className="panel">
+          <Section
+            title="Ready to install"
+            copy={`${data.install_candidates.length} root-approved`}
+          />
+          {data.install_candidates.map((app) => (
+            <div className="drive" key={app.id}>
+              <b>＋</b>
+              <div>
+                <strong>{app.name}</strong>
+                <p>
+                  {app.resources.cpus} CPU · {app.resources.memory_mib} MiB ·{" "}
+                  {app.network === "bridge"
+                    ? `${app.port_count} published port${app.port_count === 1 ? "" : "s"}`
+                    : "No network"}
+                </p>
+              </div>
+              <button onClick={() => choose(app, "install-staged")}>
+                Install
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {data && (
+        <div className="panel">
+          <Section
+            title="Installed apps"
+            copy={`${data.apps.length} configured`}
+          />
+          {data.apps.length === 0 ? (
+            <Empty text="No isolated applications are installed." />
+          ) : (
+            data.apps.map((app) => (
+              <div className="drive" key={app.id}>
+                <b>⬡</b>
+                <div>
+                  <strong>{app.name}</strong>
+                  <p>
+                    {app.resources.cpus} CPU · {app.resources.memory_mib} MiB ·{" "}
+                    {app.network === "bridge"
+                      ? `${app.port_count} published port${app.port_count === 1 ? "" : "s"}`
+                      : "No network"}
+                  </p>
+                </div>
+                <div className="settings-actions">
+                  <span className={app.running ? "ready" : "waiting"}>
+                    {app.running ? "Running" : "Stopped"} ·{" "}
+                    {app.update_available
+                      ? "Update available"
+                      : app.update_policy === "notify"
+                        ? "Current"
+                        : "Manual updates"}
+                  </span>
+                  {app.update_available && (
+                    <button onClick={() => choose(app, "update-latest")}>
+                      Update
+                    </button>
+                  )}
+                  <button onClick={() => choose(app)}>
+                    {app.running ? "Stop" : "Start"}
+                  </button>
+                  <button onClick={() => choose(app, "remove")}>Remove</button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+      {selected && (
+        <div
+          className="shade"
+          role="presentation"
+          onMouseDown={(event) =>
+            event.target === event.currentTarget &&
+            !working &&
+            setSelected(null)
+          }
+        >
+          <section
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="app-power-title"
+          >
+            <header>
+              <h2 id="app-power-title">
+                {selected.operation === "start"
+                  ? "Start"
+                  : selected.operation === "stop"
+                    ? "Stop"
+                    : updating
+                      ? "Update"
+                      : installing
+                        ? "Install"
+                        : "Remove"}{" "}
+                {selected.app.name}
+              </h2>
+              <button
+                aria-label="Close"
+                disabled={working}
+                onClick={() => setSelected(null)}
+              >
+                ×
+              </button>
+            </header>
+            <p>
+              {installing
+                ? "Bedrock will install the root-approved pinned image using these fixed network and resource limits. Registry and digest details remain private."
+                : updating
+                  ? "Bedrock will use the root-verified candidate digest, recreate the same isolated sandbox, and restore the previous container if the update fails."
+                  : removing
+                    ? "The isolated container and its configuration will be removed. Application data is preserved for recovery."
+                    : selected.operation === "stop"
+                      ? "The service becomes unavailable, but its application data and configuration are preserved."
+                      : "The service starts inside its existing isolated container and fixed resource limits."}
+            </p>
+            <label>
+              Type <b>{phrase}</b>
+              <input
+                autoFocus
+                autoComplete="off"
+                value={confirmation}
+                onChange={(event) => setConfirmation(event.target.value)}
+                onKeyDown={(event) =>
+                  event.key === "Enter" && confirmation === phrase && perform()
+                }
+              />
+            </label>
+            {error && (
+              <p className="form-error" role="alert">
+                {error}
+              </p>
+            )}
+            <footer>
+              <button disabled={working} onClick={() => setSelected(null)}>
+                Cancel
+              </button>
+              <button
+                className="primary"
+                disabled={working || confirmation !== phrase}
+                onClick={perform}
+              >
+                {working
+                  ? "Applying…"
+                  : selected.operation === "start"
+                    ? "Start application"
+                    : selected.operation === "stop"
+                      ? "Stop application"
+                      : updating
+                        ? "Update application"
+                        : installing
+                          ? "Install application"
+                          : "Remove application"}
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
+    </>
+  );
+}
+function BackupControls({
+  data,
+  connected,
+  token,
+  setData,
+  notify,
+}: {
+  data: BackupFeed | null;
+  connected: boolean;
+  token: string;
+  setData: (value: BackupFeed | null) => void;
+  notify: (value: string) => void;
+}) {
+  type Operation = "run" | "restore-latest" | "create";
+  type Choice = { plan: BackupSummary; operation: Operation };
+  const weekday = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+    [selected, setSelected] = useState<Choice | null>(null),
+    [confirmation, setConfirmation] = useState(""),
+    [working, setWorking] = useState(false),
+    [error, setError] = useState("");
+  const restoring = selected?.operation === "restore-latest",
+    creating = selected?.operation === "create",
+    phrase = selected
+      ? restoring
+        ? `RESTORE LATEST BACKUP ${selected.plan.id}`
+        : creating
+          ? `CREATE ENCRYPTED BACKUP ${selected.plan.id}`
+          : `RUN ENCRYPTED BACKUP ${selected.plan.id}`
+      : "";
+  const choose = (plan: BackupSummary, operation: Operation) => {
+    setSelected({ plan, operation });
+    setConfirmation("");
+    setError("");
+  };
+  const perform = async () => {
+    if (!selected || confirmation !== phrase) return;
+    setWorking(true);
+    setError("");
+    try {
+      const response = await fetch(
+        `/api/v1/backups/${selected.plan.id}/${selected.operation}`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+            "Idempotency-Key": crypto.randomUUID(),
+            "If-Match": data?.etag ?? "",
+          },
+          body: JSON.stringify({ schema: 1, confirmation }),
+        },
+      );
+      if (!response.ok)
+        throw new Error(
+          response.status === 412
+            ? "Backup state changed since it was loaded. Review the latest plans and try again."
+            : response.status === 422
+              ? restoring
+                ? "The latest snapshot is unavailable or the protected restore destination already exists."
+                : creating
+                  ? "The staged plan is unavailable or its encrypted repository could not be prepared."
+                  : "The plan is unavailable or the encrypted backup failed."
+              : "Bedrock rejected the backup request.",
+        );
+      const refreshed = await fetch("/api/v1/backups", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (!refreshed.ok)
+        throw new Error(
+          "The operation completed, but refreshed plan status is unavailable.",
+        );
+      const next = (await refreshed.json()) as Omit<BackupFeed, "etag">;
+      setData({ ...next, etag: refreshed.headers.get("ETag") ?? "" });
+      setSelected(null);
+      notify(
+        restoring
+          ? "Latest backup restored"
+          : creating
+            ? "Encrypted backup plan created"
+            : "Encrypted backup completed",
+      );
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Backup operation failed.",
+      );
+    } finally {
+      setWorking(false);
+    }
+  };
+  return (
+    <>
+      <Title
+        title="Backup"
+        copy="Encrypted plans, schedules, retention, and guarded recovery."
+      />
+      <LiveState
+        connected={connected}
+        available={!!data}
+        noun="backup status"
+      />
+      <div className="note">
+        <span>
+          <b>Protected operations.</b> Backup creation, runs, and restore keep
+          passwords, paths, repositories, and snapshot identities outside this
+          interface.
+        </span>
+      </div>
+      {data && data.create_candidates.length > 0 && (
+        <div className="panel">
+          <Section
+            title="Ready to create"
+            copy={`${data.create_candidates.length} root-approved`}
+          />
+          {data.create_candidates.map((plan) => (
+            <div className="drive" key={plan.id}>
+              <b>＋</b>
+              <div>
+                <strong>{plan.name}</strong>
+                <p>
+                  {plan.schedule.frequency === "daily"
+                    ? "Daily"
+                    : `${weekday[plan.schedule.weekday ?? 0]} weekly`}{" "}
+                  at {String(plan.schedule.hour_utc).padStart(2, "0")}:00 UTC ·{" "}
+                  {plan.kind} · retain {plan.retention.daily}/
+                  {plan.retention.weekly}/{plan.retention.monthly}{" "}
+                  daily/weekly/monthly
+                </p>
+              </div>
+              <div className="settings-actions">
+                <span className="waiting">Staged</span>
+                <button onClick={() => choose(plan, "create")}>
+                  Create plan
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {data && (
+        <div className="panel">
+          <Section
+            title="Backup plans"
+            copy={`${data.plans.length} configured`}
+          />
+          {data.plans.length === 0 ? (
+            <Empty text="No encrypted backup plans are configured." />
+          ) : (
+            data.plans.map((plan) => (
+              <div className="drive" key={plan.id}>
+                <b>↻</b>
+                <div>
+                  <strong>{plan.name}</strong>
+                  <p>
+                    {plan.schedule.frequency === "daily"
+                      ? "Daily"
+                      : `${weekday[plan.schedule.weekday ?? 0]} weekly`}{" "}
+                    at {String(plan.schedule.hour_utc).padStart(2, "0")}:00 UTC
+                    · {plan.kind}
+                  </p>
+                </div>
+                <div className="settings-actions">
+                  <span className={plan.has_snapshot ? "ready" : "waiting"}>
+                    {plan.has_snapshot
+                      ? plan.last_success_unix
+                        ? `Protected ${new Date(plan.last_success_unix * 1000).toLocaleDateString()}`
+                        : "Protected"
+                      : "Never run"}
+                  </span>
+                  <button onClick={() => choose(plan, "run")}>Run now</button>
+                  {plan.has_snapshot && (
+                    <button onClick={() => choose(plan, "restore-latest")}>
+                      Restore latest
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+      {selected && (
+        <div
+          className="shade"
+          role="presentation"
+          onMouseDown={(event) =>
+            event.target === event.currentTarget &&
+            !working &&
+            setSelected(null)
+          }
+        >
+          <section
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="backup-operation-title"
+          >
+            <header>
+              <h2 id="backup-operation-title">
+                {restoring
+                  ? "Restore latest from"
+                  : creating
+                    ? "Create"
+                    : "Run"}{" "}
+                {selected.plan.name}
+              </h2>
+              <button
+                aria-label="Close"
+                disabled={working}
+                onClick={() => setSelected(null)}
+              >
+                ×
+              </button>
+            </header>
+            <p>
+              {restoring
+                ? "Bedrock restores the latest successful snapshot into a new fixed recovery folder. It will refuse to overwrite an existing restore."
+                : creating
+                  ? "The full source, repository, and initialization request was approved by root and remains private. Confirm to create this exact encrypted plan."
+                  : "This may transfer data and prune old snapshots according to the configured retention policy."}
+            </p>
+            <label>
+              Type <b>{phrase}</b>
+              <input
+                autoFocus
+                autoComplete="off"
+                value={confirmation}
+                onChange={(event) => setConfirmation(event.target.value)}
+                onKeyDown={(event) =>
+                  event.key === "Enter" && confirmation === phrase && perform()
+                }
+              />
+            </label>
+            {error && (
+              <p className="form-error" role="alert">
+                {error}
+              </p>
+            )}
+            <footer>
+              <button disabled={working} onClick={() => setSelected(null)}>
+                Cancel
+              </button>
+              <button
+                className="primary"
+                disabled={working || confirmation !== phrase}
+                onClick={perform}
+              >
+                {working
+                  ? restoring
+                    ? "Restoring…"
+                    : creating
+                      ? "Creating…"
+                      : "Running backup…"
+                  : restoring
+                    ? "Restore latest backup"
+                    : creating
+                      ? "Create encrypted plan"
+                      : "Run encrypted backup"}
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
+    </>
+  );
+}
+function VMCreateEditor({
+  data,
+  token,
+  setData,
+  notify,
+}: {
+  data: VmFeed | null;
+  token: string;
+  setData: (value: VmFeed | null) => void;
+  notify: (value: string) => void;
+}) {
+  const [name, setName] = useState(""),
+    [vcpus, setVcpus] = useState(2),
+    [memory, setMemory] = useState(4096),
+    [disk, setDisk] = useState(64),
+    [autostart, setAutostart] = useState(false),
+    [confirmation, setConfirmation] = useState(""),
+    [working, setWorking] = useState(false),
+    [error, setError] = useState("");
+  const validName =
+      /^[a-z][a-z0-9-]{0,30}[a-z0-9]$/.test(name) &&
+      !data?.domains.some((vm) => vm.name === name),
+    validResources =
+      Number.isInteger(vcpus) &&
+      vcpus >= 1 &&
+      vcpus <= 64 &&
+      Number.isInteger(memory) &&
+      memory >= 512 &&
+      memory <= 262144 &&
+      memory % 256 === 0 &&
+      Number.isInteger(disk) &&
+      disk >= 8 &&
+      disk <= 4096,
+    phrase = validName ? `CREATE VM ${name}` : "";
+  const create = async () => {
+    if (!phrase || confirmation !== phrase || !validResources) return;
+    setWorking(true);
+    setError("");
+    try {
+      const response = await fetch("/api/v1/vms", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
+          "If-Match": data?.etag ?? "",
+        },
+        body: JSON.stringify({
+          schema: 1,
+          name,
+          vcpus,
+          memory_mib: memory,
+          disk_size_gib: disk,
+          autostart,
+          confirmation,
+        }),
+      });
+      if (!response.ok)
+        throw new Error(
+          response.status === 412
+            ? "Virtual machines changed since they were loaded. Review the latest state and try again."
+            : response.status === 422
+              ? "The name, virtualization state, or available host capacity changed."
+              : "Bedrock rejected VM creation.",
+        );
+      const refreshed = await fetch("/api/v1/vms", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (!refreshed.ok)
+        throw new Error(
+          "The VM was created, but refreshed status is unavailable.",
+        );
+      const next = (await refreshed.json()) as Omit<VmFeed, "etag">;
+      setData({ ...next, etag: refreshed.headers.get("ETag") ?? "" });
+      setName("");
+      setConfirmation("");
+      notify("Virtual machine created");
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "VM creation failed.",
+      );
+    } finally {
+      setWorking(false);
+    }
+  };
+  if (!data) return null;
+  return (
+    <div className="panel resource-editor">
+      <Section
+        title="Create virtual machine"
+        copy="A stopped UEFI guest with TPM 2.0 and host-capacity protection"
+      />
+      <div className="resource-fields create-fields">
+        <label>
+          Name
+          <input
+            value={name}
+            placeholder="windows-vm"
+            onChange={(event) => {
+              setName(event.target.value);
+              setConfirmation("");
+            }}
+          />
+        </label>
+        <label>
+          vCPUs
+          <input
+            type="number"
+            min="1"
+            max="64"
+            step="1"
+            value={vcpus}
+            onChange={(event) => setVcpus(Number(event.target.value))}
+          />
+        </label>
+        <label>
+          Memory (MiB)
+          <input
+            type="number"
+            min="512"
+            max="262144"
+            step="256"
+            value={memory}
+            onChange={(event) => setMemory(Number(event.target.value))}
+          />
+        </label>
+        <label>
+          Disk (GiB)
+          <input
+            type="number"
+            min="8"
+            max="4096"
+            step="1"
+            value={disk}
+            onChange={(event) => setDisk(Number(event.target.value))}
+          />
+        </label>
+      </div>
+      <label className="risk create-autostart">
+        <input
+          type="checkbox"
+          checked={autostart}
+          onChange={(event) => setAutostart(event.target.checked)}
+        />{" "}
+        Start this VM automatically when Bedrock boots. The VM is not started
+        during creation.
+      </label>
+      {phrase && (
+        <label className="resource-confirm">
+          Type <b>{phrase}</b>
+          <input
+            autoComplete="off"
+            value={confirmation}
+            onChange={(event) => setConfirmation(event.target.value)}
+            onKeyDown={(event) =>
+              event.key === "Enter" && confirmation === phrase && create()
+            }
+          />
+        </label>
+      )}
+      {name && !validName && (
+        <p className="form-error" role="alert">
+          Use a unique lowercase name with letters, numbers, or hyphens.
+        </p>
+      )}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+      <button
+        className="primary"
+        disabled={
+          working || !validName || !validResources || confirmation !== phrase
+        }
+        onClick={create}
+      >
+        {working ? "Creating…" : "Create stopped VM"}
+      </button>
+    </div>
+  );
+}
+function VMResourceEditor({
+  data,
+  token,
+  setData,
+  notify,
+}: {
+  data: VmFeed | null;
+  token: string;
+  setData: (value: VmFeed | null) => void;
+  notify: (value: string) => void;
+}) {
+  const stopped = data?.domains.filter((vm) => vm.state === "shut off") ?? [];
+  const [name, setName] = useState(""),
+    [vcpus, setVcpus] = useState(1),
+    [memory, setMemory] = useState(2048),
+    [boot, setBoot] = useState<"disk" | "cdrom,disk">("disk"),
+    [confirmation, setConfirmation] = useState(""),
+    [working, setWorking] = useState(false),
+    [error, setError] = useState("");
+  const selected = stopped.find((vm) => vm.name === name),
+    phrase = selected
+      ? `UPDATE VM ${name} CPU ${vcpus} MEMORY ${memory} BOOT ${boot}`
+      : "";
+  const choose = (value: string) => {
+    const vm = stopped.find((item) => item.name === value);
+    setName(value);
+    setVcpus(vm?.vcpus ?? 1);
+    setMemory(vm?.memory_mib ?? 2048);
+    setBoot(vm?.boot_order.join(",") === "cdrom,disk" ? "cdrom,disk" : "disk");
+    setConfirmation("");
+    setError("");
+  };
+  const save = async () => {
+    if (!selected || confirmation !== phrase) return;
+    setWorking(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/v1/vms/${name}/resources`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
+          "If-Match": data?.etag ?? "",
+        },
+        body: JSON.stringify({
+          schema: 1,
+          vcpus,
+          memory_mib: memory,
+          boot_order: boot.split(","),
+          confirmation,
+        }),
+      });
+      if (!response.ok)
+        throw new Error(
+          response.status === 412
+            ? "Virtual machines changed since they were loaded. Review the latest state and try again."
+            : response.status === 422
+              ? "The VM state or available host capacity changed."
+              : "Bedrock rejected the resource update.",
+        );
+      const refreshed = await fetch("/api/v1/vms", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (!refreshed.ok)
+        throw new Error(
+          "Resources changed, but refreshed VM status is unavailable.",
+        );
+      const next = (await refreshed.json()) as Omit<VmFeed, "etag">;
+      setData({ ...next, etag: refreshed.headers.get("ETag") ?? "" });
+      setConfirmation("");
+      notify("VM resources updated");
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Resource update failed.",
+      );
+    } finally {
+      setWorking(false);
+    }
+  };
+  if (!data) return null;
+  return (
+    <div className="panel resource-editor">
+      <Section
+        title="Offline resource editor"
+        copy="CPU, memory, and boot order with host-capacity protection"
+      />
+      {stopped.length === 0 ? (
+        <Empty text="Shut down a VM before changing its resources." />
+      ) : (
+        <>
+          <div className="resource-fields">
+            <label>
+              Virtual machine
+              <select
+                value={name}
+                onChange={(event) => choose(event.target.value)}
+              >
+                <option value="">Choose a shut-off VM</option>
+                {stopped.map((vm) => (
+                  <option key={vm.name} value={vm.name}>
+                    {vm.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              vCPUs
+              <input
+                type="number"
+                min="1"
+                max="64"
+                step="1"
+                disabled={!selected}
+                value={vcpus}
+                onChange={(event) => setVcpus(Number(event.target.value))}
+              />
+            </label>
+            <label>
+              Memory (MiB)
+              <input
+                type="number"
+                min="512"
+                max="262144"
+                step="256"
+                disabled={!selected}
+                value={memory}
+                onChange={(event) => setMemory(Number(event.target.value))}
+              />
+            </label>
+            <label>
+              Boot order
+              <select
+                disabled={!selected}
+                value={boot}
+                onChange={(event) =>
+                  setBoot(event.target.value as "disk" | "cdrom,disk")
+                }
+              >
+                <option value="disk">Disk</option>
+                <option value="cdrom,disk">CD/DVD, then disk</option>
+              </select>
+            </label>
+          </div>
+          {selected && (
+            <>
+              <label className="resource-confirm">
+                Type <b>{phrase}</b>
+                <input
+                  autoComplete="off"
+                  value={confirmation}
+                  onChange={(event) => setConfirmation(event.target.value)}
+                  onKeyDown={(event) =>
+                    event.key === "Enter" && confirmation === phrase && save()
+                  }
+                />
+              </label>
+              {error && (
+                <p className="form-error" role="alert">
+                  {error}
+                </p>
+              )}
+              <button
+                className="primary"
+                disabled={
+                  working ||
+                  confirmation !== phrase ||
+                  !Number.isInteger(vcpus) ||
+                  vcpus < 1 ||
+                  vcpus > 64 ||
+                  !Number.isInteger(memory) ||
+                  memory < 512 ||
+                  memory > 262144 ||
+                  memory % 256 !== 0
+                }
+                onClick={save}
+              >
+                {working ? "Updating…" : "Update resources"}
+              </button>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+function VMAttachmentEditor({
+  data,
+  images,
+  token,
+  setData,
+  notify,
+}: {
+  data: VmFeed | null;
+  images: ImageFeed | null;
+  token: string;
+  setData: (value: VmFeed | null) => void;
+  notify: (value: string) => void;
+}) {
+  type Kind = "image" | "network";
+  type Operation = "attach" | "detach";
+  const stopped = data?.domains.filter((vm) => vm.state === "shut off") ?? [];
+  const [name, setName] = useState(""),
+    [kind, setKind] = useState<Kind>("image"),
+    [operation, setOperation] = useState<Operation>("attach"),
+    [item, setItem] = useState(""),
+    [confirmation, setConfirmation] = useState(""),
+    [working, setWorking] = useState(false),
+    [error, setError] = useState("");
+  const vm = stopped.find((entry) => entry.name === name),
+    attached =
+      kind === "image"
+        ? (vm?.image_attachments ?? [])
+        : (vm?.network_attachments ?? []),
+    choices =
+      operation === "detach"
+        ? attached
+        : kind === "image"
+          ? (images?.images
+              .map((image) => image.name)
+              .filter((image) => !attached.includes(image)) ?? [])
+          : [],
+    valid = /^[a-z][a-z0-9-]{0,30}[a-z0-9]$/.test(item),
+    label = kind.toUpperCase(),
+    phrase =
+      vm && valid
+        ? operation === "attach"
+          ? `ATTACH ${label} ${item} TO VM ${name}`
+          : `DETACH ${label} ${item} FROM VM ${name}`
+        : "";
+  const reset = (
+    nextName = name,
+    nextKind = kind,
+    nextOperation = operation,
+  ) => {
+    setName(nextName);
+    setKind(nextKind);
+    setOperation(nextOperation);
+    setItem("");
+    setConfirmation("");
+    setError("");
+  };
+  const save = async () => {
+    if (!vm || !phrase || confirmation !== phrase) return;
+    setWorking(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/v1/vms/${name}/${kind}s`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
+          "If-Match": data?.etag ?? "",
+        },
+        body: JSON.stringify({
+          schema: 1,
+          [kind]: item,
+          operation,
+          confirmation,
+        }),
+      });
+      if (!response.ok)
+        throw new Error(
+          response.status === 412
+            ? "Virtual machines changed since they were loaded. Review the latest state and try again."
+            : response.status === 422
+              ? "The VM, image, or network state changed."
+              : "Bedrock rejected the attachment change.",
+        );
+      const refreshed = await fetch("/api/v1/vms", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (!refreshed.ok)
+        throw new Error(
+          "Attachment changed, but refreshed VM status is unavailable.",
+        );
+      const next = (await refreshed.json()) as Omit<VmFeed, "etag">;
+      setData({ ...next, etag: refreshed.headers.get("ETag") ?? "" });
+      setItem("");
+      setConfirmation("");
+      notify(
+        `${label[0] + label.slice(1).toLowerCase()} ${operation} completed`,
+      );
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Attachment change failed.",
+      );
+    } finally {
+      setWorking(false);
+    }
+  };
+  if (!data) return null;
+  return (
+    <div className="panel resource-editor">
+      <Section
+        title="Offline attachments"
+        copy="Verified images and isolated networks for shut-off virtual machines"
+      />
+      {stopped.length === 0 ? (
+        <Empty text="Shut down a VM before changing attachments." />
+      ) : (
+        <>
+          <div className="resource-fields attachment-fields">
+            <label>
+              Virtual machine
+              <select
+                value={name}
+                onChange={(event) => reset(event.target.value)}
+              >
+                <option value="">Choose a shut-off VM</option>
+                {stopped.map((entry) => (
+                  <option key={entry.name}>{entry.name}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Attachment type
+              <select
+                value={kind}
+                onChange={(event) => reset(name, event.target.value as Kind)}
+              >
+                <option value="image">Image</option>
+                <option value="network">Isolated network</option>
+              </select>
+            </label>
+            <label>
+              Action
+              <select
+                value={operation}
+                onChange={(event) =>
+                  reset(name, kind, event.target.value as Operation)
+                }
+              >
+                <option value="attach">Attach</option>
+                <option value="detach">Detach</option>
+              </select>
+            </label>
+            <label>
+              {kind === "image" ? "Managed image" : "Managed network"}
+              {kind === "network" && operation === "attach" ? (
+                <input
+                  disabled={!vm}
+                  value={item}
+                  placeholder="private-lan"
+                  onChange={(event) => {
+                    setItem(event.target.value);
+                    setConfirmation("");
+                  }}
+                />
+              ) : (
+                <select
+                  disabled={!vm}
+                  value={item}
+                  onChange={(event) => {
+                    setItem(event.target.value);
+                    setConfirmation("");
+                  }}
+                >
+                  <option value="">Choose {kind}</option>
+                  {choices.map((choice) => (
+                    <option key={choice}>{choice}</option>
+                  ))}
+                </select>
+              )}
+            </label>
+          </div>
+          {vm && (
+            <>
+              <p className="attachment-summary">
+                Currently attached:{" "}
+                {attached.length ? attached.join(", ") : `no ${kind}s`}
+              </p>
+              {phrase && (
+                <label className="resource-confirm">
+                  Type <b>{phrase}</b>
+                  <input
+                    autoComplete="off"
+                    value={confirmation}
+                    onChange={(event) => setConfirmation(event.target.value)}
+                    onKeyDown={(event) =>
+                      event.key === "Enter" && confirmation === phrase && save()
+                    }
+                  />
+                </label>
+              )}
+              {error && (
+                <p className="form-error" role="alert">
+                  {error}
+                </p>
+              )}
+              <button
+                className="primary"
+                disabled={working || !phrase || confirmation !== phrase}
+                onClick={save}
+              >
+                {working
+                  ? "Updating…"
+                  : `${operation === "attach" ? "Attach" : "Detach"} ${kind}`}
+              </button>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+function Overview({
+  create,
+  download,
+  token,
+  setToken,
+  connection,
+  connect,
+  dashboard,
+}: {
+  create: () => void;
+  download: () => void;
+  token: string;
+  setToken: (v: string) => void;
+  connection: string;
+  connect: () => void;
+  dashboard: DashboardData | null;
+}) {
+  const storage = dashboard?.components.storage,
+    vms = dashboard?.components.vms,
+    hardware = dashboard?.components.hardware,
+    updates = dashboard?.components.updates,
+    transient = connection === "offline" || connection === "reconnecting";
+  return (
+    <>
+      <div className="kicker">SERVER OVERVIEW</div>
+      <Title
+        title={dashboard ? "Your Bedrock server" : "Connect to your server"}
+        copy={
+          dashboard
+            ? "Live health and workload information from the authenticated Bedrock API."
+            : "Enter a local API token. It stays in memory only while this page is open."
+        }
+        action={
+          dashboard ? (
+            <button
+              className="primary"
+              disabled={connection === "reconnecting"}
+              onClick={connect}
+            >
+              {connection === "reconnecting" ? "Reconnecting…" : "Refresh"}
+            </button>
+          ) : undefined
+        }
+      />
+      <div className={`connection ${connection}`}>
+        <span className="connectiondot" />
+        <div>
+          <strong>
+            {connection === "connected"
+              ? "Connected to Bedrock"
+              : connection === "loading"
+                ? "Connecting…"
+                : connection === "reconnecting"
+                  ? "Reconnecting to Bedrock…"
+                  : connection === "offline"
+                    ? "Connection interrupted"
+                    : connection === "error"
+                      ? "Server unavailable"
+                      : "Authentication required"}
+          </strong>
+          <p>
+            {connection === "error"
+              ? "Check that this page is served by your Bedrock server and that the token is active."
+              : transient
+                ? "Last confirmed information remains visible but controls are paused. Bedrock will retry when connectivity returns."
+                : "No sample health values are presented as live server data."}
+          </p>
+        </div>
+        {!dashboard && (
+          <>
+            <label>
+              <span>API token</span>
+              <input
+                type="password"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && token && connect()}
+                autoComplete="off"
+              />
+            </label>
+            <button
+              className="primary"
+              disabled={!token || connection === "loading"}
+              onClick={connect}
+            >
+              Connect
+            </button>
+          </>
+        )}
+      </div>
+      {dashboard && (
+        <>
+          <div className="health">
+            <b>{transient ? "↻" : dashboard.partial ? "!" : "✓"}</b>
+            <div>
+              <strong>
+                {transient
+                  ? "Waiting to reconnect"
+                  : dashboard.partial
+                    ? "Some services need attention"
+                    : "Live server data available"}
+              </strong>
+              <p>
+                {transient
+                  ? "Showing the last server-confirmed state; no mutation is reported complete while offline."
+                  : dashboard.partial
+                    ? "Available sections remain usable while unavailable services are isolated."
+                    : "All reported dashboard components responded successfully."}
+              </p>
+            </div>
+            <small>{transient ? "Last confirmed" : "Authenticated API"}</small>
+          </div>
+          <div className="metrics">
+            <Metric
+              l="PROCESSOR"
+              v={
+                hardware?.status === "available"
+                  ? String(hardware.data?.logical_processors ?? "—")
+                  : "—"
+              }
+              s="logical processors"
+              w="0%"
+              tip="Processor capacity reported by your Bedrock server."
+            />
+            <Metric
+              l="MEMORY"
+              v={
+                hardware?.status === "available"
+                  ? `${Math.round(Number(hardware.data?.memory_total_bytes ?? 0) / 1073741824)} GB`
+                  : "—"
+              }
+              s="installed"
+              w="0%"
+              tip="Installed memory reported by your Bedrock server."
+            />
+            <Metric
+              l="STORAGE"
+              v={
+                storage?.status === "available"
+                  ? String(storage.data?.overall ?? "Unknown")
+                  : "Unavailable"
+              }
+              s={
+                storage?.status === "available"
+                  ? `${String(storage.data?.disk_count ?? 0)} disks`
+                  : "service offline"
+              }
+              w="0%"
+              tip="Current protected-storage health from Bedrock."
+            />
+            <Metric
+              l="VIRTUAL MACHINES"
+              v={
+                vms?.status === "available"
+                  ? `${String(vms.data?.running ?? 0)} running`
+                  : "Unavailable"
+              }
+              s={
+                vms?.status === "available"
+                  ? `${String(vms.data?.total ?? 0)} managed`
+                  : "service offline"
+              }
+              w="0%"
+              tip="Managed virtual machine status from Bedrock."
+            />
+          </div>
+          <div className="twocol">
+            <div className="panel">
+              <Section
+                title="Update status"
+                copy="Signed Bedrock release channel"
+              />
+              <p>
+                {updates?.status === "available"
+                  ? String(updates.data?.status ?? "Unknown")
+                  : "Update service unavailable"}
+              </p>
+            </div>
+            <div className="panel">
+              <Section
+                title="Quick actions"
+                copy="Available management areas"
+              />
+              <div className="quick">
+                <button onClick={download}>
+                  ⇩{" "}
+                  <span>
+                    <b>Get Bedrock</b>
+                    <small>Create verified installation media</small>
+                  </span>
+                  ›
+                </button>
+                <button onClick={create}>
+                  ▣{" "}
+                  <span>
+                    <b>View virtual machines</b>
+                    <small>Live lifecycle and resource status</small>
+                  </span>
+                  ›
+                </button>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+function Metric({
+  l,
+  v,
+  s,
+  w,
+  tip,
+}: {
+  l: string;
+  v: string;
+  s: string;
+  w: string;
+  tip: string;
+}) {
+  return (
+    <div className="metric">
+      <label>
+        {l} <Tip>{tip}</Tip>
+      </label>
+      <strong>{v}</strong>
+      <small>{s}</small>
+      <div className="bar">
+        <i style={{ width: w }} />
+      </div>
+    </div>
+  );
+}
+function Section({ title, copy }: { title: string; copy: string }) {
+  return (
+    <div className="section">
+      <div>
+        <h2>{title}</h2>
+        <p>{copy}</p>
+      </div>
+    </div>
+  );
+}
+function Advanced({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <details className="advanced">
+      <summary>{label}</summary>
+      <div>{children}</div>
+    </details>
+  );
+}
+function VMPassthroughEditor({
+  data,
+  candidates,
+  token,
+  setCandidates,
+  notify,
+}: {
+  data: VmFeed | null;
+  candidates: PassthroughFeed | null;
+  token: string;
+  setCandidates: (value: PassthroughFeed | null) => void;
+  notify: (value: string) => void;
+}) {
+  type Kind = "gpu" | "usb";
+  type Operation = "assign" | "remove";
+  const stopped = data?.domains.filter((vm) => vm.state === "shut off") ?? [];
+  const [name, setName] = useState(""),
+    [kind, setKind] = useState<Kind>("usb"),
+    [operation, setOperation] = useState<Operation>("assign"),
+    [selection, setSelection] = useState(""),
+    [review, setReview] = useState(""),
+    [confirmation, setConfirmation] = useState(""),
+    [working, setWorking] = useState(false),
+    [error, setError] = useState("");
+  const assignment = candidates?.assignments.find(
+      (item) => item.vm === name && item.kind === kind,
+    ),
+    gpu = candidates?.gpus.find((item) => item.id === selection),
+    devices =
+      operation === "remove"
+        ? (assignment?.devices ?? [])
+        : kind === "gpu"
+          ? (gpu?.devices ?? [])
+          : selection
+            ? [selection]
+            : [],
+    ordered = [...devices].sort(),
+    label = kind.toUpperCase(),
+    reviewPhrase =
+      name && ordered.length
+        ? `REVIEW ${label} PASSTHROUGH VM ${name} DEVICES ${ordered.join(",")}`
+        : "",
+    actionPhrase = reviewPhrase
+      ? `${operation.toUpperCase()} ${label} PASSTHROUGH VM ${name} DEVICES ${ordered.join(",")}`
+      : "";
+  const reset = (
+    nextName = name,
+    nextKind = kind,
+    nextOperation = operation,
+  ) => {
+    setName(nextName);
+    setKind(nextKind);
+    setOperation(nextOperation);
+    setSelection("");
+    setReview("");
+    setConfirmation("");
+    setError("");
+  };
+  const save = async () => {
+    if (
+      !reviewPhrase ||
+      review !== reviewPhrase ||
+      confirmation !== actionPhrase
+    )
+      return;
+    setWorking(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/v1/vms/${name}/passthrough`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
+          "If-Match": data?.etag ?? "",
+        },
+        body: JSON.stringify({
+          schema: 1,
+          kind,
+          devices: ordered,
+          operation,
+          review_confirmation: review,
+          confirmation,
+        }),
+      });
+      if (!response.ok)
+        throw new Error(
+          response.status === 412
+            ? "Virtual machines changed since they were loaded. Review the latest state and try again."
+            : response.status === 422
+              ? "The VM or hardware safety state changed."
+              : "Bedrock rejected the passthrough change.",
+        );
+      const refreshed = await fetch(
+        "/api/v1/virtualization/passthrough-candidates",
+        { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" },
+      );
+      if (!refreshed.ok)
+        throw new Error(
+          "Passthrough changed, but refreshed status is unavailable.",
+        );
+      setCandidates((await refreshed.json()) as PassthroughFeed);
+      reset(name, kind, operation);
+      notify(
+        `${label} passthrough ${operation === "assign" ? "assigned" : "removed"}`,
+      );
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Passthrough change failed.",
+      );
+    } finally {
+      setWorking(false);
+    }
+  };
+  if (!data) return null;
+  if (!candidates)
+    return (
+      <div className="panel resource-editor">
+        <Section
+          title="Hardware passthrough"
+          copy="Candidate inventory unavailable"
+        />
+        <Empty text="Safe passthrough candidates could not be loaded." />
+      </div>
+    );
+  const choices =
+    kind === "gpu"
+      ? candidates.gpus.map((item) => ({
+          id: item.id,
+          label: `${item.vendor} ${item.device_id} · group ${item.devices.join(", ")}`,
+        }))
+      : candidates.usb_devices.map((item) => ({
+          id: item.id,
+          label: `USB ${item.vendor_id}:${item.product_id} · ${item.id}`,
+        }));
+  return (
+    <div className="panel resource-editor">
+      <Section
+        title="Hardware passthrough"
+        copy="Offline GPU and USB assignment with hardware safety revalidation"
+      />
+      <div className="note">
+        <span>
+          <b>High-impact change.</b> Bedrock excludes the boot GPU, hubs,
+          storage, input, unauthorized, and host-critical USB devices. GPU
+          assignment moves the complete IOMMU group away from the host.
+        </span>
+      </div>
+      {stopped.length === 0 ? (
+        <Empty text="Shut down a VM before changing passthrough devices." />
+      ) : (
+        <>
+          <div className="resource-fields attachment-fields">
+            <label>
+              Virtual machine
+              <select
+                value={name}
+                onChange={(event) => reset(event.target.value)}
+              >
+                <option value="">Choose a shut-off VM</option>
+                {stopped.map((vm) => (
+                  <option key={vm.name}>{vm.name}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Device type
+              <select
+                value={kind}
+                onChange={(event) => reset(name, event.target.value as Kind)}
+              >
+                <option value="usb">USB</option>
+                <option value="gpu">GPU group</option>
+              </select>
+            </label>
+            <label>
+              Action
+              <select
+                value={operation}
+                onChange={(event) =>
+                  reset(name, kind, event.target.value as Operation)
+                }
+              >
+                <option value="assign">Assign</option>
+                <option value="remove">Remove</option>
+              </select>
+            </label>
+            <label>
+              Safe selection
+              {operation === "remove" ? (
+                <input
+                  readOnly
+                  value={assignment ? assignment.devices.join(", ") : ""}
+                  placeholder="No assignment"
+                />
+              ) : (
+                <select
+                  disabled={!name}
+                  value={selection}
+                  onChange={(event) => {
+                    setSelection(event.target.value);
+                    setReview("");
+                    setConfirmation("");
+                  }}
+                >
+                  <option value="">Choose {kind}</option>
+                  {choices.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.label}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </label>
+          </div>
+          {name && operation === "remove" && !assignment && (
+            <p className="form-error" role="alert">
+              This VM has no {kind.toUpperCase()} passthrough assignment.
+            </p>
+          )}
+          {reviewPhrase && (
+            <>
+              <label className="resource-confirm">
+                Review and type <b>{reviewPhrase}</b>
+                <input
+                  autoComplete="off"
+                  value={review}
+                  onChange={(event) => setReview(event.target.value)}
+                />
+              </label>
+              <label className="resource-confirm">
+                Then type <b>{actionPhrase}</b>
+                <input
+                  autoComplete="off"
+                  value={confirmation}
+                  onChange={(event) => setConfirmation(event.target.value)}
+                  onKeyDown={(event) =>
+                    event.key === "Enter" &&
+                    review === reviewPhrase &&
+                    confirmation === actionPhrase &&
+                    save()
+                  }
+                />
+              </label>
+              {error && (
+                <p className="form-error" role="alert">
+                  {error}
+                </p>
+              )}
+              <button
+                className="primary"
+                disabled={
+                  working ||
+                  review !== reviewPhrase ||
+                  confirmation !== actionPhrase
+                }
+                onClick={save}
+              >
+                {working
+                  ? "Revalidating hardware…"
+                  : `${operation === "assign" ? "Assign" : "Remove"} ${label} passthrough`}
+              </button>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+function VMConsole({
+  name,
+  token,
+  etag,
+  close,
+}: {
+  name: string;
+  token: string;
+  etag: string;
+  close: () => void;
+}) {
+  const target = useRef<HTMLDivElement>(null);
+  const rfb = useRef<RFB | null>(null);
+  const [confirmation, setConfirmation] = useState("");
+  const [working, setWorking] = useState(false);
+  const [status, setStatus] = useState<
+    "review" | "connecting" | "connected" | "closed" | "error"
+  >("review");
+  const [error, setError] = useState("");
+  const phrase = `OPEN CONSOLE VM ${name}`;
+  const disconnect = () => {
+    rfb.current?.disconnect();
+    rfb.current = null;
+    close();
+  };
+  const open = async () => {
+    if (confirmation !== phrase) return;
+    setWorking(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/v1/vms/${name}/console-sessions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
+          "If-Match": etag,
+        },
+        body: JSON.stringify({ schema: 1, confirmation }),
+      });
+      if (!response.ok) {
+        throw new Error(
+          response.status === 412
+            ? "The VM changed since it was loaded. Review its current state and try again."
+            : response.status === 422
+              ? "The VM must still be running with its protected console available."
+              : "Bedrock could not authorize the console.",
+        );
+      }
+      const result = (await response.json()) as {
+        session: {
+          token: string;
+          expires_at: number;
+          websocket_path: string;
+        };
+      };
+      if (
+        !/^[0-9a-f]{64}$/.test(result.session.token) ||
+        result.session.expires_at * 1000 <= Date.now() ||
+        result.session.websocket_path !== `/api/v1/vms/${name}/console`
+      ) {
+        throw new Error("Bedrock returned an invalid console authorization.");
+      }
+      setStatus("connecting");
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => resolve()),
+      );
+      if (!target.current)
+        throw new Error("The console display could not be initialized.");
+      const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+      const { default: RFBClient } = await import("@novnc/novnc");
+      const client = new RFBClient(
+        target.current,
+        `${scheme}//${location.host}${result.session.websocket_path}`,
+        {
+          wsProtocols: ["binary", `bedrock-console.${result.session.token}`],
+          shared: false,
+        },
+      );
+      client.scaleViewport = true;
+      client.resizeSession = true;
+      client.addEventListener("connect", () => setStatus("connected"));
+      client.addEventListener("disconnect", (event: Event) => {
+        const clean = (event as CustomEvent<{ clean?: boolean }>).detail?.clean;
+        setStatus(clean ? "closed" : "error");
+        if (!clean)
+          setError(
+            "The console connection ended unexpectedly. Request a new one-time session to reconnect.",
+          );
+      });
+      client.addEventListener("securityfailure", () => {
+        setStatus("error");
+        setError("The protected console rejected this session.");
+      });
+      rfb.current = client;
+    } catch (reason) {
+      setStatus("error");
+      setError(
+        reason instanceof Error ? reason.message : "Console connection failed.",
+      );
+    } finally {
+      setWorking(false);
+    }
+  };
+  useEffect(() => () => rfb.current?.disconnect(), []);
+  return (
+    <div className="shade" role="presentation">
+      <section
+        className="modal console-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="console-title"
+      >
+        <header>
+          <h2 id="console-title">Console · {name}</h2>
+          <button aria-label="Close console" onClick={disconnect}>
+            ×
+          </button>
+        </header>
+        {status === "review" ? (
+          <>
+            <p>
+              This creates a single-use 60-second authorization. The VNC socket
+              remains private and is never exposed directly.
+            </p>
+            <label>
+              Type <b>{phrase}</b>
+              <input
+                autoFocus
+                autoComplete="off"
+                value={confirmation}
+                onChange={(event) => setConfirmation(event.target.value)}
+                onKeyDown={(event) =>
+                  event.key === "Enter" && confirmation === phrase && open()
+                }
+              />
+            </label>
+            <footer>
+              <button onClick={close}>Cancel</button>
+              <button
+                className="primary"
+                disabled={working || confirmation !== phrase}
+                onClick={open}
+              >
+                {working ? "Authorizing…" : "Open protected console"}
+              </button>
+            </footer>
+          </>
+        ) : (
+          <>
+            <div className="console-toolbar" role="status">
+              <span
+                className={
+                  status === "connected"
+                    ? "ready"
+                    : status === "error"
+                      ? "waiting"
+                      : ""
+                }
+              >
+                {status === "connecting"
+                  ? "Connecting…"
+                  : status === "connected"
+                    ? "Connected"
+                    : status === "closed"
+                      ? "Closed"
+                      : "Connection failed"}
+              </span>
+              {status === "connected" && (
+                <button onClick={() => rfb.current?.sendCtrlAltDel()}>
+                  Send Ctrl+Alt+Del
+                </button>
+              )}
+            </div>
+            <div
+              ref={target}
+              className="console-screen"
+              aria-label={`Remote display for ${name}`}
+            />
+            {error && (
+              <p className="form-error" role="alert">
+                {error}
+              </p>
+            )}
+            {(status === "error" || status === "closed") && (
+              <footer>
+                <button onClick={disconnect}>Close</button>
+              </footer>
+            )}
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function VMs({
+  data,
+  connected,
+  token,
+  setData,
+  notify,
+}: {
+  data: VmFeed | null;
+  connected: boolean;
+  token: string;
+  setData: (value: VmFeed | null) => void;
+  notify: (value: string) => void;
+}) {
+  type PowerOperation = "start" | "stop" | "restart" | "force-stop";
+  type SnapshotOperation = "create" | "restore" | "delete";
+  type Selection =
+    | { kind: "power"; name: string; operation: PowerOperation }
+    | {
+        kind: "snapshot";
+        name: string;
+        operation: SnapshotOperation;
+        snapshot: string;
+      }
+    | { kind: "admin"; name: string; operation: "clone"; target: string }
+    | { kind: "admin"; name: string; operation: "delete" };
+  const [selected, setSelected] = useState<Selection | null>(null),
+    [consoleName, setConsoleName] = useState(""),
+    [snapshotName, setSnapshotName] = useState(""),
+    [cloneName, setCloneName] = useState(""),
+    [confirmation, setConfirmation] = useState(""),
+    [working, setWorking] = useState(false),
+    [error, setError] = useState("");
+  const phrase = selected
+    ? selected.kind === "power"
+      ? `${selected.operation === "force-stop" ? "FORCE STOP" : selected.operation.toUpperCase()} VM ${selected.name}`
+      : selected.kind === "snapshot"
+        ? `${selected.operation.toUpperCase()} SNAPSHOT ${selected.snapshot} FOR VM ${selected.name}`
+        : selected.operation === "clone"
+          ? `CLONE VM ${selected.name} AS ${selected.target}`
+          : `DELETE VM ${selected.name} AND STORAGE`
+    : "";
+  const choose = (value: Selection) => {
+    setSelected(value);
+    setConfirmation("");
+    setError("");
+  };
+  const run = async () => {
+    if (!selected || confirmation !== phrase) return;
+    setWorking(true);
+    setError("");
+    try {
+      const snapshot = selected.kind === "snapshot",
+        admin = selected.kind === "admin";
+      const endpoint = admin
+        ? selected.operation === "clone"
+          ? `/api/v1/vms/${selected.name}/clone`
+          : `/api/v1/vms/${selected.name}`
+        : `/api/v1/vms/${selected.name}/${snapshot ? "snapshots" : "power"}`;
+      const body = snapshot
+        ? {
+            schema: 1,
+            snapshot: selected.snapshot,
+            operation: selected.operation,
+            confirmation,
+          }
+        : admin
+          ? selected.operation === "clone"
+            ? { schema: 1, name: selected.target, confirmation }
+            : { schema: 1, confirmation }
+          : { schema: 1, operation: selected.operation, confirmation };
+      const response = await fetch(endpoint, {
+        method: admin && selected.operation === "delete" ? "DELETE" : "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
+          "If-Match": data?.etag ?? "",
+        },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok)
+        throw new Error(
+          response.status === 412
+            ? "Virtual machines changed since they were loaded. Review the latest state and try again."
+            : response.status === 422
+              ? "The VM state changed or Bedrock could not complete the action."
+              : "Bedrock rejected the VM action.",
+        );
+      const refreshed = await fetch("/api/v1/vms", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (!refreshed.ok)
+        throw new Error(
+          "The action completed, but refreshed VM status is unavailable.",
+        );
+      const next = (await refreshed.json()) as Omit<VmFeed, "etag">;
+      setData({ ...next, etag: refreshed.headers.get("ETag") ?? "" });
+      notify(
+        admin
+          ? `VM ${selected.operation} completed`
+          : snapshot
+            ? `Snapshot ${selected.operation} completed`
+            : `VM ${selected.operation.replace("-", " ")} completed`,
+      );
+      setSelected(null);
+      setSnapshotName("");
+      setCloneName("");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "VM action failed.");
+    } finally {
+      setWorking(false);
+    }
+  };
+  const validSnapshot = /^[a-z][a-z0-9-]{0,30}[a-z0-9]$/.test(snapshotName),
+    validClone =
+      /^[a-z][a-z0-9-]{0,30}[a-z0-9]$/.test(cloneName) &&
+      !data?.domains.some((vm) => vm.name === cloneName);
+  return (
+    <>
+      <Title
+        title="Virtual machines"
+        copy="Live lifecycle, resource, snapshot, image, and network status."
+      />
+      <LiveState
+        connected={connected}
+        available={!!data}
+        noun="virtual machine inventory"
+      />
+      <div className="note">
+        <Tip>
+          A virtual machine is a computer made from software. It runs its own
+          operating system without changing Bedrock.
+        </Tip>
+        <span>
+          <b>Protected controls.</b> Power, snapshots, cloning, and recoverable
+          deletion require exact confirmation. Storage-changing actions are
+          available only while a VM is shut off.
+        </span>
+      </div>
+      {data && (
+        <div className="table vmtable">
+          <div className="thead">
+            <b>NAME</b>
+            <b>STATUS</b>
+            <b>RESOURCES</b>
+            <b>ATTACHMENTS</b>
+            <b>SNAPSHOTS</b>
+            <b>ACTIONS</b>
+          </div>
+          {data.domains.length === 0 ? (
+            <Empty text="No virtual machines are registered." />
+          ) : (
+            data.domains.map((vm) => (
+              <div className="trow" key={vm.name}>
+                <span>
+                  <b className="os">VM</b>
+                  <strong>{vm.name}</strong>
+                </span>
+                <span>
+                  <i className={vm.state === "running" ? "live" : "off"} />
+                  {vm.state}
+                </span>
+                <span>
+                  {vm.vcpus} vCPU ·{" "}
+                  {(vm.memory_mib / 1024).toFixed(vm.memory_mib % 1024 ? 1 : 0)}{" "}
+                  GB
+                </span>
+                <span>
+                  {vm.image_attachments.length} images ·{" "}
+                  {vm.network_attachments.length} networks
+                </span>
+                <span className="snapshot-list">
+                  {vm.snapshots.length === 0 ? (
+                    <small>None</small>
+                  ) : (
+                    vm.snapshots.map((snapshot) => (
+                      <span key={snapshot}>
+                        <b>{snapshot}</b>
+                        {vm.state === "shut off" && (
+                          <>
+                            <button
+                              onClick={() =>
+                                choose({
+                                  kind: "snapshot",
+                                  name: vm.name,
+                                  operation: "restore",
+                                  snapshot,
+                                })
+                              }
+                            >
+                              Restore
+                            </button>
+                            <button
+                              className="danger"
+                              onClick={() =>
+                                choose({
+                                  kind: "snapshot",
+                                  name: vm.name,
+                                  operation: "delete",
+                                  snapshot,
+                                })
+                              }
+                            >
+                              Delete
+                            </button>
+                          </>
+                        )}
+                      </span>
+                    ))
+                  )}
+                </span>
+                <span className="vm-actions">
+                  {vm.state === "shut off" && (
+                    <>
+                      <button
+                        onClick={() =>
+                          choose({
+                            kind: "power",
+                            name: vm.name,
+                            operation: "start",
+                          })
+                        }
+                      >
+                        Start
+                      </button>
+                      <label className="snapshot-create">
+                        <span>New snapshot name</span>
+                        <input
+                          aria-label={`New snapshot name for ${vm.name}`}
+                          placeholder="pre-upgrade"
+                          value={snapshotName}
+                          onChange={(event) =>
+                            setSnapshotName(event.target.value)
+                          }
+                        />
+                        <button
+                          disabled={
+                            !validSnapshot ||
+                            vm.snapshots.includes(snapshotName)
+                          }
+                          onClick={() =>
+                            choose({
+                              kind: "snapshot",
+                              name: vm.name,
+                              operation: "create",
+                              snapshot: snapshotName,
+                            })
+                          }
+                        >
+                          Create snapshot
+                        </button>
+                      </label>
+                      <label className="snapshot-create">
+                        <span>Clone as</span>
+                        <input
+                          aria-label={`Clone name for ${vm.name}`}
+                          placeholder="copy-vm"
+                          value={cloneName}
+                          onChange={(event) => setCloneName(event.target.value)}
+                        />
+                        <button
+                          disabled={!validClone || cloneName === vm.name}
+                          onClick={() =>
+                            choose({
+                              kind: "admin",
+                              name: vm.name,
+                              operation: "clone",
+                              target: cloneName,
+                            })
+                          }
+                        >
+                          Clone
+                        </button>
+                      </label>
+                      <button
+                        className="danger"
+                        onClick={() =>
+                          choose({
+                            kind: "admin",
+                            name: vm.name,
+                            operation: "delete",
+                          })
+                        }
+                      >
+                        Delete VM and storage
+                      </button>
+                    </>
+                  )}
+                  {vm.state === "running" && (
+                    <>
+                      <button onClick={() => setConsoleName(vm.name)}>
+                        Open console
+                      </button>
+                      <button
+                        onClick={() =>
+                          choose({
+                            kind: "power",
+                            name: vm.name,
+                            operation: "stop",
+                          })
+                        }
+                      >
+                        Stop
+                      </button>
+                      <button
+                        onClick={() =>
+                          choose({
+                            kind: "power",
+                            name: vm.name,
+                            operation: "restart",
+                          })
+                        }
+                      >
+                        Restart
+                      </button>
+                      <button
+                        className="danger"
+                        onClick={() =>
+                          choose({
+                            kind: "power",
+                            name: vm.name,
+                            operation: "force-stop",
+                          })
+                        }
+                      >
+                        Force stop
+                      </button>
+                    </>
+                  )}
+                  {vm.state === "paused" && (
+                    <button
+                      className="danger"
+                      onClick={() =>
+                        choose({
+                          kind: "power",
+                          name: vm.name,
+                          operation: "force-stop",
+                        })
+                      }
+                    >
+                      Force stop
+                    </button>
+                  )}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+      {consoleName && data && (
+        <VMConsole
+          name={consoleName}
+          token={token}
+          etag={data.etag}
+          close={() => setConsoleName("")}
+        />
+      )}
+      {selected && (
+        <div
+          className="shade"
+          role="presentation"
+          onMouseDown={(event) =>
+            event.target === event.currentTarget &&
+            !working &&
+            setSelected(null)
+          }
+        >
+          <section
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="vm-action-title"
+          >
+            <header>
+              <h2 id="vm-action-title">
+                {selected.operation.replace("-", " ")}{" "}
+                {selected.kind === "snapshot"
+                  ? `${selected.snapshot} on `
+                  : selected.kind === "admin" && selected.operation === "clone"
+                    ? `${selected.name} as ${selected.target}`
+                    : ""}
+                {selected.kind === "admin" && selected.operation === "clone"
+                  ? ""
+                  : selected.name}
+              </h2>
+              <button
+                aria-label="Close"
+                disabled={working}
+                onClick={() => setSelected(null)}
+              >
+                ×
+              </button>
+            </header>
+            <p>
+              {selected.kind === "power" && selected.operation === "force-stop"
+                ? "Force stop can cause guest data loss. Use it only when a graceful stop is impossible."
+                : selected.kind === "snapshot" &&
+                    selected.operation === "restore"
+                  ? "Restoring replaces the VM disk state with this snapshot. Changes made afterward will be lost."
+                  : selected.kind === "admin" && selected.operation === "delete"
+                    ? "The VM and its managed disk will leave active inventory and move to recoverable quarantine. Confirm only after checking backups."
+                    : "Bedrock will recheck the managed VM and verify the requested final state."}
+            </p>
+            <label>
+              Type <b>{phrase}</b>
+              <input
+                autoFocus
+                autoComplete="off"
+                value={confirmation}
+                onChange={(event) => setConfirmation(event.target.value)}
+                onKeyDown={(event) =>
+                  event.key === "Enter" && confirmation === phrase && run()
+                }
+              />
+            </label>
+            {error && (
+              <p className="form-error" role="alert">
+                {error}
+              </p>
+            )}
+            <footer>
+              <button disabled={working} onClick={() => setSelected(null)}>
+                Cancel
+              </button>
+              <button
+                className="primary"
+                disabled={working || confirmation !== phrase}
+                onClick={run}
+              >
+                {working ? "Working…" : "Confirm action"}
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
+    </>
+  );
+}
+function Storage({
+  data,
+  connected,
+}: {
+  data: StorageFeed | null;
+  connected: boolean;
+}) {
+  const capacity = (bytes: number) => capacityLabel(bytes);
+  const pools = data?.software_raid.zfs.pools ?? [];
+  const arrays = data?.software_raid.md_arrays ?? [];
+  return (
+    <>
+      <Title
+        title="Storage"
+        copy="Live capacity, disk health, RAID state, and rebuild progress."
+      />
+      <LiveState
+        connected={connected}
+        available={!!data}
+        noun="storage health"
+      />
+      <div className="note">
+        <span>
+          <b>Protected storage.</b> Create, expand, replace, scrub, safely
+          disconnect, and reconnect are guarded here with fresh disk checks and
+          exact confirmation.
+        </span>
+      </div>
+      {data && (
+        <>
+          <div className="metrics hardwaremetrics">
+            <Metric
+              l="OVERALL"
+              v={data.overall}
+              s="storage health"
+              w={
+                data.overall === "healthy"
+                  ? "100%"
+                  : data.overall === "attention"
+                    ? "50%"
+                    : "25%"
+              }
+              tip="Combined disk, software RAID, ZFS, and hardware RAID health."
+            />
+            <Metric
+              l="RAW CAPACITY"
+              v={capacity(
+                data.disks.reduce((sum, disk) => sum + disk.size_bytes, 0),
+              )}
+              s={`${data.disks.length} physical disk${data.disks.length === 1 ? "" : "s"}`}
+              w="100%"
+              tip="Total detected physical-disk capacity without exposing device paths or serial numbers."
+            />
+            <Metric
+              l="SOFTWARE RAID"
+              v={String(arrays.length + pools.length)}
+              s={`${arrays.length} Linux RAID · ${pools.length} ZFS`}
+              w={arrays.length + pools.length ? "100%" : "0%"}
+              tip="Managed Linux RAID arrays and ZFS pools reported by Bedrock."
+            />
+            <Metric
+              l="HARDWARE RAID"
+              v={String(data.hardware_raid.controller_count)}
+              s={`${data.hardware_raid.full_visibility_count} fully visible`}
+              w={
+                data.hardware_raid.controller_count
+                  ? `${Math.round((data.hardware_raid.full_visibility_count / data.hardware_raid.controller_count) * 100)}%`
+                  : "0%"
+              }
+              tip="Hardware RAID monitoring depends on a supported vendor management tool."
+            />
+          </div>
+          <div className="twocol">
+            <div className="panel">
+              <Section
+                title="Protected storage"
+                copy={`${arrays.length + pools.length} software-managed group${arrays.length + pools.length === 1 ? "" : "s"}`}
+              />
+              {arrays.length + pools.length === 0 ? (
+                <Empty text="No software RAID arrays or ZFS pools were reported." />
+              ) : (
+                <>
+                  {arrays.map((array) => (
+                    <div className="drive" key={`md-${array.name}`}>
+                      <b>MD</b>
+                      <div>
+                        <strong>{array.name}</strong>
+                        <p>
+                          {array.level} · {array.active_members} of{" "}
+                          {array.expected_members} members · {array.state}
+                        </p>
+                      </div>
+                      <span
+                        className={
+                          array.health === "healthy" ? "ready" : "waiting"
+                        }
+                      >
+                        {array.sync.action
+                          ? `${array.sync.action} ${array.sync.percent.toFixed(0)}%`
+                          : array.health}
+                      </span>
+                    </div>
+                  ))}
+                  {pools.map((pool) => (
+                    <div className="drive" key={`zfs-${pool.name}`}>
+                      <b>ZFS</b>
+                      <div>
+                        <strong>{pool.name}</strong>
+                        <p>
+                          {capacity(pool.allocated_bytes)} used ·{" "}
+                          {capacity(pool.free_bytes)} free · {pool.health}
+                        </p>
+                      </div>
+                      <span
+                        className={
+                          pool.status === "healthy" ? "ready" : "waiting"
+                        }
+                      >
+                        {pool.status}
+                      </span>
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+            <div className="panel">
+              <Section
+                title="RAID controller visibility"
+                copy={`${data.hardware_raid.controller_count} controller${data.hardware_raid.controller_count === 1 ? "" : "s"} detected`}
+              />
+              <div className="hardwaretotals">
+                <span>
+                  <b>{data.hardware_raid.full_visibility_count}</b> fully
+                  monitored
+                </span>
+                <span>
+                  <b>{data.hardware_raid.attention_count}</b> need attention
+                </span>
+                <span>
+                  <b>
+                    {Math.max(
+                      0,
+                      data.hardware_raid.controller_count -
+                        data.hardware_raid.full_visibility_count,
+                    )}
+                  </b>{" "}
+                  limited visibility
+                </span>
+              </div>
+            </div>
+          </div>
+          <div className="panel">
+            <Section
+              title="Physical drives"
+              copy={`${data.disks.filter((d) => d.smart.health === "healthy").length} healthy of ${data.disks.length}`}
+            />
+            {data.disks.length === 0 ? (
+              <Empty text="No physical disks were reported." />
+            ) : (
+              data.disks.map((disk, index) => (
+                <div className="drive" key={`${disk.model}-${index}`}>
+                  <b>▱</b>
+                  <div>
+                    <strong>{disk.model || `Disk ${index + 1}`}</strong>
+                    <p>
+                      {capacity(disk.size_bytes)} ·{" "}
+                      {disk.transport || "unknown connection"} · SMART{" "}
+                      {disk.smart.health}
+                    </p>
+                  </div>
+                  <span>
+                    {disk.smart.temperature_c === null
+                      ? "—"
+                      : `${disk.smart.temperature_c}°C`}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+function StorageAdvanced({ data }: { data: StorageFeed | null }) {
+  if (!data) return null;
+  const pools = data.software_raid.zfs.pools,
+    arrays = data.software_raid.md_arrays;
+  return (
+    <Advanced label="Advanced storage details">
+      <p className="advanced-intro">
+        Storage health, rebuild state, and destructive warnings remain visible
+        above. These optional details use privacy-safe identities instead of
+        device paths or serial numbers.
+      </p>
+      <div className="advanced-grid">
+        <section>
+          <h2>Drive history</h2>
+          {data.disks.length === 0 ? (
+            <p>No drive history reported.</p>
+          ) : (
+            <dl>
+              {data.disks.map((disk, index) => (
+                <div key={index}>
+                  <dt>{disk.model || `Disk ${index + 1}`}</dt>
+                  <dd>
+                    {disk.smart.available
+                      ? disk.smart.power_on_hours === null
+                        ? "SMART hours unavailable"
+                        : `${disk.smart.power_on_hours} power-on hours`
+                      : "SMART unavailable"}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          )}
+        </section>
+        <section>
+          <h2>Protected topology</h2>
+          {data.managed_pools.length === 0 ? (
+            <p>No managed topology reported.</p>
+          ) : (
+            <dl>
+              {data.managed_pools.map((pool) => (
+                <div key={pool.name}>
+                  <dt>{pool.name}</dt>
+                  <dd>
+                    {pool.backend} {pool.layout} · {pool.members.length} members
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          )}
+        </section>
+        <section>
+          <h2>Candidate review</h2>
+          {data.disk_candidates.length === 0 ? (
+            <p>No candidate disks reported.</p>
+          ) : (
+            <dl>
+              {data.disk_candidates.map((candidate) => (
+                <div key={candidate.id}>
+                  <dt>{candidate.id}</dt>
+                  <dd>
+                    {candidate.eligible
+                      ? "Eligible"
+                      : candidate.reason.replace("-", " ")}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          )}
+        </section>
+        <section>
+          <h2>Software storage</h2>
+          <dl>
+            <div>
+              <dt>OpenZFS tools</dt>
+              <dd>
+                {data.software_raid.zfs.available ? "Available" : "Unavailable"}
+              </dd>
+            </div>
+            <div>
+              <dt>Reported pools</dt>
+              <dd>{pools.length}</dd>
+            </div>
+            <div>
+              <dt>Linux RAID arrays</dt>
+              <dd>{arrays.length}</dd>
+            </div>
+          </dl>
+        </section>
+      </div>
+    </Advanced>
+  );
+}
+function Images({
+  data,
+  connected,
+  token,
+  setData,
+  notify,
+}: {
+  data: ImageFeed | null;
+  connected: boolean;
+  token: string;
+  setData: (value: ImageFeed | null) => void;
+  notify: (value: string) => void;
+}) {
+  const disks = data?.images.filter((image) => image.type !== "iso") ?? [],
+    [source, setSource] = useState(""),
+    [target, setTarget] = useState(""),
+    [targetType, setTargetType] = useState<"qcow2" | "img">("qcow2"),
+    [confirmation, setConfirmation] = useState(""),
+    [working, setWorking] = useState(false),
+    [error, setError] = useState("");
+  const selected = disks.find((image) => image.name === source),
+    validTarget =
+      /^[a-z][a-z0-9-]{0,30}[a-z0-9]$/.test(target) &&
+      target !== source &&
+      !data?.images.some((image) => image.name === target),
+    [uploadName, setUploadName] = useState(""),
+    [uploadType, setUploadType] = useState<
+      "iso" | "img" | "qcow2" | "vhdx" | "vmdk"
+    >("iso"),
+    [uploadFile, setUploadFile] = useState<File | null>(null),
+    [uploading, setUploading] = useState(false),
+    [importCandidate, setImportCandidate] = useState<
+      ImageFeed["upload_candidates"][number] | null
+    >(null),
+    [importConfirmation, setImportConfirmation] = useState(""),
+    [discardCandidate, setDiscardCandidate] = useState<
+      ImageFeed["upload_candidates"][number] | null
+    >(null),
+    [discardConfirmation, setDiscardConfirmation] = useState(""),
+    phrase =
+      selected && validTarget
+        ? `CONVERT IMAGE ${source} ${selected.sha256} TO ${targetType.toUpperCase()} ${target}`
+        : "";
+  const size = (bytes: number) =>
+    bytes >= 1073741824
+      ? `${(bytes / 1073741824).toFixed(1)} GiB`
+      : `${Math.max(1, Math.round(bytes / 1048576))} MiB`;
+  const convert = async () => {
+    if (!selected || !phrase || confirmation !== phrase) return;
+    setWorking(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/v1/images/${source}/convert`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
+          "If-Match": data?.etag ?? "",
+        },
+        body: JSON.stringify({
+          schema: 1,
+          target,
+          target_type: targetType,
+          source_sha256: selected.sha256,
+          confirmation,
+        }),
+      });
+      if (!response.ok)
+        throw new Error(
+          response.status === 412
+            ? "Image state changed since it was loaded. Review the latest images and try again."
+            : response.status === 422
+              ? "The source image changed or conversion failed safety validation."
+              : "Bedrock rejected the image conversion.",
+        );
+      const refreshed = await fetch("/api/v1/images", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (!refreshed.ok)
+        throw new Error(
+          "Conversion completed, but refreshed image status is unavailable.",
+        );
+      const next = (await refreshed.json()) as Omit<ImageFeed, "etag">;
+      setData({ ...next, etag: refreshed.headers.get("ETag") ?? "" });
+      setSource("");
+      setTarget("");
+      setConfirmation("");
+      notify("Verified image conversion completed");
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Image conversion failed.",
+      );
+    } finally {
+      setWorking(false);
+    }
+  };
+  const upload = async () => {
+    if (!uploadFile || !/^[a-z][a-z0-9-]{0,30}[a-z0-9]$/.test(uploadName))
+      return;
+    setUploading(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/v1/images/${uploadName}/upload`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/octet-stream",
+          "If-Match": data?.etag ?? "",
+          "X-Bedrock-Image-Type": uploadType,
+        },
+        body: uploadFile,
+      });
+      if (!response.ok)
+        throw new Error(
+          response.status === 412
+            ? "Image state changed since it was loaded. Review the latest images and try again."
+            : response.status === 409
+              ? "That image name already exists or has an upload awaiting review."
+              : "Bedrock rejected the upload.",
+        );
+      const refreshed = await fetch("/api/v1/images", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (!refreshed.ok)
+        throw new Error(
+          "Upload completed, but its verification summary is unavailable.",
+        );
+      const next = (await refreshed.json()) as Omit<ImageFeed, "etag">;
+      setData({ ...next, etag: refreshed.headers.get("ETag") ?? "" });
+      setUploadName("");
+      setUploadFile(null);
+      notify("Image uploaded and hashed for review");
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Image upload failed.",
+      );
+    } finally {
+      setUploading(false);
+    }
+  };
+  const importUpload = async () => {
+    if (
+      !importCandidate ||
+      importConfirmation !==
+        `IMPORT ${importCandidate.type.toUpperCase()} ${importCandidate.name} ${importCandidate.sha256}`
+    )
+      return;
+    setWorking(true);
+    setError("");
+    try {
+      const response = await fetch(
+        `/api/v1/images/${importCandidate.name}/import`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+            "Idempotency-Key": crypto.randomUUID(),
+            "If-Match": data?.etag ?? "",
+          },
+          body: JSON.stringify({ schema: 1, confirmation: importConfirmation }),
+        },
+      );
+      if (!response.ok)
+        throw new Error(
+          response.status === 412
+            ? "Image state changed since it was loaded. Review the latest images and try again."
+            : response.status === 422
+              ? "The uploaded file failed format or checksum validation."
+              : "Bedrock rejected the image import.",
+        );
+      const refreshed = await fetch("/api/v1/images", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (!refreshed.ok)
+        throw new Error(
+          "Import completed, but refreshed image status is unavailable.",
+        );
+      const next = (await refreshed.json()) as Omit<ImageFeed, "etag">;
+      setData({ ...next, etag: refreshed.headers.get("ETag") ?? "" });
+      setImportCandidate(null);
+      setImportConfirmation("");
+      notify("Image verified and imported");
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Image import failed.",
+      );
+    } finally {
+      setWorking(false);
+    }
+  };
+  const discardUpload = async () => {
+    if (
+      !discardCandidate ||
+      discardConfirmation !==
+        `DISCARD IMAGE UPLOAD ${discardCandidate.name} ${discardCandidate.sha256}`
+    )
+      return;
+    setWorking(true);
+    setError("");
+    try {
+      const response = await fetch(
+        `/api/v1/images/${discardCandidate.name}/upload`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+            "If-Match": data?.etag ?? "",
+          },
+          body: JSON.stringify({
+            schema: 1,
+            sha256: discardCandidate.sha256,
+            confirmation: discardConfirmation,
+          }),
+        },
+      );
+      if (!response.ok)
+        throw new Error(
+          response.status === 412
+            ? "Image state changed since it was loaded. Review the latest images and try again."
+            : response.status === 409
+              ? "That upload is already being imported."
+              : "Bedrock rejected the upload discard request.",
+        );
+      const refreshed = await fetch("/api/v1/images", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (!refreshed.ok)
+        throw new Error(
+          "Upload was discarded, but refreshed image status is unavailable.",
+        );
+      const next = (await refreshed.json()) as Omit<ImageFeed, "etag">;
+      setData({ ...next, etag: refreshed.headers.get("ETag") ?? "" });
+      setDiscardCandidate(null);
+      setDiscardConfirmation("");
+      notify("Staged image upload discarded");
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Image upload discard failed.",
+      );
+    } finally {
+      setWorking(false);
+    }
+  };
+  return (
+    <>
+      <Title
+        title="Image library"
+        copy="Verified operating system installers and disk images ready for virtual machines."
+      />
+      <LiveState
+        connected={connected}
+        available={!!data}
+        noun="image inventory"
+      />
+      <div className="note">
+        <span>
+          <b>Protected image handling.</b> Uploads are hashed before review;
+          import, discard, and conversion revalidate the selected bytes before
+          changing managed state.
+        </span>
+      </div>
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+      {data && (
+        <>
+          <div className="panel resource-editor">
+            <Section
+              title="Upload an image"
+              copy="Stage a local installer or disk image; Bedrock calculates its SHA-256"
+            />
+            <div className="resource-fields">
+              <label>
+                Image name
+                <input
+                  value={uploadName}
+                  maxLength={32}
+                  placeholder="debian-installer"
+                  onChange={(event) => {
+                    setUploadName(event.target.value);
+                    setError("");
+                  }}
+                />
+              </label>
+              <label>
+                Format
+                <select
+                  value={uploadType}
+                  onChange={(event) =>
+                    setUploadType(event.target.value as typeof uploadType)
+                  }
+                >
+                  <option value="iso">ISO</option>
+                  <option value="img">Raw IMG</option>
+                  <option value="qcow2">QCOW2</option>
+                  <option value="vhdx">VHDX</option>
+                  <option value="vmdk">VMDK</option>
+                </select>
+              </label>
+              <label>
+                Local file
+                <input
+                  type="file"
+                  onChange={(event) =>
+                    setUploadFile(event.target.files?.[0] ?? null)
+                  }
+                />
+              </label>
+            </div>
+            <button
+              className="primary"
+              disabled={
+                uploading ||
+                !uploadFile ||
+                !/^[a-z][a-z0-9-]{0,30}[a-z0-9]$/.test(uploadName) ||
+                data.images.some((image) => image.name === uploadName) ||
+                data.upload_candidates.some(
+                  (image) => image.name === uploadName,
+                )
+              }
+              onClick={upload}
+            >
+              {uploading ? "Uploading and hashing…" : "Upload for verification"}
+            </button>
+          </div>
+          {data.upload_candidates.length > 0 && (
+            <div className="panel">
+              <Section
+                title="Uploads awaiting import"
+                copy={`${data.upload_candidates.length} hashed and ready for review`}
+              />
+              {data.upload_candidates.map((image) => (
+                <div className="drive" key={image.name}>
+                  <b className="os">{image.type.toUpperCase().slice(0, 4)}</b>
+                  <div>
+                    <strong>{image.name}</strong>
+                    <p>
+                      {size(image.size_bytes)} · SHA-256 {image.sha256}
+                    </p>
+                  </div>
+                  <span className="actions">
+                    <button
+                      onClick={() => {
+                        setImportCandidate(image);
+                        setImportConfirmation("");
+                        setDiscardCandidate(null);
+                        setError("");
+                      }}
+                    >
+                      Review import
+                    </button>
+                    <button
+                      onClick={() => {
+                        setDiscardCandidate(image);
+                        setDiscardConfirmation("");
+                        setImportCandidate(null);
+                        setError("");
+                      }}
+                    >
+                      Discard
+                    </button>
+                  </span>
+                </div>
+              ))}
+              {importCandidate && (
+                <>
+                  <label className="resource-confirm">
+                    Type{" "}
+                    <b>
+                      IMPORT {importCandidate.type.toUpperCase()}{" "}
+                      {importCandidate.name} {importCandidate.sha256}
+                    </b>
+                    <input
+                      autoComplete="off"
+                      value={importConfirmation}
+                      onChange={(event) =>
+                        setImportConfirmation(event.target.value)
+                      }
+                    />
+                  </label>
+                  <button
+                    className="primary"
+                    disabled={
+                      working ||
+                      importConfirmation !==
+                        `IMPORT ${importCandidate.type.toUpperCase()} ${importCandidate.name} ${importCandidate.sha256}`
+                    }
+                    onClick={importUpload}
+                  >
+                    {working
+                      ? "Validating and importing…"
+                      : "Verify and import image"}
+                  </button>
+                </>
+              )}
+              {discardCandidate && (
+                <>
+                  <label className="resource-confirm">
+                    Type{" "}
+                    <b>
+                      DISCARD IMAGE UPLOAD {discardCandidate.name}{" "}
+                      {discardCandidate.sha256}
+                    </b>
+                    <input
+                      autoComplete="off"
+                      value={discardConfirmation}
+                      onChange={(event) =>
+                        setDiscardConfirmation(event.target.value)
+                      }
+                    />
+                  </label>
+                  <button
+                    className="danger"
+                    disabled={
+                      working ||
+                      discardConfirmation !==
+                        `DISCARD IMAGE UPLOAD ${discardCandidate.name} ${discardCandidate.sha256}`
+                    }
+                    onClick={discardUpload}
+                  >
+                    {working ? "Discarding…" : "Discard staged upload"}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+          <div className="panel">
+            <Section
+              title="Verified images"
+              copy={`${data.images.length} available`}
+            />
+            {data.images.length === 0 ? (
+              <Empty text="No verified images are available." />
+            ) : (
+              data.images.map((image) => (
+                <div className="drive" key={image.name}>
+                  <b className="os">{image.type.toUpperCase().slice(0, 4)}</b>
+                  <div>
+                    <strong>{image.name}</strong>
+                    <p>
+                      {image.type.toUpperCase()} · {size(image.size_bytes)} ·
+                      SHA-256 {image.sha256.slice(0, 12)}…
+                    </p>
+                  </div>
+                  <span className="ready">
+                    {image.converted ? "Converted" : "Imported"}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+          <div className="panel resource-editor">
+            <Section
+              title="Convert a disk image"
+              copy="Create a verified raw or QCOW2 copy without changing the source"
+            />
+            {disks.length === 0 ? (
+              <Empty text="Import a disk image before converting it." />
+            ) : (
+              <>
+                <div className="resource-fields">
+                  <label>
+                    Source image
+                    <select
+                      value={source}
+                      onChange={(event) => {
+                        setSource(event.target.value);
+                        setConfirmation("");
+                        setError("");
+                      }}
+                    >
+                      <option value="">Choose an image</option>
+                      {disks.map((image) => (
+                        <option key={image.name} value={image.name}>
+                          {image.name} ({image.type.toUpperCase()})
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    New image name
+                    <input
+                      value={target}
+                      maxLength={32}
+                      placeholder="converted-disk"
+                      onChange={(event) => {
+                        setTarget(event.target.value);
+                        setConfirmation("");
+                      }}
+                    />
+                  </label>
+                  <label>
+                    Target format
+                    <select
+                      value={targetType}
+                      onChange={(event) => {
+                        setTargetType(event.target.value as "qcow2" | "img");
+                        setConfirmation("");
+                      }}
+                    >
+                      <option value="qcow2">QCOW2</option>
+                      <option value="img">Raw IMG</option>
+                    </select>
+                  </label>
+                </div>
+                {phrase && (
+                  <label className="resource-confirm">
+                    Type <b>{phrase}</b>
+                    <input
+                      autoComplete="off"
+                      value={confirmation}
+                      onChange={(event) => setConfirmation(event.target.value)}
+                      onKeyDown={(event) =>
+                        event.key === "Enter" &&
+                        confirmation === phrase &&
+                        convert()
+                      }
+                    />
+                  </label>
+                )}
+                {error && (
+                  <p className="form-error" role="alert">
+                    {error}
+                  </p>
+                )}
+                <button
+                  className="primary"
+                  disabled={working || !phrase || confirmation !== phrase}
+                  onClick={convert}
+                >
+                  {working ? "Converting…" : "Convert and verify image"}
+                </button>
+              </>
+            )}
+          </div>
+        </>
+      )}
+      <div className="note">
+        <b>macOS guests are not supported.</b> Bedrock does not provide Apple
+        software or offer macOS VM creation on current hosts.
+      </div>
+    </>
+  );
+}
+function Hardware({
+  data,
+  connected,
+}: {
+  data: HardwareData | null;
+  connected: boolean;
+}) {
+  return (
+    <>
+      <Title
+        title="Hardware"
+        copy="Capacity and compatibility reported by this Bedrock server."
+      />
+      <LiveState
+        connected={connected}
+        available={!!data}
+        noun="hardware inventory"
+      />
+      {data && (
+        <>
+          <div className="metrics hardwaremetrics">
+            <Metric
+              l="PROCESSOR"
+              v={`${data.cpu.logical_processors} threads`}
+              s={data.cpu.model}
+              w="100%"
+              tip="Processor model and logical thread count reported by Bedrock."
+            />
+            <Metric
+              l="MEMORY"
+              v={`${Math.round(data.memory.total_bytes / 1073741824)} GB`}
+              s="installed"
+              w="100%"
+              tip="Total installed memory available to the host."
+            />
+            <Metric
+              l="DISKS"
+              v={String(data.disks.length)}
+              s={`${(data.disks.reduce((sum, disk) => sum + disk.size_bytes, 0) / 1e12).toFixed(1)} TB raw`}
+              w="100%"
+              tip="Physical disks detected without exposing their device paths or serial numbers."
+            />
+            <Metric
+              l="VIRTUALIZATION"
+              v={data.cpu.virtualization_supported ? "Ready" : "Unavailable"}
+              s={data.cpu.virtualization}
+              w={data.cpu.virtualization_supported ? "100%" : "0%"}
+              tip="Hardware acceleration capability reported by the processor."
+            />
+          </div>
+          <div className="twocol">
+            <div className="panel">
+              <Section
+                title="Graphics"
+                copy={`${data.gpus.length} adapter${data.gpus.length === 1 ? "" : "s"}`}
+              />
+              {data.gpus.length === 0 ? (
+                <Empty text="No supported graphics adapters were reported." />
+              ) : (
+                data.gpus.map((gpu, index) => (
+                  <div className="drive" key={`${gpu.vendor}-${index}`}>
+                    <b>▣</b>
+                    <div>
+                      <strong>{gpu.vendor} graphics</strong>
+                      <p>
+                        {gpu.driver} driver ·{" "}
+                        {gpu.boot_vga ? "Host display" : "Secondary adapter"}
+                      </p>
+                    </div>
+                    <span
+                      className={gpu.recognized_vendor ? "ready" : "waiting"}
+                    >
+                      {gpu.recognized_vendor ? "Recognized" : "Limited"}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="panel">
+              <Section title="Connections" copy="Privacy-safe totals" />
+              <div className="hardwaretotals">
+                <span>
+                  <b>{data.networks.length}</b> network links
+                </span>
+                <span>
+                  <b>{data.storage_controllers.length}</b> storage controllers
+                </span>
+                <span>
+                  <b>{data.usb_device_count}</b> USB devices
+                </span>
+              </div>
+            </div>
+          </div>
+          <Advanced label="Advanced hardware details">
+            <p className="advanced-intro">
+              Health and compatibility remain visible above. These optional
+              details contain only privacy-safe topology and capability data.
+            </p>
+            <div className="advanced-grid">
+              <section>
+                <h2>Processor topology</h2>
+                <dl>
+                  <div>
+                    <dt>Architecture</dt>
+                    <dd>{data.cpu.architecture}</dd>
+                  </div>
+                  <div>
+                    <dt>Sockets</dt>
+                    <dd>{data.cpu.sockets}</dd>
+                  </div>
+                  <div>
+                    <dt>Cores per socket</dt>
+                    <dd>{data.cpu.cores_per_socket}</dd>
+                  </div>
+                  <div>
+                    <dt>Threads per core</dt>
+                    <dd>{data.cpu.threads_per_core}</dd>
+                  </div>
+                </dl>
+              </section>
+              <section>
+                <h2>Network links</h2>
+                {data.networks.length === 0 ? (
+                  <p>No network links reported.</p>
+                ) : (
+                  <dl>
+                    {data.networks.map((link, index) => (
+                      <div key={index}>
+                        <dt>Link {index + 1}</dt>
+                        <dd>
+                          {link.link_type} · {link.state} · MTU {link.mtu}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
+              </section>
+              <section>
+                <h2>Storage controllers</h2>
+                {data.storage_controllers.length === 0 ? (
+                  <p>No storage controllers reported.</p>
+                ) : (
+                  <dl>
+                    {data.storage_controllers.map((controller, index) => (
+                      <div key={index}>
+                        <dt>{controller.class}</dt>
+                        <dd>{controller.description}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
+              </section>
+              <section>
+                <h2>Physical media</h2>
+                {data.disks.length === 0 ? (
+                  <p>No physical media reported.</p>
+                ) : (
+                  <dl>
+                    {data.disks.map((disk, index) => (
+                      <div key={index}>
+                        <dt>
+                          {disk.vendor} {disk.model}
+                        </dt>
+                        <dd>
+                          {disk.transport} ·{" "}
+                          {disk.rotational ? "rotational" : "solid-state"}
+                          {disk.removable ? " · removable" : ""}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
+              </section>
+            </div>
+          </Advanced>
+        </>
+      )}
+    </>
+  );
+}
+function LiveState({
+  connected,
+  available,
+  noun,
+}: {
+  connected: boolean;
+  available: boolean;
+  noun: string;
+}) {
+  return (
+    <div
+      className={`connection ${connected && available ? "connected" : connected ? "error" : "idle"}`}
+    >
+      <span className="connectiondot" />
+      <div>
+        <strong>
+          {!connected
+            ? "Connect from Overview"
+            : available
+              ? "Live server data"
+              : "Service unavailable"}
+        </strong>
+        <p>
+          {!connected
+            ? `Authenticate once to load ${noun}.`
+            : available
+              ? "This view came from the authenticated Bedrock API."
+              : `Bedrock is connected, but ${noun} could not be loaded.`}
+        </p>
+      </div>
+    </div>
+  );
+}
+function Empty({ text }: { text: string }) {
+  return (
+    <div className="empty">
+      <b>○</b>
+      <span>{text}</span>
+    </div>
+  );
+}
+function Download({ notify }: { notify: (s: string) => void }) {
+  const [os, setOs] = useState("Windows");
+  return (
+    <>
+      <button className="back">← Back to Bedrock</button>
+      <div className="download">
+        <div>
+          <div className="kicker">Bedrock INSTALLER · v0.1.0</div>
+          <h1>Your server starts here.</h1>
+          <p>
+            Turn an ordinary computer into private storage and a home for your
+            virtual machines.
+          </p>
+          {[
+            "Download Bedrock Installer|A small tool that prepares your USB drive.",
+            "Choose a USB drive or DVD image|8 GB or larger is recommended.",
+            "Start the server and follow along|The guided setup explains every decision.",
+          ].map((x, i) => {
+            const a = x.split("|");
+            return (
+              <div className="step" key={x}>
+                <b>{i + 1}</b>
+                <span>
+                  <strong>{a[0]}</strong>
+                  <small>{a[1]}</small>
+                </span>
+              </div>
+            );
+          })}
+        </div>
+        <div className="installer">
+          <div className="ilog">
+            <b>H</b>
+            <span>
+              <strong>Bedrock Installer</strong>
+              <small>Create your installer safely</small>
+            </span>
+          </div>
+          <label>Your computer</label>
+          <div className="segments">
+            {["Windows", "macOS", "Linux"].map((x) => (
+              <button
+                className={os === x ? "sel" : ""}
+                onClick={() => setOs(x)}
+                key={x}
+              >
+                {x}
+              </button>
+            ))}
+          </div>
+          <button
+            className="writer"
+            onClick={() =>
+              notify(`Bedrock Installer for ${os} is being prepared`)
+            }
+          >
+            ⇩ Download for {os}
+          </button>
+          <p>
+            Version 0.1.0 · Open source ·{" "}
+            <a href="https://github.com" target="_blank">
+              View on GitHub ↗
+            </a>
+          </p>
+          <hr />
+          <button
+            className="iso"
+            onClick={() => notify("Direct ISO download is being prepared")}
+          >
+            Download ISO directly{" "}
+            <Tip>
+              Use this with another USB-writing app, a virtual machine, or burn
+              it to a DVD.
+            </Tip>
+          </button>
+        </div>
+      </div>
+      <div className="requirements">
+        <span>✓ 64-bit Intel or AMD</span>
+        <span>✓ 8 GB RAM minimum</span>
+        <span>✓ 32 GB system drive</span>
+        <span>✓ Wired network recommended</span>
+      </div>
+    </>
+  );
+}
+function Remote({
+  data,
+  connected,
+  token,
+  setData,
+  notify,
+}: {
+  data: RemoteDeviceFeed | null;
+  connected: boolean;
+  token: string;
+  setData: (value: RemoteDeviceFeed | null) => void;
+  notify: (value: string) => void;
+}) {
+  type Operation = "rename" | "expire" | "revoke";
+  type Selection = {
+    device: RemoteDeviceFeed["devices"][number];
+    operation: Operation;
+  };
+  const [selected, setSelected] = useState<Selection | null>(null),
+    [pairing, setPairing] = useState<
+      RemoteDeviceFeed["pending_requests"][number] | null
+    >(null),
+    [name, setName] = useState(""),
+    [expiry, setExpiry] = useState(""),
+    [confirmation, setConfirmation] = useState(""),
+    [working, setWorking] = useState(false),
+    [error, setError] = useState("");
+  const active =
+      data?.devices.filter((device) => !device.revoked && !device.expired)
+        .length ?? 0,
+    seen = (value: number | null) =>
+      value === null
+        ? "Never connected"
+        : `Last seen ${new Date(value * 1000).toLocaleString()}`,
+    expiresUnix = expiry ? Math.floor(new Date(expiry).getTime() / 1000) : 0,
+    phrase =
+      selected?.operation === "revoke"
+        ? `REVOKE REMOTE DEVICE ${selected.device.id}`
+        : selected?.operation === "expire" && expiresUnix
+          ? `EXPIRE REMOTE DEVICE ${selected.device.id} AT ${expiresUnix}`
+          : "";
+  const choose = (
+    device: RemoteDeviceFeed["devices"][number],
+    operation: Operation,
+  ) => {
+    setPairing(null);
+    setSelected({ device, operation });
+    setName(device.name);
+    setExpiry("");
+    setConfirmation("");
+    setError("");
+  };
+  const save = async () => {
+    if (
+      !selected ||
+      (selected.operation === "rename"
+        ? !name.trim() || name.length > 64
+        : confirmation !== phrase)
+    )
+      return;
+    setWorking(true);
+    setError("");
+    try {
+      const body =
+        selected.operation === "rename"
+          ? { schema: 1, operation: "rename", name: name.trim() }
+          : selected.operation === "expire"
+            ? {
+                schema: 1,
+                operation: "expire",
+                expires_unix: expiresUnix,
+                confirmation,
+              }
+            : { schema: 1, operation: "revoke", confirmation };
+      const response = await fetch(
+        `/api/v1/remote/devices/${selected.device.id}`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+            "Idempotency-Key": crypto.randomUUID(),
+            "If-Match": data?.etag ?? "",
+          },
+          body: JSON.stringify(body),
+        },
+      );
+      if (!response.ok)
+        throw new Error(
+          response.status === 412
+            ? "Remote trust changed since it was loaded. Review the latest devices and try again."
+            : response.status === 422
+              ? "The device state or expiry policy changed."
+              : "Bedrock rejected the trusted-device change.",
+        );
+      const refreshed = await fetch("/api/v1/remote/devices", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (!refreshed.ok)
+        throw new Error(
+          "The change completed, but refreshed device status is unavailable.",
+        );
+      const next = (await refreshed.json()) as Omit<RemoteDeviceFeed, "etag">;
+      setData({ ...next, etag: refreshed.headers.get("ETag") ?? "" });
+      notify(`Remote device ${selected.operation} completed`);
+      setSelected(null);
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Remote device change failed.",
+      );
+    } finally {
+      setWorking(false);
+    }
+  };
+  const approve = async () => {
+    const approval = pairing ? `APPROVE REMOTE DEVICE ${pairing.id}` : "";
+    if (!pairing || pairing.approved || confirmation !== approval) return;
+    setWorking(true);
+    setError("");
+    try {
+      const response = await fetch(
+        `/api/v1/remote/pairings/${pairing.id}/approve`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+            "Idempotency-Key": crypto.randomUUID(),
+            "If-Match": data?.etag ?? "",
+          },
+          body: JSON.stringify({ schema: 1, confirmation }),
+        },
+      );
+      if (!response.ok)
+        throw new Error(
+          response.status === 412
+            ? "Pairing state changed since it was loaded. Review the latest request and try again."
+            : response.status === 422
+              ? "The pairing request expired or is no longer available."
+              : "Bedrock rejected pairing approval.",
+        );
+      const refreshed = await fetch("/api/v1/remote/devices", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (!refreshed.ok)
+        throw new Error(
+          "Pairing was approved, but refreshed status is unavailable.",
+        );
+      const next = (await refreshed.json()) as Omit<RemoteDeviceFeed, "etag">;
+      setData({ ...next, etag: refreshed.headers.get("ETag") ?? "" });
+      setPairing(null);
+      notify("Remote pairing approved");
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Pairing approval failed.",
+      );
+    } finally {
+      setWorking(false);
+    }
+  };
+  return (
+    <>
+      <Title
+        title="Remote access"
+        copy="Trusted computers authorized to reach this Bedrock server."
+        action={<span className="securebadge">● Device-specific trust</span>}
+      />
+      <LiveState
+        connected={connected}
+        available={!!data}
+        noun="trusted-device status"
+      />
+      <div className="note">
+        <span>
+          <b>Protected controls.</b> Pairing must originate on a client and then
+          be approved here before its one-time code expires. Codes and client
+          keys never appear in this interface.
+        </span>
+      </div>
+      {data && (
+        <>
+          <div className="metrics hardwaremetrics">
+            <Metric
+              l="TRUSTED"
+              v={String(active)}
+              s="active devices"
+              w={
+                data.devices.length
+                  ? `${Math.round((active / data.devices.length) * 100)}%`
+                  : "0%"
+              }
+              tip="Devices whose trust has not expired or been revoked."
+            />
+            <Metric
+              l="REVOKED"
+              v={String(data.devices.filter((device) => device.revoked).length)}
+              s="access removed"
+              w="0%"
+              tip="Revoked devices cannot establish a new Bedrock session."
+            />
+            <Metric
+              l="EXPIRED"
+              v={String(
+                data.devices.filter(
+                  (device) => device.expired && !device.revoked,
+                ).length,
+              )}
+              s="renewal required"
+              w="0%"
+              tip="Expired device credentials must be paired again before use."
+            />
+          </div>
+          <div className="panel devices">
+            <Section
+              title="Pending pairing requests"
+              copy={`${data.pending_requests.length} awaiting completion`}
+            />
+            {data.pending_requests.length === 0 ? (
+              <Empty text="No client is waiting for pairing approval." />
+            ) : (
+              data.pending_requests.map((request) => (
+                <div className="device" key={request.id}>
+                  <b>⌁</b>
+                  <div>
+                    <strong>New client request</strong>
+                    <p>
+                      ID {request.id} · expires in{" "}
+                      {Math.ceil(request.expires_in_seconds / 60)} minute
+                      {Math.ceil(request.expires_in_seconds / 60) === 1
+                        ? ""
+                        : "s"}
+                    </p>
+                  </div>
+                  <div className="settings-actions">
+                    <span className={request.approved ? "ready" : "waiting"}>
+                      {request.approved ? "Approved" : "Needs approval"}
+                    </span>
+                    {!request.approved && (
+                      <button
+                        className="primary"
+                        onClick={() => {
+                          setPairing(request);
+                          setConfirmation("");
+                          setError("");
+                        }}
+                      >
+                        Review
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+          <div className="panel devices">
+            <Section
+              title="Trusted devices"
+              copy={`${data.devices.length} registered`}
+            />
+            {data.devices.length === 0 ? (
+              <Empty text="No remote devices are paired." />
+            ) : (
+              data.devices.map((device) => {
+                const status = device.revoked
+                  ? "Revoked"
+                  : device.expired
+                    ? "Expired"
+                    : "Trusted";
+                return (
+                  <div className="device" key={device.id}>
+                    <b>⌁</b>
+                    <div>
+                      <strong>{device.name}</strong>
+                      <p>
+                        {seen(device.last_seen_unix)} · Added{" "}
+                        {new Date(
+                          device.created_unix * 1000,
+                        ).toLocaleDateString()}{" "}
+                        · Expires{" "}
+                        {new Date(
+                          device.expires_unix * 1000,
+                        ).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <div className="settings-actions">
+                      <span
+                        className={status === "Trusted" ? "ready" : "waiting"}
+                      >
+                        {status}
+                      </span>
+                      <button onClick={() => choose(device, "rename")}>
+                        Rename
+                      </button>
+                      {!device.revoked && (
+                        <>
+                          <button onClick={() => choose(device, "expire")}>
+                            Change expiry
+                          </button>
+                          <button
+                            className="danger"
+                            onClick={() => choose(device, "revoke")}
+                          >
+                            Revoke
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </>
+      )}
+      <div className="note">
+        <Tip>
+          Approve only while you can compare the server fingerprint and one-time
+          code shown by the client with the local server display.
+        </Tip>
+        <span>
+          <b>Private by design.</b> Public keys, fingerprints, and pairing codes
+          are never returned to this interface.
+        </span>
+      </div>
+      {pairing && (
+        <div
+          className="shade"
+          role="presentation"
+          onMouseDown={(event) =>
+            event.target === event.currentTarget && !working && setPairing(null)
+          }
+        >
+          <section
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="pairing-title"
+          >
+            <header>
+              <h2 id="pairing-title">Approve remote pairing</h2>
+              <button
+                aria-label="Close"
+                disabled={working}
+                onClick={() => setPairing(null)}
+              >
+                ×
+              </button>
+            </header>
+            <p>
+              Confirm the request ID, server fingerprint, and manual code
+              directly with the client before approving. Approval alone does not
+              reveal or redeem the code.
+            </p>
+            <label>
+              Type <b>APPROVE REMOTE DEVICE {pairing.id}</b>
+              <input
+                autoFocus
+                autoComplete="off"
+                value={confirmation}
+                onChange={(event) => setConfirmation(event.target.value)}
+              />
+            </label>
+            {error && (
+              <p className="form-error" role="alert">
+                {error}
+              </p>
+            )}
+            <footer>
+              <button disabled={working} onClick={() => setPairing(null)}>
+                Cancel
+              </button>
+              <button
+                className="primary"
+                disabled={
+                  working ||
+                  confirmation !== `APPROVE REMOTE DEVICE ${pairing.id}`
+                }
+                onClick={approve}
+              >
+                {working ? "Approving…" : "Approve pairing"}
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
+      {selected && (
+        <div
+          className="shade"
+          role="presentation"
+          onMouseDown={(event) =>
+            event.target === event.currentTarget &&
+            !working &&
+            setSelected(null)
+          }
+        >
+          <section
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="remote-device-title"
+          >
+            <header>
+              <h2 id="remote-device-title">
+                {selected.operation.replace("-", " ")} {selected.device.name}
+              </h2>
+              <button
+                aria-label="Close"
+                disabled={working}
+                onClick={() => setSelected(null)}
+              >
+                ×
+              </button>
+            </header>
+            {selected.operation === "rename" ? (
+              <label>
+                Device name
+                <input
+                  autoFocus
+                  maxLength={64}
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                />
+              </label>
+            ) : selected.operation === "expire" ? (
+              <>
+                <p>
+                  Choose a future expiry within one year. Existing sessions
+                  remain active until that time.
+                </p>
+                <label>
+                  New expiry
+                  <input
+                    autoFocus
+                    type="datetime-local"
+                    value={expiry}
+                    onChange={(event) => {
+                      setExpiry(event.target.value);
+                      setConfirmation("");
+                    }}
+                  />
+                </label>
+                {phrase && (
+                  <label>
+                    Type <b>{phrase}</b>
+                    <input
+                      autoComplete="off"
+                      value={confirmation}
+                      onChange={(event) => setConfirmation(event.target.value)}
+                    />
+                  </label>
+                )}
+              </>
+            ) : (
+              <>
+                <p>
+                  Revocation is permanent and immediately terminates active
+                  sessions for this device.
+                </p>
+                <label>
+                  Type <b>{phrase}</b>
+                  <input
+                    autoFocus
+                    autoComplete="off"
+                    value={confirmation}
+                    onChange={(event) => setConfirmation(event.target.value)}
+                  />
+                </label>
+              </>
+            )}
+            {error && (
+              <p className="form-error" role="alert">
+                {error}
+              </p>
+            )}
+            <footer>
+              <button disabled={working} onClick={() => setSelected(null)}>
+                Cancel
+              </button>
+              <button
+                className={
+                  selected.operation === "revoke" ? "danger primary" : "primary"
+                }
+                disabled={
+                  working ||
+                  (selected.operation === "rename"
+                    ? !name.trim() || name.length > 64
+                    : !phrase || confirmation !== phrase)
+                }
+                onClick={save}
+              >
+                {working
+                  ? "Saving…"
+                  : selected.operation === "revoke"
+                    ? "Revoke device"
+                    : "Save change"}
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
+    </>
+  );
+}
+function Activity({
+  tasks,
+  alerts,
+  audit,
+  connected,
+}: {
+  tasks: TaskFeed | null;
+  alerts: AlertFeed | null;
+  audit: AuditFeed | null;
+  connected: boolean;
+}) {
+  const available = [tasks, alerts, audit].filter(Boolean).length;
+  const progress = (task: TaskFeed["tasks"][number]) =>
+    Math.min(
+      100,
+      Math.round((task.progress.current / task.progress.total) * 100),
+    );
+  return (
+    <>
+      <Title
+        title="Activity"
+        copy="Live work, health alerts, and security-relevant history."
+      />
+      <LiveState
+        connected={connected}
+        available={available > 0}
+        noun="activity feeds"
+      />
+      {connected && available > 0 && available < 3 && (
+        <div className="note">
+          <span>
+            <b>Partial data.</b> Available feeds remain visible while an
+            unavailable service is isolated.
+          </span>
+        </div>
+      )}
+      <div className="twocol">
+        <div className="panel">
+          <Section
+            title="Tasks"
+            copy={tasks ? `${tasks.tasks.length} retained` : "Unavailable"}
+          />
+          {tasks ? (
+            tasks.tasks.length === 0 ? (
+              <Empty text="No recent tasks." />
+            ) : (
+              tasks.tasks.map((task) => (
+                <div className="drive" key={task.id}>
+                  <b>◔</b>
+                  <div>
+                    <strong>{task.kind.replaceAll("-", " ")}</strong>
+                    <p>
+                      {task.progress.current} of {task.progress.total}{" "}
+                      {task.progress.unit} · Updated{" "}
+                      {new Date(task.updated_unix * 1000).toLocaleString()}
+                    </p>
+                    <div className="milestonebar">
+                      <i style={{ width: `${progress(task)}%` }} />
+                    </div>
+                  </div>
+                  <span
+                    className={
+                      task.state === "succeeded"
+                        ? "ready"
+                        : task.state === "running"
+                          ? "waiting"
+                          : ""
+                    }
+                  >
+                    {task.state}
+                  </span>
+                </div>
+              ))
+            )
+          ) : (
+            <Empty text="Task status is unavailable." />
+          )}
+        </div>
+        <div className="panel">
+          <Section
+            title="Active alerts"
+            copy={
+              alerts ? `${alerts.alerts.length} require review` : "Unavailable"
+            }
+          />
+          {alerts ? (
+            alerts.alerts.length === 0 ? (
+              <Empty text="No active health alerts." />
+            ) : (
+              alerts.alerts.map((alert) => (
+                <div className="drive" key={alert.id}>
+                  <b>!</b>
+                  <div>
+                    <strong>{alert.kind.replaceAll("-", " ")}</strong>
+                    <p>
+                      First seen{" "}
+                      {new Date(alert.first_seen_unix * 1000).toLocaleString()}{" "}
+                      · Updated{" "}
+                      {new Date(alert.last_seen_unix * 1000).toLocaleString()}
+                    </p>
+                  </div>
+                  <span className="waiting">{alert.severity}</span>
+                </div>
+              ))
+            )
+          ) : (
+            <Empty text="Alert status is unavailable." />
+          )}
+        </div>
+      </div>
+      <div className="panel">
+        <Section
+          title="Audit history"
+          copy={audit ? `${audit.events.length} recent events` : "Unavailable"}
+        />
+        {audit ? (
+          audit.events.length === 0 ? (
+            <Empty text="No audit events have been recorded." />
+          ) : (
+            audit.events.map((event) => (
+              <div className="drive" key={event.id}>
+                <b>✓</b>
+                <div>
+                  <strong>
+                    {event.category} · {event.action.replaceAll("-", " ")}
+                  </strong>
+                  <p>
+                    {new Date(event.occurred_unix * 1000).toLocaleString()} ·
+                    Identifiers and command details are excluded
+                  </p>
+                </div>
+                <span
+                  className={
+                    event.outcome === "succeeded" ? "ready" : "waiting"
+                  }
+                >
+                  {event.outcome}
+                </span>
+              </div>
+            ))
+          )
+        ) : (
+          <Empty text="Audit history is unavailable." />
+        )}
+      </div>
+    </>
+  );
+}
+function Settings({
+  data,
+  connected,
+  token,
+  setData,
+  notify,
+}: {
+  data: SettingsFeed | null;
+  connected: boolean;
+  token: string;
+  setData: (value: SettingsFeed | null) => void;
+  notify: (value: string) => void;
+}) {
+  const [saving, setSaving] = useState(false),
+    [betaAck, setBetaAck] = useState(false),
+    [error, setError] = useState("");
+  const update = async (
+    setting: "automatic_checks" | "channel",
+    value: boolean | "stable" | "beta",
+  ) => {
+    if (!data) return;
+    setSaving(true);
+    setError("");
+    try {
+      const response = await fetch("/api/v1/settings", {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
+          "If-Match": data.etag,
+        },
+        body: JSON.stringify({
+          schema: 1,
+          setting,
+          value,
+          beta_risk_acknowledged: value === "beta" && betaAck,
+        }),
+      });
+      if (!response.ok)
+        throw new Error(
+          response.status === 412
+            ? "Settings changed since they were loaded. Review the latest values and try again."
+            : response.status === 409
+              ? "This change conflicts with an earlier request. Try again."
+              : "Bedrock rejected the policy change.",
+        );
+      const refreshed = await fetch("/api/v1/settings", {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      });
+      if (!refreshed.ok)
+        throw new Error(
+          "The change succeeded, but the refreshed policy is unavailable.",
+        );
+      const next = (await refreshed.json()) as Omit<SettingsFeed, "etag">;
+      setData({ ...next, etag: refreshed.headers.get("ETag") ?? "" });
+      setBetaAck(false);
+      notify("Update policy saved");
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Policy change failed.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <>
+      <Title
+        title="Settings"
+        copy="Update and privacy policy for this Bedrock server."
+      />
+      <LiveState
+        connected={connected}
+        available={!!data}
+        noun="settings policy"
+      />
+      {data && (
+        <>
+          <div className="note">
+            <span>
+              <b>Safe updates.</b> Bedrock may check automatically, but
+              installation always requires an administrator action after
+              signature verification.
+            </span>
+          </div>
+          {error && (
+            <div className="note settings-error" role="alert">
+              <span>
+                <b>Change not saved.</b> {error}
+              </span>
+            </div>
+          )}
+          <div className="panel">
+            <Section
+              title="System policy"
+              copy="Validated and applied by Bedrock"
+            />
+            <div className="drive settings-row">
+              <b>↻</b>
+              <div>
+                <strong>Release channel</strong>
+                <p>
+                  {data.updates.channel === "stable"
+                    ? "Stable releases only"
+                    : "Beta releases accepted with explicit risk acknowledgement"}
+                </p>
+                {data.updates.channel !== "beta" && (
+                  <label className="risk">
+                    <input
+                      type="checkbox"
+                      checked={betaAck}
+                      onChange={(event) => setBetaAck(event.target.checked)}
+                    />{" "}
+                    I understand beta releases may be unstable.
+                  </label>
+                )}
+              </div>
+              <div className="settings-actions">
+                <span
+                  className={
+                    data.updates.channel === "stable" ? "ready" : "waiting"
+                  }
+                >
+                  {data.updates.channel}
+                </span>
+                {data.updates.channel === "stable" ? (
+                  <button
+                    disabled={saving || !betaAck}
+                    onClick={() => update("channel", "beta")}
+                  >
+                    Use beta
+                  </button>
+                ) : (
+                  <button
+                    disabled={saving}
+                    onClick={() => update("channel", "stable")}
+                  >
+                    Use stable
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="drive settings-row">
+              <b>◔</b>
+              <div>
+                <strong>Automatic update checks</strong>
+                <p>
+                  {data.updates.setup_choice_recorded
+                    ? "Administrator choice recorded"
+                    : "Waiting for first-run administrator choice"}
+                </p>
+              </div>
+              <div className="settings-actions">
+                <span
+                  className={
+                    data.updates.automatic_checks ? "ready" : "waiting"
+                  }
+                >
+                  {data.updates.automatic_checks ? "Enabled" : "Disabled"}
+                </span>
+                <button
+                  disabled={saving}
+                  onClick={() =>
+                    update("automatic_checks", !data.updates.automatic_checks)
+                  }
+                >
+                  {data.updates.automatic_checks ? "Disable" : "Enable"}
+                </button>
+              </div>
+            </div>
+            <div className="drive">
+              <b>↓</b>
+              <div>
+                <strong>Automatic installation</strong>
+                <p>
+                  Updates require an explicit administrator action after
+                  signature verification.
+                </p>
+              </div>
+              <span className="ready">Never</span>
+            </div>
+            <div className="drive">
+              <b>○</b>
+              <div>
+                <strong>Telemetry</strong>
+                <p>
+                  Bedrock does not send usage or diagnostic data automatically.
+                </p>
+              </div>
+              <span className="ready">Disabled</span>
+            </div>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+function Users({
+  data,
+  connected,
+}: {
+  data: UserFeed | null;
+  connected: boolean;
+}) {
+  return (
+    <>
+      <Title
+        title="Users"
+        copy="Managed storage accounts, groups, and credential-rotation status."
+      />
+      <LiveState
+        connected={connected}
+        available={!!data}
+        noun="user and group inventory"
+      />
+      <div className="note">
+        <span>
+          <b>Protected identities.</b> User and group creation and group
+          membership are available here; credential rotation remains a guarded
+          root-staged operation.
+        </span>
+      </div>
+      {data && (
+        <>
+          <div className="metrics hardwaremetrics">
+            <Metric
+              l="USERS"
+              v={String(data.users.length)}
+              s="managed accounts"
+              w={data.users.length ? "100%" : "0%"}
+              tip="Accounts created through Bedrock storage management."
+            />
+            <Metric
+              l="GROUPS"
+              v={String(data.groups.length)}
+              s="access groups"
+              w={data.groups.length ? "100%" : "0%"}
+              tip="Groups used to grant dataset and share access."
+            />
+            <Metric
+              l="ROTATED"
+              v={String(
+                data.users.filter(
+                  (user) => user.credential_rotated_unix !== null,
+                ).length,
+              )}
+              s="credentials renewed"
+              w={
+                data.users.length
+                  ? `${Math.round((data.users.filter((user) => user.credential_rotated_unix !== null).length / data.users.length) * 100)}%`
+                  : "0%"
+              }
+              tip="Accounts whose managed storage credential has been rotated at least once."
+            />
+          </div>
+          <div className="twocol">
+            <div className="panel">
+              <Section
+                title="Accounts"
+                copy={`${data.users.length} configured`}
+              />
+              {data.users.length === 0 ? (
+                <Empty text="No managed storage accounts." />
+              ) : (
+                data.users.map((user) => (
+                  <div className="drive" key={user.name}>
+                    <b>♧</b>
+                    <div>
+                      <strong>{user.name}</strong>
+                      <p>
+                        Created{" "}
+                        {new Date(
+                          user.created_unix * 1000,
+                        ).toLocaleDateString()}{" "}
+                        · Credential generation {user.credential_generation}
+                      </p>
+                    </div>
+                    <span
+                      className={
+                        user.credential_rotated_unix !== null
+                          ? "ready"
+                          : "waiting"
+                      }
+                    >
+                      {user.credential_rotated_unix === null
+                        ? "Not rotated"
+                        : `Rotated ${new Date(user.credential_rotated_unix * 1000).toLocaleDateString()}`}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+            <div className="panel">
+              <Section
+                title="Groups"
+                copy={`${data.groups.length} configured`}
+              />
+              {data.groups.length === 0 ? (
+                <Empty text="No access groups." />
+              ) : (
+                data.groups.map((group) => (
+                  <div className="drive" key={group.name}>
+                    <b>◎</b>
+                    <div>
+                      <strong>{group.name}</strong>
+                      <p>
+                        Created{" "}
+                        {new Date(
+                          group.created_unix * 1000,
+                        ).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <span>
+                      {group.member_count} member
+                      {group.member_count === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </>
+      )}
+      <div className="note">
+        <Tip>
+          Member identities and share permissions are intentionally excluded
+          from this summary.
+        </Tip>
+        <span>
+          <b>Credentials stay private.</b> Passwords and hashes are never
+          returned to the interface.
+        </span>
+      </div>
+    </>
+  );
+}
+function Help() {
+  const root =
+    "https://github.com/DEADish1/bedrock-os/blob/codex/latest-update/";
+  const links = [
+    [
+      "Install Bedrock",
+      "docs/INSTALLATION.md",
+      "Prepare verified media and install safely.",
+    ],
+    [
+      "First-run setup",
+      "docs/FIRST-RUN-SETUP.md",
+      "Configure the administrator, network, time, and updates.",
+    ],
+    [
+      "Administration",
+      "docs/ADMINISTRATION.md",
+      "Operate storage, guests, apps, backups, and updates.",
+    ],
+    [
+      "Troubleshooting",
+      "docs/TROUBLESHOOTING.md",
+      "Diagnose problems without risking data.",
+    ],
+    [
+      "Privacy and diagnostics",
+      "docs/DIAGNOSTICS.md",
+      "Review and create a consent-gated redacted support bundle.",
+    ],
+    [
+      "Support policy",
+      "SUPPORT.md",
+      "Understand support boundaries and security reporting.",
+    ],
+  ];
+  return (
+    <>
+      <Title
+        title="Help"
+        copy="Bedrock operating guides and safe recovery paths."
+      />
+      <div className="panel helplinks">
+        <Section
+          title="Documentation"
+          copy="Version-controlled project guidance"
+        />
+        {links.map(([title, path, copy]) => (
+          <a
+            className="drive"
+            href={`${root}${path}`}
+            target="_blank"
+            rel="noreferrer"
+            key={path}
+          >
+            <b>↗</b>
+            <div>
+              <strong>{title}</strong>
+              <p>{copy}</p>
+            </div>
+            <span>Open</span>
+          </a>
+        ))}
+      </div>
+      <div className="note">
+        <Tip>
+          A diagnostic bundle excludes user files, credentials, pairing state,
+          API tokens, command arguments, and raw logs.
+        </Tip>
+        <span>
+          <b>Need support?</b> Start with Troubleshooting, then review the
+          diagnostic bundle before sharing it.
+        </span>
+      </div>
+    </>
+  );
+}
+function ProjectStatus() {
+  const versions = [
+    {
+      v: "0.1",
+      name: "Product definition",
+      state: "Complete",
+      done: 8,
+      total: 8,
+      items: [
+        "Brand and product language",
+        "Interactive product prototype",
+        "Versioned roadmap and update log",
+        "Hardware and architecture decisions",
+      ],
+    },
+    {
+      v: "0.2",
+      name: "Bootable foundation",
+      state: "Current",
+      done: 7,
+      total: 8,
+      items: [
+        "Debian 13 base and kernel policy",
+        "UEFI boot and diagnostics",
+        "Immutable A/B system disk",
+        "Bootable ISO and USB image",
+        "Signed updates and rollback",
+        "Hardware discovery",
+        "Reproducible CI builds",
+        "Physical and VM platform tests",
+      ],
+    },
+    {
+      v: "0.3",
+      name: "Installer and setup",
+      state: "In progress",
+      done: 6,
+      total: 8,
+      items: [
+        "Windows, macOS, and Linux installer",
+        "Safe target-drive confirmation",
+        "Verified media writing",
+        "First-run server setup",
+      ],
+    },
+    {
+      v: "0.4",
+      name: "Storage and NAS",
+      state: "Complete",
+      done: 10,
+      total: 10,
+      items: [
+        "Storage pools and disk health",
+        "Software RAID and RAID-Z",
+        "Hardware RAID controller support",
+        "SMB, NFS, and Time Machine",
+        "Datasets, snapshots, and quotas",
+        "Users, groups, ACLs, and credentials",
+        "Guided create and expansion",
+        "Scrub, export, and safe import",
+        "Drive-failure replacement and rebuild",
+        "Interruption and integrity recovery",
+      ],
+    },
+    {
+      v: "0.5",
+      name: "VMs and images",
+      state: "Acceptance pending",
+      done: 8,
+      total: 8,
+      items: [
+        "KVM/QEMU integration",
+        "VM lifecycle and snapshots",
+        "GPU and USB passthrough",
+        "Image import and conversion",
+      ],
+    },
+    {
+      v: "0.6",
+      name: "Interface and API",
+      state: "In progress",
+      done: 1,
+      total: 7,
+      items: [
+        "Advanced details preserve health and safety",
+        "Authenticated server API",
+        "Real telemetry and tasks",
+        "Complete management areas",
+      ],
+    },
+    {
+      v: "0.7",
+      name: "Remote clients",
+      state: "In progress",
+      done: 1,
+      total: 8,
+      items: [
+        "Encrypted remote transport threat model",
+        "QR and code pairing",
+        "Google identity option",
+        "Signed Windows and macOS clients",
+      ],
+    },
+    {
+      v: "0.8",
+      name: "Backup and recovery",
+      state: "In progress",
+      done: 5,
+      total: 7,
+      items: [
+        "Encrypted backup and restore",
+        "Configuration recovery",
+        "Application isolation",
+        "Actionable health notifications",
+        "Consent-gated redacted diagnostics",
+        "UPS and maintenance safety",
+        "Full restore drills",
+      ],
+    },
+    {
+      v: "0.9",
+      name: "Release candidate",
+      state: "In progress",
+      done: 3,
+      total: 8,
+      items: [
+        "Frozen 1.0 scope and hardware matrix",
+        "Complete operating and recovery documentation",
+        "License, privacy, support, and issue policies",
+        "Upgrade testing",
+        "Soak and failure testing",
+        "Security review and SBOM",
+        "Signed release candidate",
+        "Beta triage and checksums",
+      ],
+    },
+    {
+      v: "1.0",
+      name: "Ready to ship",
+      state: "Ship gate",
+      done: 0,
+      total: 8,
+      items: [
+        "Signed OS and installers",
+        "Signed desktop clients",
+        "Public source and releases",
+        "Final acceptance and launch",
+      ],
+    },
+  ];
+  return (
+    <>
+      <Title
+        title="Project status"
+        copy="The path from product definition to a fully functional, ready-to-ship Bedrock 1.0."
+        action={
+          <span className="versionbadge">
+            Current version <b>0.2.0-dev</b>
+          </span>
+        }
+      />
+      <div className="progresshero">
+        <div>
+          <div className="kicker">RELEASE PROGRESS</div>
+          <h2>Accessible advanced system details</h2>
+          <p>49 of 80 tracked release requirements are complete.</p>
+        </div>
+        <div className="bigprogress">
+          <span style={{ width: "61%" }} />
+        </div>
+        <b>61%</b>
+      </div>
+      <div className="roadmap">
+        {versions.map((x) => (
+          <article className={x.state === "Current" ? "current" : ""} key={x.v}>
+            <header>
+              <span>v{x.v}</span>
+              <div>
+                <h2>{x.name}</h2>
+                <p>
+                  {x.state} · {x.done} of {x.total} complete
+                </p>
+              </div>
+              <b>
+                {x.state === "Current" ||
+                x.state === "In progress" ||
+                x.state === "Acceptance pending"
+                  ? "IN PROGRESS"
+                  : x.state === "Complete"
+                    ? "COMPLETE"
+                    : x.state === "Ship gate"
+                      ? "SHIP GATE"
+                      : "PLANNED"}
+              </b>
+            </header>
+            <div className="milestonebar">
+              <i style={{ width: `${(x.done / x.total) * 100}%` }} />
+            </div>
+            <ul>
+              {x.items.map((item, i) => (
+                <li className={i < x.done ? "complete" : ""} key={item}>
+                  <span>{i < x.done ? "✓" : "○"}</span>
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </article>
+        ))}
+      </div>
+      <div className="updatepanel">
+        <div>
+          <div className="kicker">LATEST UPDATE · 2026-09-13</div>
+          <h2>Accessible advanced system details</h2>
+          <p>
+            Hardware and Storage now reveal optional privacy-safe topology and
+            diagnostic detail with native keyboard controls while keeping
+            health, compatibility, rebuild state, and destructive warnings
+            visible at all times.
+          </p>
+        </div>
+        <div>
+          <strong>Physical acceptance gates remain</strong>
+          <p>
+            v0.2 still needs VMware, Hyper-V, physical Intel, and physical AMD
+            boot reports. v0.3 needs disposable USB and system-disk evidence;
+            v0.5 needs Linux and Windows guest evidence.
+          </p>
+        </div>
+      </div>
+      <div className="note">
+        <Tip>
+          The complete checklist and change history live in PROJECT-ROADMAP.md
+          and CHANGELOG.md in the project source.
+        </Tip>
+        <span>
+          <b>Reviewable by design.</b> Each release must update the checklist,
+          update log, website status, version metadata, and artifact checksums.
+        </span>
+      </div>
+    </>
+  );
+}
