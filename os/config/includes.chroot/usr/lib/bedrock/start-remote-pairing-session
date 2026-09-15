@@ -1,0 +1,40 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 1 ] || { printf 'error: one session identity is required\n' >&2; exit 2; }
+session=$1
+printf '%s' "$session" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' || { printf 'error: session identity is invalid\n' >&2; exit 1; }
+if [ "${BEDROCK_REMOTE_LAUNCH_TEST_MODE:-0}" = 1 ]; then
+  runner=${BEDROCK_REMOTE_LAUNCH_SYSTEMD_RUN:?test systemd-run is required}
+  key=${BEDROCK_REMOTE_LAUNCH_PRIVATE_KEY:?test private key is required}
+  transport=${BEDROCK_REMOTE_LAUNCH_TRANSPORT:-/usr/lib/bedrock/bedrock-noise-transport}
+else
+  [ "$(id -u)" -eq 0 ] || { printf 'error: remote pairing launch requires root\n' >&2; exit 1; }
+  runner=/usr/bin/systemd-run
+  key=/var/lib/bedrock/remote/server-private-key.pem
+  transport=/usr/lib/bedrock/bedrock-noise-transport
+fi
+[ -f "$key" ] && [ ! -L "$key" ] || { printf 'error: remote server identity is unavailable\n' >&2; exit 1; }
+
+exec "$runner" --quiet --wait --pipe --collect --service-type=exec \
+  --unit="bedrock-remote-pairing-$session.service" \
+  --property="After=bedrock-pairing-gateway.service" \
+  --property="User=bedrock-remote" \
+  --property="Group=bedrock-remote" \
+  --property="LoadCredential=server-private-key:$key" \
+  --property="Environment=BEDROCK_NOISE_PRIVATE_KEY=%d/server-private-key" \
+  --property="NoNewPrivileges=yes" \
+  --property="PrivateDevices=yes" \
+  --property="PrivateTmp=yes" \
+  --property="ProtectHome=yes" \
+  --property="ProtectSystem=strict" \
+  --property="CapabilityBoundingSet=" \
+  --property="RestrictNamespaces=yes" \
+  --property="RestrictAddressFamilies=AF_UNIX" \
+  --property="RestrictSUIDSGID=yes" \
+  --property="LockPersonality=yes" \
+  --property="MemoryDenyWriteExecute=yes" \
+  --property="RuntimeMaxSec=30" \
+  --property="MemoryMax=134217728" \
+  --property="TasksMax=16" \
+  "$transport"

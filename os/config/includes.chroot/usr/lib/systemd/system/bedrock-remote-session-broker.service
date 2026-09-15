@@ -1,0 +1,33 @@
+[Unit]
+Description=Bedrock remote connected-stream launch broker
+Requires=bedrock-remote-identity.service bedrock-pairing-gateway.service
+After=bedrock-remote-identity.service bedrock-pairing-gateway.service bedrock-api.service
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/bedrock/bedrock-remote-session-broker
+User=root
+Group=bedrock-remote
+RuntimeDirectory=bedrock-remote-launch
+RuntimeDirectoryMode=0750
+UMask=0007
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/bedrock/api /run/bedrock-remote-launch -/run/bedrock-remote-credentials
+CapabilityBoundingSet=
+RestrictNamespaces=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

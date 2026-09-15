@@ -152,6 +152,7 @@ sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/change-remote-device"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/approve-remote-pairing"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/initialize-remote-identity"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/start-remote-device-session"
+sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/start-remote-pairing-session"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/change-backup"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/change-app"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/create-api-token"
@@ -161,6 +162,7 @@ python3 -c 'compile(open(__import__("sys").argv[1], encoding="utf-8").read(), __
 python3 -c 'compile(open(__import__("sys").argv[1], encoding="utf-8").read(), __import__("sys").argv[1], "exec")' "$OS_DIR/config/includes.chroot/usr/lib/bedrock/bedrock-action-broker"
 python3 -c 'compile(open(__import__("sys").argv[1], encoding="utf-8").read(), __import__("sys").argv[1], "exec")' "$OS_DIR/config/includes.chroot/usr/lib/bedrock/bedrock-pairing-gateway"
 python3 -c 'compile(open(__import__("sys").argv[1], encoding="utf-8").read(), __import__("sys").argv[1], "exec")' "$OS_DIR/config/includes.chroot/usr/lib/bedrock/bedrock-noise-transport"
+python3 -c 'compile(open(__import__("sys").argv[1], encoding="utf-8").read(), __import__("sys").argv[1], "exec")' "$OS_DIR/config/includes.chroot/usr/lib/bedrock/bedrock-remote-session-broker"
 sh -n "$OS_DIR/config/includes.chroot/usr/sbin/bedrock-update-settings"
 sh -n "$OS_DIR/config/includes.chroot/usr/sbin/bedrock-setup-updates"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/collect-hardware-inventory"
@@ -188,6 +190,7 @@ grep -q '^ExecStart=/usr/lib/bedrock/mark-boot-healthy$' "$OS_DIR/config/include
 [ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/multi-user.target.wants/bedrock-api.service" ] || { printf 'error: local API service is not enabled\n' >&2; exit 1; }
 [ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/multi-user.target.wants/bedrock-action-broker.service" ] || { printf 'error: privileged action broker is not enabled\n' >&2; exit 1; }
 [ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/multi-user.target.wants/bedrock-pairing-gateway.service" ] || { printf 'error: pairing gateway is not enabled\n' >&2; exit 1; }
+[ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/multi-user.target.wants/bedrock-remote-session-broker.service" ] || { printf 'error: remote session broker is not enabled\n' >&2; exit 1; }
 [ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/multi-user.target.wants/bedrock-live-hardware-test.service" ] || { printf 'error: live hardware-test service is not enabled\n' >&2; exit 1; }
 grep -q 'bedrock.mode=hardware-test' "$OS_DIR/config/bootloaders/grub-efi/grub.cfg" || fail "live hardware-test boot entry is missing"
 grep -q '^User=bedrock-api$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-api.service"
@@ -202,6 +205,8 @@ grep -q '^ProtectSystem=strict$' "$OS_DIR/config/includes.chroot/usr/lib/systemd
 grep -q '^RestrictAddressFamilies=AF_UNIX$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-pairing-gateway.service"
 grep -q '^CapabilityBoundingSet=$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-pairing-gateway.service"
 grep -q '^ReadWritePaths=/var/lib/bedrock/remote /run/bedrock-pairing$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-pairing-gateway.service"
+grep -q '^RestrictAddressFamilies=AF_UNIX$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-remote-session-broker.service"
+grep -q '^CapabilityBoundingSet=$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-remote-session-broker.service"
 grep -q '^StateDirectory=bedrock/remote$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-remote-identity.service"
 grep -q '^CapabilityBoundingSet=$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-remote-identity.service"
 [ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/timers.target.wants/bedrock-vm-status.timer" ] || { printf 'error: VM status timer is not enabled\n' >&2; exit 1; }
@@ -270,6 +275,7 @@ else
 fi
 sh "$OS_DIR/tests/test-remote-devices.sh"
 sh "$OS_DIR/tests/test-remote-session-launch.sh"
+python3 "$OS_DIR/tests/test-remote-session-broker.py"
 sh "$OS_DIR/tests/test-remote-status.sh"
 sh "$OS_DIR/tests/test-remote-device-change.sh"
 sh "$OS_DIR/tests/test-remote-pairing-approval.sh"

@@ -1,0 +1,110 @@
+#!/usr/bin/python3
+"""Receive connected relay stream FDs without parsing relay-controlled stream bytes."""
+
+import array
+import json
+import os
+import pathlib
+import pwd
+import re
+import socket
+import stat
+import struct
+import subprocess
+
+SOCKET = pathlib.Path(os.environ.get("BEDROCK_REMOTE_BROKER_SOCKET", "/run/bedrock-remote-launch/launch.sock"))
+TEST = os.environ.get("BEDROCK_REMOTE_BROKER_TEST_MODE") == "1"
+EXPECTED_UID = int(os.environ.get("BEDROCK_REMOTE_BROKER_EXPECTED_UID", os.getuid())) if TEST else pwd.getpwnam("bedrock-remote").pw_uid
+DEVICE_HELPER = os.environ.get("BEDROCK_REMOTE_BROKER_DEVICE_HELPER", "/usr/lib/bedrock/start-remote-device-session")
+PAIRING_HELPER = os.environ.get("BEDROCK_REMOTE_BROKER_PAIRING_HELPER", "/usr/lib/bedrock/start-remote-pairing-session")
+ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+MAX_SESSIONS = 16
+
+
+def response(status: str) -> bytes:
+    return json.dumps({"schema": 1, "status": status}, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+
+
+def reap(children: list[subprocess.Popen]) -> None:
+    children[:] = [child for child in children if child.poll() is None]
+
+
+def receive(connection: socket.socket) -> tuple[dict, int]:
+    raw, ancillary, flags, _ = connection.recvmsg(513, socket.CMSG_SPACE(array.array("i").itemsize))
+    descriptors = array.array("i")
+    for level, kind, value in ancillary:
+        if level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+            descriptors.frombytes(value[:len(value) - len(value) % descriptors.itemsize])
+    if flags or not raw or len(raw) > 512 or len(descriptors) != 1:
+        for descriptor in descriptors:
+            os.close(descriptor)
+        raise ValueError("invalid request or stream")
+    try:
+        request = json.loads(raw.decode("ascii"))
+        descriptor = descriptors[0]
+        info = os.fstat(descriptor)
+        stream = socket.socket(fileno=os.dup(descriptor))
+        try:
+            if not stat.S_ISSOCK(info.st_mode) or stream.family != socket.AF_UNIX or stream.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) != socket.SOCK_STREAM:
+                raise ValueError("invalid stream")
+            stream.getpeername()
+        finally:
+            stream.close()
+        return request, descriptor
+    except Exception:
+        os.close(descriptors[0])
+        raise
+
+def command(request: dict) -> list[str]:
+    if not isinstance(request, dict) or request.get("schema") != 1 or not ID.fullmatch(request.get("session_id", "")):
+        raise ValueError("invalid request")
+    if set(request) == {"schema", "mode", "session_id"} and request.get("mode") == "pairing":
+        return [PAIRING_HELPER, request["session_id"]]
+    if set(request) == {"schema", "mode", "session_id", "device_id"} and request.get("mode") == "device" and ID.fullmatch(request.get("device_id", "")):
+        return [DEVICE_HELPER, request["device_id"], request["session_id"]]
+    raise ValueError("invalid request")
+
+
+def main() -> None:
+    SOCKET.parent.mkdir(parents=True, exist_ok=True)
+    if SOCKET.exists() or SOCKET.is_symlink():
+        if SOCKET.is_symlink() or not stat.S_ISSOCK(SOCKET.lstat().st_mode):
+            raise SystemExit("refusing to replace unsafe broker path")
+        SOCKET.unlink()
+    children: list[subprocess.Popen] = []
+    old_umask = os.umask(0o007)
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as listener:
+            listener.bind(str(SOCKET)); os.chmod(SOCKET, 0o660); listener.listen(16)
+            while True:
+                connection, _ = listener.accept()
+                descriptor = None
+                with connection:
+                    try:
+                        _pid, uid, _gid = struct.unpack("3i", connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")))
+                        if uid != EXPECTED_UID:
+                            raise ValueError("unauthorized peer")
+                        reap(children)
+                        if len(children) >= MAX_SESSIONS:
+                            raise ValueError("session limit reached")
+                        request, descriptor = receive(connection)
+                        child = subprocess.Popen(command(request), stdin=descriptor, stdout=descriptor,
+                                                 stderr=subprocess.DEVNULL, close_fds=True)
+                        children.append(child)
+                        connection.sendall(response("accepted"))
+                    except (OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError):
+                        try:
+                            connection.sendall(response("rejected"))
+                        except OSError:
+                            pass
+                    finally:
+                        if descriptor is not None:
+                            os.close(descriptor)
+    finally:
+        os.umask(old_umask)
+        if SOCKET.exists() and not SOCKET.is_symlink():
+            SOCKET.unlink()
+
+
+if __name__ == "__main__":
+    main()
