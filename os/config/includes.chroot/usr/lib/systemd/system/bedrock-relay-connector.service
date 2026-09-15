@@ -1,0 +1,40 @@
+[Unit]
+Description=Bedrock outbound encrypted relay connector
+Requires=bedrock-remote-session-broker.service
+After=network-online.target bedrock-remote-session-broker.service
+Wants=network-online.target
+ConditionPathExists=/var/lib/bedrock/remote/relay.json
+ConditionPathExists=/var/lib/bedrock/remote/relay-token
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/bedrock/bedrock-relay-connector
+User=bedrock-remote
+Group=bedrock-remote
+LoadCredential=relay-config:/var/lib/bedrock/remote/relay.json
+LoadCredential=relay-token:/var/lib/bedrock/remote/relay-token
+Environment=BEDROCK_RELAY_CONFIG=%d/relay-config
+Environment=BEDROCK_RELAY_TOKEN=%d/relay-token
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+CapabilityBoundingSet=
+RestrictNamespaces=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+MemoryMax=134217728
+TasksMax=32
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

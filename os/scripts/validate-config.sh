@@ -163,6 +163,7 @@ python3 -c 'compile(open(__import__("sys").argv[1], encoding="utf-8").read(), __
 python3 -c 'compile(open(__import__("sys").argv[1], encoding="utf-8").read(), __import__("sys").argv[1], "exec")' "$OS_DIR/config/includes.chroot/usr/lib/bedrock/bedrock-pairing-gateway"
 python3 -c 'compile(open(__import__("sys").argv[1], encoding="utf-8").read(), __import__("sys").argv[1], "exec")' "$OS_DIR/config/includes.chroot/usr/lib/bedrock/bedrock-noise-transport"
 python3 -c 'compile(open(__import__("sys").argv[1], encoding="utf-8").read(), __import__("sys").argv[1], "exec")' "$OS_DIR/config/includes.chroot/usr/lib/bedrock/bedrock-remote-session-broker"
+python3 -c 'compile(open(__import__("sys").argv[1], encoding="utf-8").read(), __import__("sys").argv[1], "exec")' "$OS_DIR/config/includes.chroot/usr/lib/bedrock/bedrock-relay-connector"
 sh -n "$OS_DIR/config/includes.chroot/usr/sbin/bedrock-update-settings"
 sh -n "$OS_DIR/config/includes.chroot/usr/sbin/bedrock-setup-updates"
 sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/collect-hardware-inventory"
@@ -191,6 +192,7 @@ grep -q '^ExecStart=/usr/lib/bedrock/mark-boot-healthy$' "$OS_DIR/config/include
 [ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/multi-user.target.wants/bedrock-action-broker.service" ] || { printf 'error: privileged action broker is not enabled\n' >&2; exit 1; }
 [ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/multi-user.target.wants/bedrock-pairing-gateway.service" ] || { printf 'error: pairing gateway is not enabled\n' >&2; exit 1; }
 [ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/multi-user.target.wants/bedrock-remote-session-broker.service" ] || { printf 'error: remote session broker is not enabled\n' >&2; exit 1; }
+[ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/multi-user.target.wants/bedrock-relay-connector.service" ] || { printf 'error: relay connector is not enabled\n' >&2; exit 1; }
 [ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/multi-user.target.wants/bedrock-live-hardware-test.service" ] || { printf 'error: live hardware-test service is not enabled\n' >&2; exit 1; }
 grep -q 'bedrock.mode=hardware-test' "$OS_DIR/config/bootloaders/grub-efi/grub.cfg" || fail "live hardware-test boot entry is missing"
 grep -q '^User=bedrock-api$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-api.service"
@@ -207,6 +209,8 @@ grep -q '^CapabilityBoundingSet=$' "$OS_DIR/config/includes.chroot/usr/lib/syste
 grep -q '^ReadWritePaths=/var/lib/bedrock/remote /run/bedrock-pairing$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-pairing-gateway.service"
 grep -q '^RestrictAddressFamilies=AF_UNIX$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-remote-session-broker.service"
 grep -q '^CapabilityBoundingSet=$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-remote-session-broker.service"
+grep -q '^RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-relay-connector.service"
+grep -q '^LoadCredential=relay-token:/var/lib/bedrock/remote/relay-token$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-relay-connector.service"
 grep -q '^StateDirectory=bedrock/remote$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-remote-identity.service"
 grep -q '^CapabilityBoundingSet=$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-remote-identity.service"
 [ -L "$OS_DIR/config/includes.chroot/etc/systemd/system/timers.target.wants/bedrock-vm-status.timer" ] || { printf 'error: VM status timer is not enabled\n' >&2; exit 1; }
@@ -276,6 +280,7 @@ fi
 sh "$OS_DIR/tests/test-remote-devices.sh"
 sh "$OS_DIR/tests/test-remote-session-launch.sh"
 python3 "$OS_DIR/tests/test-remote-session-broker.py"
+python3 "$OS_DIR/tests/test-relay-connector.py"
 sh "$OS_DIR/tests/test-remote-status.sh"
 sh "$OS_DIR/tests/test-remote-device-change.sh"
 sh "$OS_DIR/tests/test-remote-pairing-approval.sh"

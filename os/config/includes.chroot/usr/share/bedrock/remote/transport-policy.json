@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "status": "server-noise-control-implemented-relay-pending",
+  "status": "outbound-relay-connector-implemented-acceptance-pending",
   "noise_protocol": "Noise_XX_25519_ChaChaPoly_SHA256",
   "outer_transport": {"minimum_tls": "1.3", "zero_rtt": false, "relay_is_end_to_end_trusted": false},
   "identity": {"server_static_key": "x25519", "per_device_static_key": "x25519", "oidc_can_approve_devices": false},

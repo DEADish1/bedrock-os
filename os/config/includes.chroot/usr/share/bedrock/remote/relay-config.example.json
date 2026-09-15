@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "host": "relay.example.invalid",
+  "port": 443,
+  "server_route": "12345678-1234-4123-8123-123456789abc",
+  "connect_timeout_seconds": 10,
+  "idle_timeout_seconds": 90
+}

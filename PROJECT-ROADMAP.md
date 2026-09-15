@@ -154,6 +154,7 @@ Exit: every supported server task works through the UI and documented API.
 - [ ] Build signed Windows and universal macOS desktop clients.
 - [ ] Add automatic client updates, certificate pinning, and secure local key storage.
 - [ ] Implement relay/fallback behavior without opening unsafe inbound ports.
+  - The server connector now makes outbound-only, TLS-1.3-only, hostname-verified, exact-ALPN connections; multiplexes at most 16 opaque Noise streams; rejects invalid framing and transitions; reconnects with bounded backoff; and hands streams to the least-privilege local broker without opening a network listener. The service remains safely inactive without root-provisioned relay configuration and credentials. Production relay provisioning and server/client end-to-end acceptance remain before this checkbox closes.
 - [ ] Complete third-party security review of pairing, auth, transport, and update paths.
 
 Exit: approved clients connect remotely, survive network changes, and can be immediately revoked.

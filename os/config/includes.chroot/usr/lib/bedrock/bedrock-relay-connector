@@ -1,0 +1,193 @@
+#!/usr/bin/python3
+"""Outbound-only TLS relay connector for opaque Bedrock Noise streams."""
+
+import array
+import json
+import os
+import pathlib
+import re
+import socket
+import ssl
+import struct
+import threading
+import time
+
+CONFIG = pathlib.Path(os.environ.get("BEDROCK_RELAY_CONFIG", "/run/credentials/bedrock-relay-connector.service/relay-config"))
+TOKEN_FILE = pathlib.Path(os.environ.get("BEDROCK_RELAY_TOKEN", "/run/credentials/bedrock-relay-connector.service/relay-token"))
+BROKER = pathlib.Path(os.environ.get("BEDROCK_RELAY_BROKER", "/run/bedrock-remote-launch/launch.sock"))
+CA_FILE = os.environ.get("BEDROCK_RELAY_CA_FILE")
+HEADER = struct.Struct("!BB16sI")
+REGISTER, OPEN, DATA, CLOSE, REGISTERED, PING, PONG = range(1, 8)
+ZERO_STREAM = b"\0" * 16
+MAX_PAYLOAD = 65536
+MAX_STREAMS = 16
+ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+TOKEN = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
+
+
+class RelayError(Exception):
+    pass
+
+
+def regular_text(path: pathlib.Path, maximum: int) -> str:
+    if not path.is_file() or path.is_symlink() or path.stat().st_size > maximum:
+        raise RelayError("credential is unavailable")
+    return path.read_text(encoding="utf-8").strip()
+
+
+def settings() -> dict:
+    value = json.loads(regular_text(CONFIG, 4096))
+    required = {"schema", "host", "port", "server_route", "connect_timeout_seconds", "idle_timeout_seconds"}
+    if not isinstance(value, dict) or set(value) != required or value.get("schema") != 1:
+        raise RelayError("invalid relay configuration")
+    host, port = value["host"], value["port"]
+    if not isinstance(host, str) or not 1 <= len(host) <= 253 or not re.fullmatch(r"[A-Za-z0-9.-]+", host) or ".." in host or host.startswith(".") or host.endswith("."):
+        raise RelayError("invalid relay host")
+    if type(port) is not int or not 1 <= port <= 65535 or not ID.fullmatch(value.get("server_route", "")):
+        raise RelayError("invalid relay route")
+    if type(value["connect_timeout_seconds"]) is not int or not 1 <= value["connect_timeout_seconds"] <= 30:
+        raise RelayError("invalid connect timeout")
+    if type(value["idle_timeout_seconds"]) is not int or not 30 <= value["idle_timeout_seconds"] <= 300:
+        raise RelayError("invalid idle timeout")
+    token = regular_text(TOKEN_FILE, 256)
+    if not TOKEN.fullmatch(token):
+        raise RelayError("invalid relay credential")
+    return value | {"token": token}
+
+
+def read_exact(connection: ssl.SSLSocket, count: int) -> bytes:
+    result = bytearray()
+    while len(result) < count:
+        chunk = connection.recv(count - len(result))
+        if not chunk:
+            raise RelayError("relay closed")
+        result.extend(chunk)
+    return bytes(result)
+
+
+def receive_frame(connection: ssl.SSLSocket) -> tuple[int, bytes, bytes]:
+    version, kind, stream_id, length = HEADER.unpack(read_exact(connection, HEADER.size))
+    if version != 1 or kind not in range(1, 8) or length > MAX_PAYLOAD:
+        raise RelayError("invalid relay frame")
+    if (kind in {REGISTER, REGISTERED, PING, PONG} and stream_id != ZERO_STREAM) or (kind in {OPEN, DATA, CLOSE} and stream_id == ZERO_STREAM):
+        raise RelayError("invalid relay stream")
+    return kind, stream_id, read_exact(connection, length) if length else b""
+
+
+def send_frame(connection: ssl.SSLSocket, lock: threading.Lock, kind: int, stream_id: bytes, payload: bytes = b"") -> None:
+    if len(payload) > MAX_PAYLOAD:
+        raise RelayError("relay payload is too large")
+    raw = HEADER.pack(1, kind, stream_id, len(payload)) + payload
+    with lock:
+        connection.sendall(raw)
+
+
+def route(payload: bytes) -> dict:
+    value = json.loads(payload.decode("ascii"))
+    if not isinstance(value, dict) or value.get("schema") != 1:
+        raise RelayError("invalid route")
+    if set(value) == {"schema", "mode", "session_id"} and value.get("mode") == "pairing" and ID.fullmatch(value.get("session_id", "")):
+        return value
+    if set(value) == {"schema", "mode", "session_id", "device_id"} and value.get("mode") == "device" and ID.fullmatch(value.get("session_id", "")) and ID.fullmatch(value.get("device_id", "")):
+        return value
+    raise RelayError("invalid route")
+
+
+def launch_stream(value: dict) -> socket.socket:
+    local, handed = socket.socketpair()
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as control:
+            control.settimeout(5); control.connect(str(BROKER))
+            rights = array.array("i", [handed.fileno()])
+            control.sendmsg([json.dumps(value, sort_keys=True, separators=(",", ":")).encode("ascii")],
+                            [(socket.SOL_SOCKET, socket.SCM_RIGHTS, rights)])
+            response = json.loads(control.recv(1024))
+            if response != {"schema": 1, "status": "accepted"}:
+                raise RelayError("session broker rejected stream")
+        return local
+    except Exception:
+        local.close()
+        raise
+    finally:
+        handed.close()
+
+
+def pump_local(connection: ssl.SSLSocket, lock: threading.Lock, stream_id: bytes,
+               local: socket.socket, closed: threading.Event) -> None:
+    try:
+        while not closed.is_set():
+            payload = local.recv(MAX_PAYLOAD)
+            if not payload:
+                break
+            send_frame(connection, lock, DATA, stream_id, payload)
+    except (OSError, RelayError):
+        pass
+    finally:
+        try:
+            send_frame(connection, lock, CLOSE, stream_id)
+        except (OSError, RelayError):
+            pass
+        closed.set(); local.close()
+
+
+def tls_context() -> ssl.SSLContext:
+    context = ssl.create_default_context(cafile=CA_FILE)
+    context.minimum_version = ssl.TLSVersion.TLSv1_3
+    context.maximum_version = ssl.TLSVersion.TLSv1_3
+    context.set_alpn_protocols(["bedrock-relay/1"])
+    return context
+
+
+def run_once(value: dict, context: ssl.SSLContext) -> None:
+    streams: dict[bytes, tuple[socket.socket, threading.Event]] = {}
+    lock = threading.Lock()
+    raw = socket.create_connection((value["host"], value["port"]), timeout=value["connect_timeout_seconds"])
+    try:
+        with context.wrap_socket(raw, server_hostname=value["host"]) as connection:
+            if connection.version() != "TLSv1.3" or connection.selected_alpn_protocol() != "bedrock-relay/1":
+                raise RelayError("relay TLS policy mismatch")
+            connection.settimeout(value["idle_timeout_seconds"])
+            registration = json.dumps({"schema": 1, "server_route": value["server_route"],
+                                       "authorization": value["token"]}, sort_keys=True,
+                                      separators=(",", ":")).encode("ascii")
+            send_frame(connection, lock, REGISTER, ZERO_STREAM, registration)
+            kind, stream_id, payload = receive_frame(connection)
+            if (kind, stream_id, payload) != (REGISTERED, ZERO_STREAM, b""):
+                raise RelayError("relay registration rejected")
+            while True:
+                kind, stream_id, payload = receive_frame(connection)
+                for finished in [identifier for identifier, (_local, closed) in streams.items() if closed.is_set()]:
+                    streams.pop(finished, None)
+                if kind == PING and not payload:
+                    send_frame(connection, lock, PONG, ZERO_STREAM)
+                elif kind == PONG and not payload:
+                    continue
+                elif kind == OPEN and stream_id not in streams and len(streams) < MAX_STREAMS:
+                    local = launch_stream(route(payload)); closed = threading.Event()
+                    streams[stream_id] = (local, closed)
+                    threading.Thread(target=pump_local, args=(connection, lock, stream_id, local, closed), daemon=True).start()
+                elif kind == DATA and stream_id in streams and payload:
+                    streams[stream_id][0].sendall(payload)
+                elif kind == CLOSE and stream_id in streams and not payload:
+                    local, closed = streams.pop(stream_id); closed.set(); local.close()
+                else:
+                    raise RelayError("invalid relay stream transition")
+    finally:
+        raw.close()
+        for local, closed in streams.values():
+            closed.set(); local.close()
+
+
+def main() -> None:
+    while True:
+        try:
+            run_once(settings(), tls_context())
+            delay = 1
+        except (OSError, ssl.SSLError, RelayError, ValueError, UnicodeError, json.JSONDecodeError):
+            delay = min(30, getattr(main, "delay", 1) * 2)
+        main.delay = delay
+        time.sleep(delay)
+
+
+if __name__ == "__main__":
+    main()
