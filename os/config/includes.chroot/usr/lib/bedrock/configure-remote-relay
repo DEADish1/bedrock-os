@@ -1,0 +1,54 @@
+#!/bin/sh
+set -eu
+
+[ "$#" -eq 1 ] || { printf 'error: one request file is required\n' >&2; exit 2; }
+request=$1
+[ -f "$request" ] && [ -s "$request" ] && [ ! -L "$request" ] || { printf 'error: relay request is missing or indirect\n' >&2; exit 1; }
+[ "$(wc -c < "$request" | tr -d ' ')" -le 4096 ] || { printf 'error: relay request is too large\n' >&2; exit 1; }
+if [ "${BEDROCK_RELAY_CONFIG_TEST_MODE:-0}" = 1 ]; then
+  directory=${BEDROCK_RELAY_CONFIG_DIR:?test state directory is required}
+  systemctl=${BEDROCK_RELAY_CONFIG_SYSTEMCTL:?test systemctl is required}
+else
+  [ "$(id -u)" -eq 0 ] || { printf 'error: relay configuration requires root\n' >&2; exit 1; }
+  directory=/var/lib/bedrock/remote
+  systemctl=/bin/systemctl
+fi
+mkdir -p "$directory"
+[ -d "$directory" ] && [ ! -L "$directory" ] || { printf 'error: relay state directory is unsafe\n' >&2; exit 1; }
+chmod 0700 "$directory"
+config=$directory/relay.json
+token_file=$directory/relay-token
+operation=$(jq -er '.operation' "$request") || { printf 'error: invalid relay request\n' >&2; exit 1; }
+
+case "$operation" in
+  configure)
+    jq -e '
+      (keys|sort)==(["confirmation","host","operation","port","schema","server_route","token"]|sort) and
+      .schema==1 and .operation=="configure" and
+      (.host|type=="string" and length>=1 and length<=253 and test("^[A-Za-z0-9.-]+$") and (contains("..")|not) and startswith(".")|not) and
+      (.host|endswith(".")|not) and (.port|type=="number" and floor==. and .>=1 and .<=65535) and
+      (.server_route|type=="string" and test("^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")) and
+      (.token|type=="string" and test("^[A-Za-z0-9_-]{32,128}$")) and
+      .confirmation==("CONFIGURE REMOTE RELAY "+.host+":"+(.port|tostring)+" ROUTE "+.server_route)
+    ' "$request" >/dev/null || { printf 'error: invalid relay request or confirmation\n' >&2; exit 1; }
+    config_tmp=$(mktemp "$directory/.relay-config.XXXXXX")
+    token_tmp=$(mktemp "$directory/.relay-token.XXXXXX")
+    cleanup() { status=$?; rm -f "$config_tmp" "$token_tmp"; exit "$status"; }
+    trap cleanup EXIT INT TERM
+    jq -S '{schema:1,host,port,server_route,connect_timeout_seconds:10,idle_timeout_seconds:90}' "$request" > "$config_tmp"
+    jq -jr '.token,"\n"' "$request" > "$token_tmp"
+    chmod 0600 "$config_tmp" "$token_tmp"
+    mv "$config_tmp" "$config"; config_tmp=
+    mv "$token_tmp" "$token_file"; token_tmp=
+    trap - EXIT INT TERM
+    "$systemctl" restart bedrock-relay-connector.service
+    printf '{"schema":1,"status":"configured","credentials_exposed":false}\n'
+    ;;
+  disable)
+    jq -e '(keys|sort)==(["confirmation","operation","schema"]|sort) and .schema==1 and .operation=="disable" and .confirmation=="DISABLE REMOTE RELAY"' "$request" >/dev/null || { printf 'error: invalid relay disable request or confirmation\n' >&2; exit 1; }
+    "$systemctl" stop bedrock-relay-connector.service
+    rm -f "$token_file" "$config"
+    printf '{"schema":1,"status":"disabled","credentials_removed":true}\n'
+    ;;
+  *) printf 'error: unsupported relay operation\n' >&2; exit 1 ;;
+esac

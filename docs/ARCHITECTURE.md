@@ -54,7 +54,7 @@ Status: accepted for implementation; changes require a recorded architecture dec
 
 ## Remote transport and clients
 
-- Transport: WireGuard-based encrypted device tunnels.
+- Transport: Noise XX (`Noise_XX_25519_ChaChaPoly_SHA256`) mutual device authentication and encrypted, sequence-bound management records over direct or outbound TLS relay streams.
 - Connectivity: direct peer path where possible; authenticated relay fallback without exposing an inbound management port.
 - Coordination service: stores routing/presence and public-key material only; it cannot decrypt server traffic.
 - Desktop clients: Tauri 2 with a Rust core and the shared React UI, signed for Windows and notarized/universal for macOS.
