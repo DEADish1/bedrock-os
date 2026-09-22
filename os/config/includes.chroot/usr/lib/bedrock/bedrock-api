@@ -1425,6 +1425,45 @@ class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
     request_queue_size = 16
 
+def recover_interrupted_uploads() -> None:
+    if TASKS.exists() or TASKS.is_symlink():
+        for task in task_feed()["tasks"]:
+            if task["kind"] != "image-upload" or task["state"] not in {"queued", "running"}:
+                continue
+            match = re.fullmatch(r"image-upload-([0-9a-f-]{36})", task["id"])
+            if not match or not DEVICE_ID.fullmatch(match.group(1)):
+                raise ValueError("invalid interrupted image upload task")
+            image_task_transition(match.group(1), "upload", "failed", task["created_unix"],
+                                  task["progress"]["current"], task["progress"]["total"])
+    if not UPLOADS.exists():
+        return
+    if UPLOADS.is_symlink() or not UPLOADS.is_dir():
+        raise ValueError("unsafe upload directory during recovery")
+    entries = list(UPLOADS.iterdir())
+    if len(entries) > 512:
+        raise ValueError("too many upload files during recovery")
+    for lock in entries:
+        match = re.fullmatch(r"\.([a-z][a-z0-9-]{0,30}[a-z0-9])\.upload\.lock", lock.name)
+        if not match:
+            continue
+        if not stat.S_ISREG(lock.lstat().st_mode):
+            raise ValueError("unsafe upload lock during recovery")
+        name = match.group(1)
+        metadata = UPLOADS / f"{name}.json"
+        for path in entries:
+            if path.name.startswith((f".{name}.upload.", f".{name}.metadata.")) and path != lock:
+                if not stat.S_ISREG(path.lstat().st_mode):
+                    raise ValueError("unsafe upload temporary file during recovery")
+                path.unlink()
+        if not metadata.exists() and not metadata.is_symlink():
+            for image_type in ("iso", "img", "qcow2", "vhdx", "vmdk"):
+                source = UPLOADS / f"{name}.{image_type}"
+                if source.exists() or source.is_symlink():
+                    if not stat.S_ISREG(source.lstat().st_mode):
+                        raise ValueError("unsafe upload source during recovery")
+                    source.unlink()
+        lock.unlink()
+
 def main() -> None:
     SOCKET.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
     lock_path = SOCKET.parent / "api-instance.lock"
@@ -1436,6 +1475,7 @@ def main() -> None:
             fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
             raise SystemExit("another Bedrock API instance is active") from error
+        recover_interrupted_uploads()
         if SOCKET.exists() or SOCKET.is_socket():
             info = SOCKET.lstat()
             if not stat.S_ISSOCK(info.st_mode):

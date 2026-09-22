@@ -7,6 +7,8 @@ ConditionPathExists=/var/lib/bedrock/api/tokens.json
 [Service]
 Type=simple
 ExecStart=/usr/lib/bedrock/bedrock-api
+Restart=on-failure
+RestartSec=2
 User=bedrock-api
 Group=bedrock-api
 RuntimeDirectory=bedrock-api

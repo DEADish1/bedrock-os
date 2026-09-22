@@ -737,6 +737,37 @@ client.close(); server.close()
                 "created_at": "2026-08-31T00:00:00Z", "revoked": True,
             }]}), encoding="utf-8")
             assert request(socket_path, "GET", "/api/v1/health")[0] == 401
+
+            interrupted_id = str(uuid.uuid4())
+            queued = {"schema": 1, "request_id": str(uuid.uuid4()), "action": "image-upload-task",
+                      "upload_id": interrupted_id, "operation": "upload", "state": "queued",
+                      "created_unix": int(time.time()), "current": 0, "total": 100}
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                client.connect(str(action_socket))
+                client.sendall(json.dumps(queued).encode("utf-8"))
+                client.shutdown(socket.SHUT_WR)
+                assert json.loads(client.recv(4096))["status"] == "succeeded"
+            (uploads / ".stale.upload.lock").write_bytes(b"")
+            (uploads / ".stale.upload.partial").write_bytes(b"partial")
+            (uploads / "stale.iso").write_bytes(b"partial")
+            process.terminate()
+            process.wait(timeout=5)
+            environment["BEDROCK_API_TASKS"] = str(action_task_state / "tasks.json")
+            process = subprocess.Popen([sys.executable, str(API)], env=environment)
+            for _ in range(100):
+                if process.poll() is not None:
+                    raise AssertionError("API exited during upload recovery")
+                if socket_path.exists() and not any("stale" in item.name for item in uploads.iterdir()):
+                    break
+                time.sleep(0.05)
+            else:
+                raise AssertionError("API did not restart after upload recovery")
+            assert not any("stale" in item.name for item in uploads.iterdir())
+            recovered = json.loads((action_task_state / "tasks.json").read_text(encoding="utf-8"))["tasks"]
+            assert next(item for item in recovered if item["id"] == f"image-upload-{interrupted_id}")["state"] == "failed"
+            recovered_audit = [json.loads(line) for line in (action_task_state / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
+            assert any(item["action"] == "image-upload" and item["outcome"] == "failed"
+                       and item["id"].startswith(f"image-upload-{interrupted_id}") for item in recovered_audit)
         finally:
             process.terminate()
             process.wait(timeout=5)
