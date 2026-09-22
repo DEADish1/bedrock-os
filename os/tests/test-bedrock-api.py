@@ -582,6 +582,22 @@ client.close(); server.close()
             assert request(socket_path, "DELETE", "/api/v1/images/discardme/upload", body=discard_body, extra_headers={"Content-Type": "application/json", "If-Match": cleared_headers["ETag"]})[0] == 400
             recorded_audit = [json.loads(line) for line in (action_task_state / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
             assert sum(item["action"] == "image-discard" and item["outcome"] == "failed" for item in recorded_audit) == 1
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as interrupted:
+                interrupted.settimeout(5)
+                interrupted.connect(str(socket_path))
+                interrupted.sendall((
+                    "PUT /api/v1/images/interrupted/upload HTTP/1.1\r\n"
+                    f"Authorization: Bearer {TOKEN}\r\n"
+                    f"If-Match: {cleared_headers['ETag']}\r\n"
+                    "Content-Type: application/octet-stream\r\n"
+                    "X-Bedrock-Image-Type: iso\r\n"
+                    "Content-Length: 100\r\n\r\npartial"
+                ).encode("ascii"))
+                interrupted.shutdown(socket.SHUT_WR)
+                assert interrupted.recv(4096).startswith(b"HTTP/1.0 400")
+            assert not any("interrupted" in item.name for item in uploads.iterdir())
+            recorded_audit = [json.loads(line) for line in (action_task_state / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
+            assert any(item["action"] == "image-upload" and item["outcome"] == "failed" for item in recorded_audit)
             upload_headers["If-Match"] = cleared_headers["ETag"]
             upload_status, upload_body = request(socket_path, "PUT", "/api/v1/images/debian/upload", body=upload_bytes, extra_headers=upload_headers)
             assert upload_status == 200 and upload_body["candidate"] == {"name": "debian", "type": "iso", "sha256": upload_hash, "size_bytes": len(upload_bytes)}
