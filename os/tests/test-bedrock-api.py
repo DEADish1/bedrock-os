@@ -284,6 +284,11 @@ client.close(); server.close()
             else:
                 raise AssertionError("API socket was not created")
 
+            contender = subprocess.run([sys.executable, str(API)], env=environment,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+            assert contender.returncode != 0 and b"another Bedrock API instance is active" in contender.stderr
+            assert process.poll() is None
+
             assert request(socket_path, "GET", "/api/v1/health", None) == (401, {"schema": 1, "error": "unauthorized"})
             assert request(socket_path, "GET", "/api/v1/health")[0] == 200
             schema_status, schema_body = request(socket_path, "GET", "/api/v1/openapi.json")
