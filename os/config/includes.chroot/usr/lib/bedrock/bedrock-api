@@ -1378,8 +1378,10 @@ class Handler(BaseHTTPRequestHandler):
                 candidate = audited_stage_image_upload(self.rfile, upload.group(1), self.headers.get("X-Bedrock-Image-Type", ""), length)
             except FileExistsError:
                 self.send_json(409, {"schema": 1, "error": "upload-conflict"}); return
-            except (OSError, ValueError):
+            except ValueError:
                 self.send_json(400, {"schema": 1, "error": "invalid-request"}); return
+            except (OSError, socket.timeout):
+                self.send_json(503, {"schema": 1, "error": "action-broker-unavailable"}); return
             self.send_json(200, {"schema": 1, "candidate": candidate}); return
         if self.path != "/api/v1/settings":
             self.send_json(405, {"schema": 1, "error": "method-not-allowed"})
