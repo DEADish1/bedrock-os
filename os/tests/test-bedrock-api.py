@@ -616,6 +616,22 @@ client.close(); server.close()
             assert admin_requests[21] == {"schema": 1, "name": "debian", "type": "iso", "sha256": upload_hash, "size_bytes": len(upload_bytes), "confirmation": import_confirmation}
             image_status, image_body = request(socket_path, "GET", "/api/v1/images")
             assert image_status == 200 and image_body["images"][0]["sha256"] == "c" * 64 and "path" not in json.dumps(image_body)
+            _, _, offline_headers = request(socket_path, "GET", "/api/v1/images", include_headers=True)
+            broker.terminate()
+            broker.wait(timeout=5)
+            assert request(socket_path, "PUT", "/api/v1/images/offline/upload", body=upload_bytes,
+                           extra_headers=upload_headers | {"If-Match": offline_headers["ETag"]}) == (503, {"schema": 1, "error": "action-broker-unavailable"})
+            assert not any("offline" in item.name for item in uploads.iterdir())
+            action_socket.unlink(missing_ok=True)
+            broker = subprocess.Popen([sys.executable, str(BROKER)], env=broker_environment)
+            for _ in range(50):
+                if action_socket.exists():
+                    break
+                if broker.poll() is not None:
+                    raise AssertionError("restarted broker exited before creating its socket")
+                time.sleep(0.05)
+            else:
+                raise AssertionError("restarted broker socket was not created")
             storage_status, storage_body = request(socket_path, "GET", "/api/v1/storage")
             assert storage_status == 200 and storage_body["disks"][0]["smart"]["temperature_c"] == 31 and storage_body["software_raid"]["zfs"]["pools"][0]["name"] == "main"
             assert storage_body["disk_candidates"][1]["id"] == "disk-abcdef0123456789abcd" and storage_body["disk_candidates"][1]["eligible"] is True
