@@ -24,6 +24,20 @@ public_directory=$(dirname -- "$public_status")
 mkdir -p "$public_directory"
 [ -d "$public_directory" ] && [ ! -L "$public_directory" ] || { printf 'error: relay public status directory is unsafe\n' >&2; exit 1; }
 operation=$(jq -er '.operation' "$request") || { printf 'error: invalid relay request\n' >&2; exit 1; }
+task_writer=${BEDROCK_RECORD_API_TASK:-$(dirname "$0")/record-api-task}
+[ -x "$task_writer" ] && [ ! -L "$task_writer" ] || { printf 'error: relay task recorder is unavailable or indirect\n' >&2; exit 1; }
+created=$(date +%s); task_id="remote-relay-$operation-$$"; active=0; done=0
+config_tmp=; token_tmp=; old_config=; old_token=
+cleanup() {
+  status=$?
+  trap - EXIT INT TERM
+  rm -f "$config_tmp" "$token_tmp" "$old_config" "$old_token"
+  if [ "$active" -eq 1 ] && [ "$done" -eq 0 ]; then "$task_writer" "$task_id" "remote-relay-$operation" failed "$created" 0 1 steps >/dev/null 2>&1 || true; fi
+  exit "$status"
+}
+trap cleanup EXIT INT TERM
+start_task() { "$task_writer" "$task_id" "remote-relay-$operation" queued "$created" 0 1 steps; active=1; }
+finish_task() { "$task_writer" "$task_id" "remote-relay-$operation" succeeded "$created" 1 1 steps; done=1; }
 
 case "$operation" in
   configure)
@@ -36,6 +50,7 @@ case "$operation" in
       (.token|type=="string" and test("^[A-Za-z0-9_-]{32,128}$")) and
       .confirmation==("CONFIGURE REMOTE RELAY "+.host+":"+(.port|tostring)+" ROUTE "+.server_route)
     ' "$request" >/dev/null || { printf 'error: invalid relay request or confirmation\n' >&2; exit 1; }
+    start_task
     config_tmp=$(mktemp "$directory/.relay-config.XXXXXX")
     token_tmp=$(mktemp "$directory/.relay-token.XXXXXX")
     old_config=$(mktemp "$directory/.relay-old-config.XXXXXX")
@@ -43,8 +58,6 @@ case "$operation" in
     had_config=false; had_token=false
     if [ -f "$config" ] && [ ! -L "$config" ]; then cp "$config" "$old_config"; had_config=true; fi
     if [ -f "$token_file" ] && [ ! -L "$token_file" ]; then cp "$token_file" "$old_token"; had_token=true; fi
-    cleanup() { status=$?; rm -f "$config_tmp" "$token_tmp" "$old_config" "$old_token"; exit "$status"; }
-    trap cleanup EXIT INT TERM
     jq -S '{schema:1,host,port,server_route,connect_timeout_seconds:10,idle_timeout_seconds:90}' "$request" > "$config_tmp"
     jq -jr '.token,"\n"' "$request" > "$token_tmp"
     chmod 0600 "$config_tmp" "$token_tmp"
@@ -62,12 +75,14 @@ case "$operation" in
     chmod 0640 "$status_tmp"
     if [ "${BEDROCK_RELAY_CONFIG_TEST_MODE:-0}" != 1 ]; then chown root:bedrock-api "$status_tmp"; fi
     mv "$status_tmp" "$public_status"
-    trap - EXIT INT TERM
     rm -f "$old_config" "$old_token"
+    old_config=; old_token=
+    finish_task
     printf '{"schema":1,"status":"configured","credentials_exposed":false}\n'
     ;;
   disable)
     jq -e '(keys|sort)==(["confirmation","operation","schema"]|sort) and .schema==1 and .operation=="disable" and .confirmation=="DISABLE REMOTE RELAY"' "$request" >/dev/null || { printf 'error: invalid relay disable request or confirmation\n' >&2; exit 1; }
+    start_task
     "$systemctl" stop bedrock-relay-connector.service
     rm -f "$token_file" "$config"
     status_tmp=$(mktemp "$(dirname -- "$public_status")/.relay-status.XXXXXX")
@@ -75,6 +90,7 @@ case "$operation" in
     chmod 0640 "$status_tmp"
     if [ "${BEDROCK_RELAY_CONFIG_TEST_MODE:-0}" != 1 ]; then chown root:bedrock-api "$status_tmp"; fi
     mv "$status_tmp" "$public_status"
+    finish_task
     printf '{"schema":1,"status":"disabled","credentials_removed":true}\n'
     ;;
   *) printf 'error: unsupported relay operation\n' >&2; exit 1 ;;

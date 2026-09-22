@@ -59,6 +59,8 @@ Malformed, oversized, indirect, or unavailable task, alert, audit, remote-device
 
 Privileged operations publish state through `record-api-task`. The writer serializes updates, rejects identity, timestamp, or progress regression, caps retained tasks at 256, and emits one privacy-bounded audit event when a task reaches a terminal state. Operations may expose stable task identity and kind, counters, and timestamps only; paths, command arguments, user labels, and raw error messages are prohibited.
 
+Outbound relay configuration and disablement publish `remote-relay-configure` or `remote-relay-disable` tasks. A failed connector restart yields a failed terminal event after attempting to restore the previous root-only configuration; task and audit payloads never include the relay host, route, or token.
+
 Verified update downloads publish queued, byte-accurate running, succeeded, and failed states. Resumed bytes count only after the complete artifact passes size and SHA-256 verification, and the final success state is emitted only after the whole signed bundle passes verification.
 
 VM start, stop, force-stop, and restart publish three bounded steps: managed-state and libvirt preconditions verified, the requested command issued, and the expected final power state observed. Task and audit records identify only the action; VM names remain outside the feed.

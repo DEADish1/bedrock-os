@@ -4,6 +4,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Relay configuration and disablement now publish bounded success/failure tasks and one terminal privacy-safe audit event; failed connector restart retains the previous settings and records a failed operation.
 - Exposed guarded outbound relay setup and disablement through authenticated Settings. Requests use strong state preconditions, idempotency, exact confirmation, and root-only secret staging; the public feed returns only configured/not-configured state and never exposes relay endpoints, routes, or tokens.
 - Added the server-side Noise XX connected-stream control responder for remote pairing and device authorization. It uses Debian's maintained Noise implementation, authenticates the existing X25519 server identity, derives the client key only from the handshake, accepts one encrypted versioned/sequence-bound control record, and fails closed on identity mismatch, truncation, tampering, or oversized input without opening a network port.
 - Bound authorized remote streams to their per-device revocation target through unique hardened transient services. The encrypted device route must match the unit target, and the unprivileged transport receives the root-only server key through a systemd credential, so revocation stops live streams without broadening key access.
