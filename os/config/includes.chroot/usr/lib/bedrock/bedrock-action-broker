@@ -83,7 +83,20 @@ def parse_request(raw):
         raise RequestError("invalid-request-id", "request_id must be a canonical UUID v4")
     if parsed_id.version != 4 or str(parsed_id) != request_id:
         raise RequestError("invalid-request-id", "request_id must be a canonical UUID v4")
-    if request.get("action") == "update-policy":
+    if request.get("action") == "image-upload-task":
+        if set(request) != {"schema", "request_id", "action", "upload_id", "operation", "state", "created_unix", "current", "total"}:
+            raise RequestError("invalid-request", "request fields do not match the image upload task schema")
+        try:
+            upload_id = uuid.UUID(request["upload_id"])
+        except (AttributeError, TypeError, ValueError):
+            raise RequestError("invalid-image-upload-task", "upload identity is invalid")
+        if upload_id.version != 4 or str(upload_id) != request["upload_id"] or request["operation"] not in {"upload", "discard"} or request["state"] not in {"queued", "running", "succeeded", "failed"}:
+            raise RequestError("invalid-image-upload-task", "upload task fields are invalid")
+        created, current, total = request["created_unix"], request["current"], request["total"]
+        if type(created) is not int or type(current) is not int or type(total) is not int or not 0 <= created <= int(time.time()) or not 1 <= total <= 4398046511104 or not 0 <= current <= total or request["operation"] == "discard" and total != 1 or request["state"] == "queued" and current != 0 or request["state"] == "succeeded" and current != total:
+            raise RequestError("invalid-image-upload-task", "upload task progress is invalid")
+        details = None
+    elif request.get("action") == "update-policy":
         if set(request) != {"schema", "request_id", "action", "setting", "value", "beta_risk_acknowledged"} or type(request["beta_risk_acknowledged"]) is not bool:
             raise RequestError("invalid-request", "request fields do not match the update-policy schema")
         setting, value, acknowledged = request["setting"], request["value"], request["beta_risk_acknowledged"]
@@ -711,6 +724,23 @@ def execute_app(request, request_file, settings, helper_environment):
 
 def execute(raw, settings):
     request, digest, details = parse_request(raw)
+    if request["action"] == "image-upload-task":
+        # Progress transitions are monotonic in record-api-task, not one-shot broker actions.
+        # Do not add every progress update to the broker's bounded idempotency ledger.
+        helper_environment = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"}
+        if settings["test_mode"]:
+            helper_environment.update({"BEDROCK_API_TASK_TEST_MODE": "1", "BEDROCK_API_TASK_STATE_DIR": os.environ["BEDROCK_API_TASK_STATE_DIR"]})
+        task_id = f"image-{request['operation']}-{request['upload_id']}"
+        completed = subprocess.run(
+            [str(settings["task_writer"]), task_id, f"image-{request['operation']}", request["state"],
+             str(request["created_unix"]), str(request["current"]), str(request["total"]),
+             "bytes" if request["operation"] == "upload" else "steps"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=10, env=helper_environment, close_fds=True,
+        )
+        if completed.returncode != 0:
+            raise RequestError("action-failed", "image upload task transition was rejected")
+        return response(request["request_id"], "succeeded", replayed=False)
     state = load_state(settings["state"])
     existing = next((item for item in state["results"] if item["request_id"] == request["request_id"]), None)
     if existing:

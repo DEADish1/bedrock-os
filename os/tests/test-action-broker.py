@@ -457,6 +457,24 @@ def main():
             audit = (task_state / "audit.jsonl").read_text(encoding="utf-8").splitlines()
             assert len(audit) == 4 and all(json.loads(line)["action"] == "update-policy" for line in audit)
             assert sum(json.loads(line)["outcome"] == "failed" for line in audit) == 1
+            upload_id = str(uuid.uuid4())
+            created = int(time.time())
+            def upload_transition(state, current, total=10, operation="upload"):
+                return {"schema": 1, "request_id": str(uuid.uuid4()), "action": "image-upload-task",
+                        "upload_id": upload_id, "operation": operation, "state": state,
+                        "created_unix": created, "current": current, "total": total}
+            assert exchange(socket_path, upload_transition("queued", 0))["status"] == "succeeded"
+            assert exchange(socket_path, upload_transition("running", 5))["status"] == "succeeded"
+            assert exchange(socket_path, upload_transition("succeeded", 10))["status"] == "succeeded"
+            assert exchange(socket_path, upload_transition("running", 9))["error"]["code"] == "action-failed"
+            bad = upload_transition("queued", 0) | {"host_path": "/etc/passwd"}
+            assert exchange(socket_path, bad)["error"]["code"] == "invalid-request"
+            assert exchange(socket_path, upload_transition("succeeded", 5))["error"]["code"] == "invalid-image-upload-task"
+            upload_tasks = json.loads((task_state / "tasks.json").read_text(encoding="utf-8"))["tasks"]
+            assert next(item for item in upload_tasks if item["id"] == f"image-upload-{upload_id}")["state"] == "succeeded"
+            upload_audit = [json.loads(line) for line in (task_state / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
+            assert sum(item["action"] == "image-upload" for item in upload_audit) == 1
+            assert len(json.loads(state.read_text(encoding="utf-8"))["results"]) == 37
         finally:
             process.terminate()
             process.wait(timeout=2)
