@@ -565,6 +565,10 @@ client.close(); server.close()
             assert request(socket_path, "PUT", "/api/v1/images/discardme/upload", body=upload_bytes, extra_headers={"Content-Type": "application/octet-stream", "X-Bedrock-Image-Type": "iso", "If-Match": '"sha256-' + "0" * 64 + '"'})[0] == 412
             discard_status, discard_upload = request(socket_path, "PUT", "/api/v1/images/discardme/upload", body=upload_bytes, extra_headers=upload_headers)
             assert discard_status == 200
+            recorded_tasks = json.loads((action_task_state / "tasks.json").read_text(encoding="utf-8"))["tasks"]
+            assert any(item["kind"] == "image-upload" and item["state"] == "succeeded" and item["progress"] == {"current": len(upload_bytes), "total": len(upload_bytes), "unit": "bytes"} for item in recorded_tasks)
+            recorded_audit = [json.loads(line) for line in (action_task_state / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
+            assert any(item["action"] == "image-upload" and item["outcome"] == "succeeded" for item in recorded_audit)
             discard_hash = discard_upload["candidate"]["sha256"]
             discard_body = {"schema": 1, "sha256": discard_hash, "confirmation": f"DISCARD IMAGE UPLOAD discardme {discard_hash}"}
             _, _, discard_headers = request(socket_path, "GET", "/api/v1/images", include_headers=True)
@@ -579,6 +583,8 @@ client.close(); server.close()
             assert staged_status == 200 and staged_body["upload_candidates"] == [upload_body["candidate"]]
             upload_headers["If-Match"] = staged_headers["ETag"]
             assert request(socket_path, "PUT", "/api/v1/images/debian/upload", body=upload_bytes, extra_headers=upload_headers)[0] == 409
+            recorded_audit = [json.loads(line) for line in (action_task_state / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
+            assert any(item["action"] == "image-upload" and item["outcome"] == "failed" for item in recorded_audit)
             import_id = str(uuid.uuid4()); import_confirmation = f"IMPORT ISO debian {upload_hash}"
             import_body = {"schema": 1, "confirmation": import_confirmation}; import_headers = {"Content-Type": "application/json", "Idempotency-Key": import_id, "If-Match": staged_headers["ETag"]}
             assert request(socket_path, "POST", "/api/v1/images/debian/import", body=import_body, extra_headers=import_headers)[0] == 200

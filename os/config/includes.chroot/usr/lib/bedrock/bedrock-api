@@ -134,6 +134,14 @@ def broker_action(request_id: str, broker_request: dict) -> dict:
         return result
     raise OSError("invalid broker response")
 
+def image_task_transition(upload_id: str, operation: str, state: str, created: int, current: int, total: int) -> None:
+    request_id = str(uuid.uuid4())
+    result = broker_action(request_id, {"schema": 1, "request_id": request_id,
+        "action": "image-upload-task", "upload_id": upload_id, "operation": operation,
+        "state": state, "created_unix": created, "current": current, "total": total})
+    if result["status"] != "succeeded":
+        raise OSError("image task transition failed")
+
 def update_policy_action(request_id: str, body: object) -> dict:
     if not isinstance(body, dict) or set(body) != {"schema", "setting", "value", "beta_risk_acknowledged"} or body["schema"] != 1:
         raise ValueError("invalid update-policy request")
@@ -370,7 +378,7 @@ def discard_image_upload(name: str, body: object) -> dict:
         if lock.exists() and not lock.is_symlink():
             lock.unlink()
 
-def stage_image_upload(stream, name: str, image_type: str, length: int) -> dict:
+def stage_image_upload(stream, name: str, image_type: str, length: int, progress=None) -> dict:
     if not VM_NAME.fullmatch(name) or image_type not in {"iso", "img", "qcow2", "vhdx", "vmdk"} or not 1 <= length <= 4398046511104:
         raise ValueError("invalid image upload")
     current = regular_json(IMAGES, 524288)
@@ -385,7 +393,8 @@ def stage_image_upload(stream, name: str, image_type: str, length: int) -> dict:
         if any(UPLOADS.glob(f"{name}.*")):
             raise FileExistsError("upload candidate already exists")
         descriptor, temporary = tempfile.mkstemp(prefix=f".{name}.upload.", dir=UPLOADS)
-        digest = hashlib.sha256(); remaining = length
+        digest = hashlib.sha256(); remaining = length; reported = 0
+        progress_interval = max(67108864, (length + 99) // 100)
         with os.fdopen(descriptor, "wb") as output:
             os.fchmod(output.fileno(), 0o640)
             while remaining:
@@ -393,6 +402,10 @@ def stage_image_upload(stream, name: str, image_type: str, length: int) -> dict:
                 if not chunk:
                     raise ValueError("truncated image upload")
                 output.write(chunk); digest.update(chunk); remaining -= len(chunk)
+                current = length - remaining
+                if progress is not None and (current - reported >= progress_interval or remaining == 0):
+                    progress(current)
+                    reported = current
             output.flush(); os.fsync(output.fileno())
         os.replace(temporary, destination); temporary = ""
         descriptor, metadata_temporary = tempfile.mkstemp(prefix=f".{name}.metadata.", dir=UPLOADS)
@@ -409,6 +422,26 @@ def stage_image_upload(stream, name: str, image_type: str, length: int) -> dict:
         if temporary and os.path.exists(temporary): os.unlink(temporary)
         if metadata_temporary and os.path.exists(metadata_temporary): os.unlink(metadata_temporary)
         if lock.exists() and not lock.is_symlink(): lock.unlink()
+
+def audited_stage_image_upload(stream, name: str, image_type: str, length: int) -> dict:
+    if not VM_NAME.fullmatch(name) or image_type not in {"iso", "img", "qcow2", "vhdx", "vmdk"} or not 1 <= length <= 4398046511104:
+        raise ValueError("invalid image upload")
+    upload_id, created, current = str(uuid.uuid4()), int(time.time()), 0
+    image_task_transition(upload_id, "upload", "queued", created, 0, length)
+    def progress(value: int) -> None:
+        nonlocal current
+        image_task_transition(upload_id, "upload", "running", created, value, length)
+        current = value
+    try:
+        candidate = stage_image_upload(stream, name, image_type, length, progress)
+    except Exception:
+        try:
+            image_task_transition(upload_id, "upload", "failed", created, current, length)
+        except (OSError, ValueError):
+            pass
+        raise
+    image_task_transition(upload_id, "upload", "succeeded", created, length, length)
+    return candidate
 
 def backup_run_action(request_id: str, backup_id: str, body: object) -> dict:
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", backup_id) or not isinstance(body, dict) or set(body) != {"schema", "confirmation"} or body.get("schema") != 1 or not isinstance(body["confirmation"], str) or not hmac.compare_digest(body["confirmation"], f"RUN ENCRYPTED BACKUP {backup_id}"):
@@ -1323,7 +1356,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(400, {"schema": 1, "error": "invalid-request"}); return
             try:
                 length = int(self.headers.get("Content-Length", ""))
-                candidate = stage_image_upload(self.rfile, upload.group(1), self.headers.get("X-Bedrock-Image-Type", ""), length)
+                candidate = audited_stage_image_upload(self.rfile, upload.group(1), self.headers.get("X-Bedrock-Image-Type", ""), length)
             except FileExistsError:
                 self.send_json(409, {"schema": 1, "error": "upload-conflict"}); return
             except (OSError, ValueError):
