@@ -34,6 +34,9 @@ env BEDROCK_RELAY_CONFIG_TEST_MODE=1 BEDROCK_RELAY_CONFIG_DIR="$work/state" BEDR
 [ ! -e "$work/state/relay.json" ] && [ ! -e "$work/state/relay-token" ]
 grep -Fx 'stop bedrock-relay-connector.service' "$work/systemctl.log" >/dev/null
 jq -e '.schema==1 and .configured==false' "$work/public/relay.json" >/dev/null
+env BEDROCK_RELAY_CONFIG_TEST_MODE=1 BEDROCK_RELAY_CONFIG_DIR="$work/state" BEDROCK_RELAY_CONFIG_SYSTEMCTL="$work/systemctl" BEDROCK_RELAY_PUBLIC_STATUS="$work/public/relay.json" BEDROCK_RELAY_TEST_LOG="$work/systemctl.log" "$tool" "$work/request.json" | jq -e '.status=="configured"' >/dev/null
+jq -e '.schema==1 and .configured==true' "$work/public/relay.json" >/dev/null
+[ "$(tr -d '\n' < "$work/state/relay-token")" = "$token" ] || { printf 'error: relay credential was not restored on re-enable\n' >&2; exit 1; }
 jq '.confirmation="wrong"' "$work/request.json" > "$work/bad.json"
 if env BEDROCK_RELAY_CONFIG_TEST_MODE=1 BEDROCK_RELAY_CONFIG_DIR="$work/state" BEDROCK_RELAY_CONFIG_SYSTEMCTL="$work/systemctl" BEDROCK_RELAY_PUBLIC_STATUS="$work/public/relay.json" "$tool" "$work/bad.json" >/dev/null 2>&1; then printf 'error: bad relay confirmation was accepted\n' >&2; exit 1; fi
 ln -s "$work/request.json" "$work/indirect.json"
