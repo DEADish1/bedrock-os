@@ -61,6 +61,8 @@ Privileged operations publish state through `record-api-task`. The writer serial
 
 Outbound relay configuration and disablement publish `remote-relay-configure` or `remote-relay-disable` tasks. A failed connector restart yields a failed terminal event after attempting to restore the previous root-only configuration; task and audit payloads never include the relay host, route, or token.
 
+Offline VM GPU/USB passthrough assignment and removal publish `vm-passthrough-assign` or `vm-passthrough-remove` tasks. A planner or manager rejection produces a failed terminal event; the feed never contains the VM name, device IDs, or IOMMU topology.
+
 Verified update downloads publish queued, byte-accurate running, succeeded, and failed states. Resumed bytes count only after the complete artifact passes size and SHA-256 verification, and the final success state is emitted only after the whole signed bundle passes verification.
 
 VM start, stop, force-stop, and restart publish three bounded steps: managed-state and libvirt preconditions verified, the requested command issued, and the expected final power state observed. Task and audit records identify only the action; VM names remain outside the feed.

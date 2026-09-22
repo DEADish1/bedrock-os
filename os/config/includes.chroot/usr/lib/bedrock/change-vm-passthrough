@@ -33,11 +33,16 @@ for helper in "$planner" "$manager"; do [ -x "$helper" ] && [ ! -L "$helper" ] |
 plans=$base/plans; authorizations=$base/authorizations
 mkdir -p "$plans" "$authorizations"
 for directory in "$base" "$plans" "$authorizations"; do [ -d "$directory" ] && [ ! -L "$directory" ] || fail "passthrough state directory is indirect"; done
+task_writer=${BEDROCK_RECORD_API_TASK:-$(dirname "$0")/record-api-task}
+[ -x "$task_writer" ] && [ ! -L "$task_writer" ] || fail "task recorder is unavailable or indirect"
+created=$(date +%s); task_id="vm-passthrough-$action-$$"; task_kind="vm-passthrough-$action"; active=0; done=0
 plan=$plans/$vm-$kind-passthrough.json
 authorization=$authorizations/$vm-$kind-$action.json
 review=$(mktemp "$base/.passthrough-review.XXXXXX")
-cleanup() { status=$?; rm -f "$review" "$authorization" "$plan"; exit "$status"; }
+cleanup() { status=$?; trap - EXIT INT TERM; rm -f "$review" "$authorization" "$plan"; if [ "$active" -eq 1 ] && [ "$done" -eq 0 ]; then "$task_writer" "$task_id" "$task_kind" failed "$created" 0 1 steps >/dev/null 2>&1 || true; fi; exit "$status"; }
 trap cleanup EXIT INT TERM
+"$task_writer" "$task_id" "$task_kind" queued "$created" 0 1 steps
+active=1
 jq -S '{schema,vm,kind,devices,confirmation:.review_confirmation}' "$request" > "$review"
 chmod 0600 "$review"
 "$planner" "$review" "$plan" >/dev/null
@@ -45,5 +50,6 @@ hash=$(sha256sum "$plan" | awk '{print $1}')
 jq -S --arg hash "$hash" '{schema,action,vm,kind,plan_sha256:$hash,confirmation}' "$request" > "$authorization"
 chmod 0600 "$authorization"
 "$manager" "$plan" "$authorization"
-trap - EXIT INT TERM
+"$task_writer" "$task_id" "$task_kind" succeeded "$created" 1 1 steps
+done=1
 rm -f "$review" "$authorization" "$plan"
