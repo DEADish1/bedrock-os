@@ -573,9 +573,15 @@ client.close(); server.close()
             discard_body = {"schema": 1, "sha256": discard_hash, "confirmation": f"DISCARD IMAGE UPLOAD discardme {discard_hash}"}
             _, _, discard_headers = request(socket_path, "GET", "/api/v1/images", include_headers=True)
             assert request(socket_path, "DELETE", "/api/v1/images/discardme/upload", body=discard_body, extra_headers={"Content-Type": "application/json", "If-Match": discard_headers["ETag"]}) == (200, {"schema": 1, "name": "discardme", "discarded": True})
+            recorded_tasks = json.loads((action_task_state / "tasks.json").read_text(encoding="utf-8"))["tasks"]
+            assert any(item["kind"] == "image-discard" and item["state"] == "succeeded" and item["progress"] == {"current": 1, "total": 1, "unit": "steps"} for item in recorded_tasks)
+            recorded_audit = [json.loads(line) for line in (action_task_state / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
+            assert sum(item["action"] == "image-discard" and item["outcome"] == "succeeded" for item in recorded_audit) == 1
             _, cleared_body, cleared_headers = request(socket_path, "GET", "/api/v1/images", include_headers=True)
             assert cleared_body["upload_candidates"] == []
             assert request(socket_path, "DELETE", "/api/v1/images/discardme/upload", body=discard_body, extra_headers={"Content-Type": "application/json", "If-Match": cleared_headers["ETag"]})[0] == 400
+            recorded_audit = [json.loads(line) for line in (action_task_state / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
+            assert sum(item["action"] == "image-discard" and item["outcome"] == "failed" for item in recorded_audit) == 1
             upload_headers["If-Match"] = cleared_headers["ETag"]
             upload_status, upload_body = request(socket_path, "PUT", "/api/v1/images/debian/upload", body=upload_bytes, extra_headers=upload_headers)
             assert upload_status == 200 and upload_body["candidate"] == {"name": "debian", "type": "iso", "sha256": upload_hash, "size_bytes": len(upload_bytes)}

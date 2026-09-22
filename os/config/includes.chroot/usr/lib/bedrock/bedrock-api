@@ -378,6 +378,25 @@ def discard_image_upload(name: str, body: object) -> dict:
         if lock.exists() and not lock.is_symlink():
             lock.unlink()
 
+def audited_discard_image_upload(name: str, body: object) -> dict:
+    if not VM_NAME.fullmatch(name) or not isinstance(body, dict) or set(body) != {"schema", "sha256", "confirmation"} or body.get("schema") != 1:
+        raise ValueError("invalid image upload discard request")
+    source_hash, confirmation = body.get("sha256"), body.get("confirmation")
+    if not isinstance(source_hash, str) or not SHA256.fullmatch(source_hash) or not isinstance(confirmation, str) or not hmac.compare_digest(confirmation, f"DISCARD IMAGE UPLOAD {name} {source_hash}"):
+        raise ValueError("invalid image upload discard confirmation")
+    upload_id, created = str(uuid.uuid4()), int(time.time())
+    image_task_transition(upload_id, "discard", "queued", created, 0, 1)
+    try:
+        result = discard_image_upload(name, body)
+    except Exception:
+        try:
+            image_task_transition(upload_id, "discard", "failed", created, 0, 1)
+        except (OSError, ValueError):
+            pass
+        raise
+    image_task_transition(upload_id, "discard", "succeeded", created, 1, 1)
+    return result
+
 def stage_image_upload(stream, name: str, image_type: str, length: int, progress=None) -> dict:
     if not VM_NAME.fullmatch(name) or image_type not in {"iso", "img", "qcow2", "vhdx", "vmdk"} or not 1 <= length <= 4398046511104:
         raise ValueError("invalid image upload")
@@ -1318,7 +1337,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("invalid body length")
             body = json.loads(self.rfile.read(length).decode("utf-8"))
             if image_upload:
-                result = discard_image_upload(image_upload.group(1), body)
+                result = audited_discard_image_upload(image_upload.group(1), body)
             else:
                 result = app_control_action(self.headers.get("Idempotency-Key", ""), app_target.group(1), body, "remove") if app_target else vm_delete_action(self.headers.get("Idempotency-Key", ""), target.group(1), body)
         except FileExistsError:
