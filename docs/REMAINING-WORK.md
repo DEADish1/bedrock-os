@@ -1,6 +1,6 @@
 # Bedrock OS remaining-work checklist
 
-This is the fresh, actionable path from the current branch to a signed 1.0 release. Version numbers are target milestones, not claims that a release has shipped. A box closes only when the named acceptance evidence exists on the release-candidate build. `PROJECT-ROADMAP.md` retains the product requirements; this file breaks its open gates into smaller jobs. As of 2026-09-22, relay Settings changes are local and uncommitted, so they remain open here.
+This is the fresh, actionable path from the current branch to a signed 1.0 release. Version numbers are target milestones, not claims that a release has shipped. A box closes only when the named acceptance evidence exists on the release-candidate build. `PROJECT-ROADMAP.md` retains the product requirements; this file breaks its open gates into smaller jobs. The relay Settings change is committed and pushed; candidate-image acceptance remains open.
 
 ## 0.2.0 — Bootable foundation acceptance
 
