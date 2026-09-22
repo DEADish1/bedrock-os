@@ -750,6 +750,11 @@ client.close(); server.close()
             (uploads / ".stale.upload.lock").write_bytes(b"")
             (uploads / ".stale.upload.partial").write_bytes(b"partial")
             (uploads / "stale.iso").write_bytes(b"partial")
+            complete_bytes = b"committed-upload"
+            (uploads / ".complete.upload.lock").write_bytes(b"")
+            (uploads / "complete.iso").write_bytes(complete_bytes)
+            (uploads / "complete.json").write_text(json.dumps({"schema": 1, "name": "complete", "type": "iso",
+                "sha256": hashlib.sha256(complete_bytes).hexdigest(), "size_bytes": len(complete_bytes)}), encoding="utf-8")
             process.terminate()
             process.wait(timeout=5)
             environment["BEDROCK_API_TASKS"] = str(action_task_state / "tasks.json")
@@ -767,6 +772,9 @@ client.close(); server.close()
             else:
                 raise AssertionError("API did not restart after upload recovery")
             assert not any("stale" in item.name for item in uploads.iterdir())
+            assert not (uploads / ".complete.upload.lock").exists()
+            assert (uploads / "complete.iso").read_bytes() == complete_bytes
+            assert (uploads / "complete.json").exists()
             recovered = json.loads((action_task_state / "tasks.json").read_text(encoding="utf-8"))["tasks"]
             assert next(item for item in recovered if item["id"] == f"image-upload-{interrupted_id}")["state"] == "failed"
             recovered_audit = [json.loads(line) for line in (action_task_state / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
