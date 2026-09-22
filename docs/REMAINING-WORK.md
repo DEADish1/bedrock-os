@@ -22,7 +22,7 @@ This is the fresh, actionable path from the current branch to a signed 1.0 relea
 
 ## 0.6.0 — Management interface and authenticated API
 
-- [ ] **0.6.1 — Complete the Settings relay change:** Finish and commit the in-progress guarded relay setup/disable flow; test secret-free responses, root-only staging, exact confirmation, idempotency, strong ETag rejection, disable/re-enable, and failure rollback.
+- [x] **0.6.1 — Complete the Settings relay change:** Guarded setup/disable is committed and pushed. The API, root broker, helper, and browser tests cover secret-free responses, root-only staging, exact confirmation, idempotency, strong ETag rejection, disable/re-enable, and failed-restart rollback. [Linux validation run 35729600235](https://github.com/DEADish1/bedrock-os/actions/runs/35729600235) passed; image reproducibility jobs are separate release evidence.
 - [ ] **0.6.2 — API mutation inventory:** Compare every supported server operation with the frozen v1 API and interface; implement or explicitly defer any missing authenticated, bounded, auditable mutation. Do not close the broad roadmap API/UI items from read routes alone.
 - [ ] **0.6.3 — Task and audit coverage:** Confirm every long-running or destructive operation emits bounded progress, terminal task state, and privacy-safe audit outcomes, including error/interruption paths.
 - [ ] **0.6.4 — Cross-area UI acceptance:** Exercise Storage, VMs, Images, Apps, Connect, Backup, Hardware, Settings, Help, and Users against a real candidate server, including empty, stale, disconnected, denied, and partial-failure states.
