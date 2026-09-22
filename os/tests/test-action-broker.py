@@ -194,7 +194,7 @@ def main():
         admin_helper.chmod(0o755)
         relay_calls = work / "relay-calls"
         relay_helper = work / "relay-helper"
-        relay_helper.write_text("#!/bin/sh\njq -S 'del(.token)' \"$1\" >> \"$BEDROCK_RELAY_ACTION_CALLS\"\n", encoding="utf-8")
+        relay_helper.write_text("#!/bin/sh\njq -cS 'del(.token)' \"$1\" >> \"$BEDROCK_RELAY_ACTION_CALLS\"\n", encoding="utf-8")
         relay_helper.chmod(0o755)
         console_helper = work / "console-helper"
         console_helper.write_text("#!/bin/sh\nnow=$(date +%s)\nprintf '{\"schema\":1,\"status\":\"authorized\",\"vm\":\"test-vm\",\"token\":\"%064d\",\"expires_at\":%s,\"one_time\":true,\"transport\":\"vnc-websocket\",\"websocket_path\":\"/api/v1/vms/test-vm/console\"}\\n' 1 $((now+60))\n", encoding="utf-8")
