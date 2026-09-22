@@ -594,7 +594,7 @@ client.close(); server.close()
                     "Content-Length: 100\r\n\r\npartial"
                 ).encode("ascii"))
                 interrupted.shutdown(socket.SHUT_WR)
-                assert interrupted.recv(4096).startswith(b"HTTP/1.0 400")
+                assert interrupted.recv(4096).startswith(b"HTTP/1.1 400")
             assert not any("interrupted" in item.name for item in uploads.iterdir())
             recorded_audit = [json.loads(line) for line in (action_task_state / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
             assert any(item["action"] == "image-upload" and item["outcome"] == "failed" for item in recorded_audit)
