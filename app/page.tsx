@@ -1645,6 +1645,7 @@ type SettingsFeed = {
     channel: "stable" | "beta";
     automatic_install: false;
   };
+  remote_relay: { configured: boolean };
   telemetry_enabled: false;
   etag: string;
 };
@@ -5758,7 +5759,24 @@ function Settings({
 }) {
   const [saving, setSaving] = useState(false),
     [betaAck, setBetaAck] = useState(false),
+    [relayHost, setRelayHost] = useState(""),
+    [relayPort, setRelayPort] = useState("443"),
+    [relayRoute, setRelayRoute] = useState(""),
+    [relayToken, setRelayToken] = useState(""),
+    [relayConfirmation, setRelayConfirmation] = useState(""),
     [error, setError] = useState("");
+  const refresh = async () => {
+    const response = await fetch("/api/v1/settings", {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    if (!response.ok)
+      throw new Error(
+        "The change succeeded, but refreshed settings are unavailable.",
+      );
+    const next = (await response.json()) as Omit<SettingsFeed, "etag">;
+    setData({ ...next, etag: response.headers.get("ETag") ?? "" });
+  };
   const update = async (
     setting: "automatic_checks" | "channel",
     value: boolean | "stable" | "beta",
@@ -5790,16 +5808,7 @@ function Settings({
               ? "This change conflicts with an earlier request. Try again."
               : "Bedrock rejected the policy change.",
         );
-      const refreshed = await fetch("/api/v1/settings", {
-        headers: { Authorization: `Bearer ${token}` },
-        cache: "no-store",
-      });
-      if (!refreshed.ok)
-        throw new Error(
-          "The change succeeded, but the refreshed policy is unavailable.",
-        );
-      const next = (await refreshed.json()) as Omit<SettingsFeed, "etag">;
-      setData({ ...next, etag: refreshed.headers.get("ETag") ?? "" });
+      await refresh();
       setBetaAck(false);
       notify("Update policy saved");
     } catch (reason) {
@@ -5810,6 +5819,60 @@ function Settings({
       setSaving(false);
     }
   };
+  const changeRelay = async (operation: "configure" | "disable") => {
+    if (!data) return;
+    setSaving(true);
+    setError("");
+    try {
+      const body =
+        operation === "configure"
+          ? {
+              schema: 1,
+              operation,
+              host: relayHost.trim(),
+              port: Number(relayPort),
+              server_route: relayRoute.trim(),
+              token: relayToken,
+              confirmation: relayConfirmation,
+            }
+          : { schema: 1, operation, confirmation: relayConfirmation };
+      const response = await fetch("/api/v1/settings", {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
+          "If-Match": data.etag,
+        },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok)
+        throw new Error(
+          response.status === 412
+            ? "Settings changed since they were loaded. Review and try again."
+            : "Bedrock rejected the remote connection change.",
+        );
+      setRelayToken("");
+      setRelayConfirmation("");
+      await refresh();
+      notify(
+        operation === "configure"
+          ? "Remote connection configured"
+          : "Remote connection disabled",
+      );
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Remote connection change failed.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+  const relayExpectedConfirmation = data?.remote_relay.configured
+    ? "DISABLE REMOTE RELAY"
+    : `CONFIGURE REMOTE RELAY ${relayHost.trim()}:${relayPort} ROUTE ${relayRoute.trim()}`;
   return (
     <>
       <Title
@@ -5935,6 +5998,33 @@ function Settings({
                 </p>
               </div>
               <span className="ready">Disabled</span>
+            </div>
+            <div className="drive settings-row">
+              <b>↗</b>
+              <div>
+                <strong>Remote connection</strong>
+                <p>
+                  {data.remote_relay.configured
+                    ? "Secure outbound connection is configured."
+                    : "Connect through an approved Bedrock relay without opening inbound router ports."}
+                </p>
+                {!data.remote_relay.configured ? (
+                  <div className="settings-actions">
+                    <input aria-label="Relay host" placeholder="Relay host" value={relayHost} onChange={(event) => setRelayHost(event.target.value)} />
+                    <input aria-label="Relay port" inputMode="numeric" placeholder="443" value={relayPort} onChange={(event) => setRelayPort(event.target.value)} />
+                    <input aria-label="Server route ID" placeholder="Server route ID" value={relayRoute} onChange={(event) => setRelayRoute(event.target.value)} />
+                    <input aria-label="Relay access token" type="password" autoComplete="off" placeholder="Relay access token" value={relayToken} onChange={(event) => setRelayToken(event.target.value)} />
+                  </div>
+                ) : null}
+                <label className="risk">
+                  Type <code>{relayExpectedConfirmation}</code>
+                  <input aria-label="Remote connection confirmation" value={relayConfirmation} onChange={(event) => setRelayConfirmation(event.target.value)} />
+                </label>
+              </div>
+              <div className="settings-actions">
+                <span className={data.remote_relay.configured ? "ready" : "waiting"}>{data.remote_relay.configured ? "Configured" : "Not configured"}</span>
+                <button disabled={saving || relayConfirmation !== relayExpectedConfirmation} onClick={() => changeRelay(data.remote_relay.configured ? "disable" : "configure")}>{data.remote_relay.configured ? "Disable" : "Configure"}</button>
+              </div>
             </div>
           </div>
         </>

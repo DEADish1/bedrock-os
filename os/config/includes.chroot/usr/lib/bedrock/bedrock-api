@@ -33,6 +33,7 @@ IMAGES = pathlib.Path(os.environ.get("BEDROCK_API_IMAGES", "/var/lib/bedrock/api
 UPLOADS = pathlib.Path(os.environ.get("BEDROCK_API_UPLOADS", "/var/lib/bedrock/virtualization/uploads"))
 UPDATE_POLICY = pathlib.Path(os.environ.get("BEDROCK_API_UPDATE_POLICY", "/var/lib/bedrock/settings/update-policy.json"))
 DEFAULT_UPDATE_POLICY = pathlib.Path(os.environ.get("BEDROCK_API_DEFAULT_UPDATE_POLICY", "/usr/share/bedrock/default-update-policy.json"))
+RELAY_STATUS = pathlib.Path(os.environ.get("BEDROCK_API_RELAY_STATUS", "/var/lib/bedrock/api/sources/relay.json"))
 NAS = pathlib.Path(os.environ.get("BEDROCK_API_NAS", "/var/lib/bedrock/storage/nas.json"))
 ACTION_BROKER = pathlib.Path(os.environ.get("BEDROCK_API_ACTION_BROKER", "/run/bedrock-action-broker/action.sock"))
 
@@ -145,6 +146,18 @@ def update_policy_action(request_id: str, body: object) -> dict:
         raise ValueError("invalid update-policy request")
     return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "update-policy",
                                      "setting": setting, "value": value, "beta_risk_acknowledged": acknowledged})
+
+def relay_action(request_id: str, body: object) -> dict:
+    if not isinstance(body, dict) or body.get("schema") != 1:
+        raise ValueError("invalid relay request")
+    operation = body.get("operation")
+    if operation == "configure" and set(body) == {"schema", "operation", "host", "port", "server_route", "token", "confirmation"}:
+        request = body | {"request_id": request_id, "action": "remote-relay"}
+    elif operation == "disable" and set(body) == {"schema", "operation", "confirmation"}:
+        request = body | {"request_id": request_id, "action": "remote-relay"}
+    else:
+        raise ValueError("invalid relay request")
+    return broker_action(request_id, request)
 
 def vm_console_session_action(request_id: str, name: str, body: object) -> dict:
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,30}[a-z0-9]", name) or not isinstance(body, dict) or set(body) != {"schema", "confirmation"} or body.get("schema") != 1 or not isinstance(body.get("confirmation"), str) or not hmac.compare_digest(body["confirmation"], f"OPEN CONSOLE VM {name}"):
@@ -813,7 +826,13 @@ def settings_feed() -> dict:
     expected = {"schema", "automatic_checks", "setup_choice_recorded", "channel"}
     if not isinstance(value, dict) or set(value) != expected or value["schema"] != 2 or type(value["automatic_checks"]) is not bool or type(value["setup_choice_recorded"]) is not bool or value["channel"] not in {"stable", "beta"}:
         raise ValueError("invalid update policy")
-    return {"schema": 1, "updates": {"automatic_checks": value["automatic_checks"], "setup_choice_recorded": value["setup_choice_recorded"], "channel": value["channel"], "automatic_install": False}, "telemetry_enabled": False}
+    try:
+        relay = regular_json(RELAY_STATUS, 4096)
+    except FileNotFoundError:
+        relay = {"schema": 1, "configured": False}
+    if not isinstance(relay, dict) or set(relay) != {"schema", "configured"} or relay.get("schema") != 1 or type(relay.get("configured")) is not bool:
+        raise ValueError("invalid relay status")
+    return {"schema": 1, "updates": {"automatic_checks": value["automatic_checks"], "setup_choice_recorded": value["setup_choice_recorded"], "channel": value["channel"], "automatic_install": False}, "remote_relay": {"configured": relay["configured"]}, "telemetry_enabled": False}
 
 def user_feed() -> dict:
     value = regular_json(NAS, 1048576)
@@ -1328,7 +1347,7 @@ class Handler(BaseHTTPRequestHandler):
             if not 1 <= length <= 4096:
                 raise ValueError("invalid body length")
             body = json.loads(self.rfile.read(length).decode("utf-8"))
-            result = update_policy_action(self.headers.get("Idempotency-Key", ""), body)
+            result = relay_action(self.headers.get("Idempotency-Key", ""), body) if isinstance(body, dict) and "operation" in body else update_policy_action(self.headers.get("Idempotency-Key", ""), body)
         except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
             self.send_json(400, {"schema": 1, "error": "invalid-request"})
             return

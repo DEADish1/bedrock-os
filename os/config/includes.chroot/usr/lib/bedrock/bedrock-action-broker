@@ -51,6 +51,7 @@ def environment():
         "app_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_APP_HELPER", "/usr/lib/bedrock/change-app")),
         "remote_device_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_REMOTE_DEVICE_HELPER", "/usr/lib/bedrock/change-remote-device")),
         "remote_pairing_approval_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_REMOTE_PAIRING_APPROVAL_HELPER", "/usr/lib/bedrock/approve-remote-pairing")),
+        "remote_relay_helper": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_REMOTE_RELAY_HELPER", "/usr/lib/bedrock/configure-remote-relay")),
         "vm_requests": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_VM_REQUESTS", "/var/lib/bedrock/virtualization/requests")),
         "vm_definitions": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_VM_DEFINITIONS", "/var/lib/bedrock/virtualization/definitions")),
         "remote_requests": pathlib.Path(os.environ.get("BEDROCK_ACTION_BROKER_REMOTE_REQUESTS", "/var/lib/bedrock/remote/requests")),
@@ -306,6 +307,19 @@ def parse_request(raw):
         if not isinstance(pairing_id, str) or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", pairing_id) or confirmation != f"APPROVE REMOTE DEVICE {pairing_id}":
             raise RequestError("invalid-remote-pairing-approval", "pairing identity or exact approval confirmation is invalid")
         details = {"schema": 1, "id": pairing_id, "confirmation": confirmation}
+    elif request.get("action") == "remote-relay":
+        operation = request.get("operation")
+        if operation == "configure" and set(request) == {"schema", "request_id", "action", "operation", "host", "port", "server_route", "token", "confirmation"}:
+            host, port, server_route, token, confirmation = request["host"], request["port"], request["server_route"], request["token"], request["confirmation"]
+            expected = f"CONFIGURE REMOTE RELAY {host}:{port} ROUTE {server_route}"
+            if not isinstance(host, str) or not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", host) or ".." in host or host.startswith(".") or host.endswith(".") or type(port) is not int or not 1 <= port <= 65535 or not isinstance(server_route, str) or not re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", server_route) or not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", token) or confirmation != expected:
+                raise RequestError("invalid-remote-relay", "relay settings or exact confirmation are invalid")
+            details = {"schema": 1, "operation": operation, "host": host, "port": port,
+                       "server_route": server_route, "token": token, "confirmation": confirmation}
+        elif operation == "disable" and set(request) == {"schema", "request_id", "action", "operation", "confirmation"} and request.get("confirmation") == "DISABLE REMOTE RELAY":
+            details = {"schema": 1, "operation": operation, "confirmation": request["confirmation"]}
+        else:
+            raise RequestError("invalid-remote-relay", "relay operation or exact confirmation is invalid")
     else:
         raise RequestError("unsupported-action", "action is not allowlisted")
     canonical = json.dumps(request, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -330,7 +344,7 @@ def load_state(path):
         if fields not in ({"request_id", "request_sha256", "action", "status"},
                           {"request_id", "request_sha256", "action", "status", "created_unix"}):
             raise RuntimeError("action result state contains an invalid result")
-        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-console-open", "vm-console-redeem", "vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough", "image-convert", "image-import", "backup-run", "backup-restore-latest", "backup-create", "storage-scrub", "storage-export", "storage-import", "storage-create", "storage-expand", "storage-replace", "nas-identity-create", "nas-membership-add", "nas-credential-rotate", "app-control", "remote-device", "remote-pairing-approve"} or item["status"] not in {"pending", "succeeded", "failed"}:
+        if item["action"] not in {"update-policy", "vm-control", "vm-snapshot", "vm-console-open", "vm-console-redeem", "vm-clone", "vm-delete", "vm-resources", "vm-create", "vm-image-attachment", "vm-network-attachment", "vm-passthrough", "image-convert", "image-import", "backup-run", "backup-restore-latest", "backup-create", "storage-scrub", "storage-export", "storage-import", "storage-create", "storage-expand", "storage-replace", "nas-identity-create", "nas-membership-add", "nas-credential-rotate", "app-control", "remote-device", "remote-pairing-approve", "remote-relay"} or item["status"] not in {"pending", "succeeded", "failed"}:
             raise RuntimeError("action result state contains an unsupported result")
         if item["status"] != "succeeded" and "created_unix" not in item:
             raise RuntimeError("incomplete action result lacks a creation time")
@@ -597,9 +611,13 @@ def execute_remote_device(request, request_file, settings, helper_environment):
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     if directory.is_symlink() or not directory.is_dir():
         raise RuntimeError("remote request directory is unsafe")
-    suffix = "approve" if request["action"] == "remote-pairing-approve" else request["operation"]
-    helper = settings["remote_pairing_approval_helper"] if request["action"] == "remote-pairing-approve" else settings["remote_device_helper"]
-    path = directory / f"{request['id']}-{suffix}.json"
+    if request["action"] == "remote-pairing-approve":
+        suffix, helper, identity = "approve", settings["remote_pairing_approval_helper"], request["id"]
+    elif request["action"] == "remote-relay":
+        suffix, helper, identity = request["operation"], settings["remote_relay_helper"], "relay"
+    else:
+        suffix, helper, identity = request["operation"], settings["remote_device_helper"], request["id"]
+    path = directory / f"{identity}-{suffix}.json"
     if path.exists() or path.is_symlink():
         raise RuntimeError("remote device request path already exists")
     descriptor, temporary = tempfile.mkstemp(prefix=".remote-device.", dir=directory)
@@ -720,6 +738,9 @@ def execute(raw, settings):
             helper_environment["BEDROCK_VM_ADMIN_CALLS"] = os.environ["BEDROCK_VM_ADMIN_CALLS"]
         helper_environment["BEDROCK_API_TASK_TEST_MODE"] = "1"
         helper_environment["BEDROCK_API_TASK_STATE_DIR"] = os.environ["BEDROCK_API_TASK_STATE_DIR"]
+        for name in ("BEDROCK_RELAY_CONFIG_TEST_MODE", "BEDROCK_RELAY_CONFIG_DIR", "BEDROCK_RELAY_CONFIG_SYSTEMCTL", "BEDROCK_RELAY_PUBLIC_STATUS", "BEDROCK_RELAY_TEST_LOG", "BEDROCK_RELAY_ACTION_CALLS"):
+            if name in os.environ:
+                helper_environment[name] = os.environ[name]
     if request["action"] == "vm-console-open":
         completed_code, session = execute_console_session(request, details, settings, helper_environment)
         result_entry["status"] = "succeeded" if completed_code == 0 else "failed"
@@ -755,7 +776,7 @@ def execute(raw, settings):
         if completed_code != 0:
             raise RequestError("action-failed", "guarded VM administration helper rejected the action")
         return response(request["request_id"], "succeeded", replayed=False)
-    if request["action"] in {"remote-device", "remote-pairing-approve"}:
+    if request["action"] in {"remote-device", "remote-pairing-approve", "remote-relay"}:
         completed_code = execute_remote_device(request, details, settings, helper_environment)
         result_entry["status"] = "succeeded" if completed_code == 0 else "failed"
         save_state(settings["state"], state)

@@ -90,6 +90,7 @@ const feeds: Record<string, object> = {
       channel: "stable",
       automatic_install: false,
     },
+    remote_relay: { configured: false },
     telemetry_enabled: false,
   },
   "/api/v1/users": { schema: 1, users: [], groups: [] },
@@ -242,6 +243,30 @@ test("an authenticated settings mutation sends guarded input and refreshes confi
     value: false,
     beta_risk_acknowledged: false,
   });
+});
+
+test("relay setup sends guarded settings input without returning the access token", async ({ page }) => {
+  await connect(page);
+  let mutation: { headers: Record<string, string>; body: Record<string, unknown> } | null = null;
+  await page.route("**/api/v1/settings", async (route) => {
+    if (route.request().method() === "PUT") {
+      mutation = { headers: route.request().headers(), body: route.request().postDataJSON() };
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ schema: 1, request_id: route.request().headers()["idempotency-key"], status: "succeeded", replayed: false }) });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: "application/json", headers: { ETag: '"sha256-acceptance-settings"' }, body: JSON.stringify(feeds["/api/v1/settings"]) });
+  });
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByLabel("Relay host").fill("relay.example.test");
+  await page.getByLabel("Server route ID").fill("12345678-1234-4123-8123-123456789abc");
+  await page.getByLabel("Relay access token").fill("A".repeat(32));
+  await page.getByLabel("Remote connection confirmation").fill("CONFIGURE REMOTE RELAY relay.example.test:443 ROUTE 12345678-1234-4123-8123-123456789abc");
+  await page.getByRole("button", { name: "Configure", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Remote connection configured");
+  expect(mutation?.headers.authorization).toBe("Bearer acceptance-token");
+  expect(mutation?.headers["if-match"]).toBe('"sha256-acceptance-settings"');
+  expect(mutation?.body).toEqual({ schema: 1, operation: "configure", host: "relay.example.test", port: 443, server_route: "12345678-1234-4123-8123-123456789abc", token: "A".repeat(32), confirmation: "CONFIGURE REMOTE RELAY relay.example.test:443 ROUTE 12345678-1234-4123-8123-123456789abc" });
+  await expect(page.getByLabel("Relay access token")).toHaveValue("");
 });
 
 test("VM console authorization is exact, state-bound, and never places its token in an HTTP URL", async ({

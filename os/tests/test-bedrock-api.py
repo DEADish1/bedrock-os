@@ -138,6 +138,7 @@ def main() -> None:
         uploads.mkdir()
         update_policy = work / "update-policy.json"
         default_update_policy = work / "default-update-policy.json"
+        relay_status = work / "relay.json"
         nas = work / "nas.json"
         action_socket = work / "action.sock"
         action_results = work / "action-results.json"
@@ -202,6 +203,7 @@ client.close(); server.close()
         images.write_text(json.dumps({"schema": 1, "images": [{"name": "installer", "type": "iso", "sha256": "c" * 64, "size_bytes": 4096, "converted": False}]}), encoding="utf-8")
         update_policy.write_text(json.dumps({"schema": 2, "automatic_checks": True, "setup_choice_recorded": True, "channel": "stable"}), encoding="utf-8")
         default_update_policy.write_text(json.dumps({"schema": 2, "automatic_checks": False, "setup_choice_recorded": False, "channel": "stable"}), encoding="utf-8")
+        relay_status.write_text(json.dumps({"schema": 1, "configured": False}), encoding="utf-8")
         nas.write_text(json.dumps({"schema": 1, "users": [{"name": "alice", "credential_generation": 1, "created_unix": 10, "credential_rotated_unix": 13, "credential_candidate": True}], "groups": [{"name": "family", "members": ["alice"], "created_unix": 11}], "datasets": [{"pool": "vault", "name": "private", "path": "/private/path", "acl_subjects": ["family"]}], "shares": [{"name": "private-share"}], "snapshots": [{"name": "private-snapshot"}]}), encoding="utf-8")
         environment = os.environ | {
             "BEDROCK_API_SOCKET": str(socket_path),
@@ -218,6 +220,7 @@ client.close(); server.close()
             "BEDROCK_API_UPLOADS": str(uploads),
             "BEDROCK_API_UPDATE_POLICY": str(update_policy),
             "BEDROCK_API_DEFAULT_UPDATE_POLICY": str(default_update_policy),
+            "BEDROCK_API_RELAY_STATUS": str(relay_status),
             "BEDROCK_API_NAS": str(nas),
             "BEDROCK_API_ACTION_BROKER": str(action_socket),
         }
@@ -253,6 +256,7 @@ client.close(); server.close()
             "BEDROCK_ACTION_BROKER_CONSOLE_PROXY_HELPER": str(console_proxy_helper),
             "BEDROCK_ACTION_BROKER_REMOTE_DEVICE_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_REMOTE_PAIRING_APPROVAL_HELPER": str(admin_action_helper),
+            "BEDROCK_ACTION_BROKER_REMOTE_RELAY_HELPER": str(admin_action_helper),
             "BEDROCK_ACTION_BROKER_REMOTE_REQUESTS": str(vm_action_requests),
             "BEDROCK_ACTION_BROKER_BACKUP_REQUESTS": str(vm_action_requests),
             "BEDROCK_ACTION_BROKER_STORAGE_REQUESTS": str(vm_action_requests),
@@ -611,7 +615,7 @@ client.close(); server.close()
             assert admin_requests[25]["operation"] == "expand" and admin_requests[25]["disk_ids"] == [first, second]
             assert admin_requests[26]["operation"] == "replace" and admin_requests[26]["old_disk_id"] == first
             settings_status, settings_body, settings_headers = request(socket_path, "GET", "/api/v1/settings", include_headers=True)
-            assert settings_status == 200 and settings_body == {"schema": 1, "updates": {"automatic_checks": True, "setup_choice_recorded": True, "channel": "stable", "automatic_install": False}, "telemetry_enabled": False}
+            assert settings_status == 200 and settings_body == {"schema": 1, "updates": {"automatic_checks": True, "setup_choice_recorded": True, "channel": "stable", "automatic_install": False}, "remote_relay": {"configured": False}, "telemetry_enabled": False}
             assert re.fullmatch(r'"sha256-[0-9a-f]{64}"', settings_headers["ETag"])
             update_id = str(uuid.uuid4())
             update_body = {"schema": 1, "setting": "channel", "value": "beta", "beta_risk_acknowledged": True}
@@ -626,6 +630,17 @@ client.close(); server.close()
             assert request(socket_path, "PUT", "/api/v1/settings", None, update_body, update_headers)[0] == 401
             assert request(socket_path, "PUT", "/api/v1/settings", body=update_body, extra_headers={"Content-Type": "application/json", "If-Match": settings_headers["ETag"]})[0] == 400
             assert request(socket_path, "PUT", "/api/v1/settings", body=update_body | {"command": "id"}, extra_headers={"Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": settings_headers["ETag"]})[0] == 400
+            relay_id = str(uuid.uuid4())
+            relay_body = {"schema": 1, "operation": "configure", "host": "relay.example.test", "port": 443, "server_route": "12345678-1234-4123-8123-123456789abc", "token": "A" * 32, "confirmation": "CONFIGURE REMOTE RELAY relay.example.test:443 ROUTE 12345678-1234-4123-8123-123456789abc"}
+            relay_headers = {"Content-Type": "application/json", "Idempotency-Key": relay_id, "If-Match": settings_headers["ETag"]}
+            assert request(socket_path, "PUT", "/api/v1/settings", body=relay_body, extra_headers=relay_headers) == (200, {"schema": 1, "request_id": relay_id, "status": "succeeded", "replayed": False})
+            assert request(socket_path, "PUT", "/api/v1/settings", body=relay_body, extra_headers=relay_headers)[1]["replayed"] is True
+            admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
+            assert admin_requests[-1] == relay_body
+            relay_status.write_text(json.dumps({"schema": 1, "configured": True}), encoding="utf-8")
+            refreshed_status, refreshed_body, refreshed_headers = request(socket_path, "GET", "/api/v1/settings", include_headers=True)
+            assert refreshed_status == 200 and refreshed_body["remote_relay"] == {"configured": True}
+            assert refreshed_headers["ETag"] != settings_headers["ETag"]
             users_status, users_body = request(socket_path, "GET", "/api/v1/users")
             assert users_status == 200 and users_body["users"][0]["credential_generation"] == 1 and users_body["users"][0]["credential_candidate"] is True and users_body["groups"][0]["member_count"] == 1
             assert not any(secret in json.dumps(users_body) for secret in ["/private/path", "private-share", "private-snapshot", "members", "datasets", "shares", "snapshots"])

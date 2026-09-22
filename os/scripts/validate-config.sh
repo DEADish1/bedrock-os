@@ -205,6 +205,7 @@ grep -q '^NoNewPrivileges=true$' "$OS_DIR/config/includes.chroot/usr/lib/systemd
 grep -q '^CapabilityBoundingSet=$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-action-broker.service"
 grep -q '^RestrictAddressFamilies=AF_UNIX AF_INET$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-action-broker.service"
 grep -q '^ProtectSystem=strict$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-action-broker.service"
+grep -q '^ReadWritePaths=/var/lib/bedrock/api /var/lib/bedrock/settings /var/lib/bedrock/remote -/var/lib/bedrock/virtualization /run/bedrock-action-broker -/run/libvirt$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-action-broker.service"
 grep -q '^RestrictAddressFamilies=AF_UNIX$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-pairing-gateway.service"
 grep -q '^CapabilityBoundingSet=$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-pairing-gateway.service"
 grep -q '^ReadWritePaths=/var/lib/bedrock/remote /run/bedrock-pairing$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-pairing-gateway.service"

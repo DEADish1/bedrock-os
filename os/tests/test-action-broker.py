@@ -101,6 +101,15 @@ def pairing_approval_request(request_id):
     return {"schema": 1, "request_id": request_id, "action": "remote-pairing-approve", "id": pairing_id,
             "confirmation": f"APPROVE REMOTE DEVICE {pairing_id}"}
 
+def relay_request(request_id, operation="configure"):
+    route = "72345678-1234-4123-8123-123456789abc"
+    if operation == "disable":
+        return {"schema": 1, "request_id": request_id, "action": "remote-relay", "operation": "disable",
+                "confirmation": "DISABLE REMOTE RELAY"}
+    return {"schema": 1, "request_id": request_id, "action": "remote-relay", "operation": "configure",
+            "host": "relay.bedrock.test", "port": 443, "server_route": route, "token": "r" * 64,
+            "confirmation": f"CONFIGURE REMOTE RELAY relay.bedrock.test:443 ROUTE {route}"}
+
 
 def image_conversion_request(request_id):
     source_hash = "c" * 64
@@ -183,6 +192,10 @@ def main():
         admin_helper = work / "admin-helper"
         admin_helper.write_text("#!/bin/sh\ncat \"$1\" >> \"$BEDROCK_VM_ADMIN_CALLS\"\n", encoding="utf-8")
         admin_helper.chmod(0o755)
+        relay_calls = work / "relay-calls"
+        relay_helper = work / "relay-helper"
+        relay_helper.write_text("#!/bin/sh\njq -S 'del(.token)' \"$1\" >> \"$BEDROCK_RELAY_ACTION_CALLS\"\n", encoding="utf-8")
+        relay_helper.chmod(0o755)
         console_helper = work / "console-helper"
         console_helper.write_text("#!/bin/sh\nnow=$(date +%s)\nprintf '{\"schema\":1,\"status\":\"authorized\",\"vm\":\"test-vm\",\"token\":\"%064d\",\"expires_at\":%s,\"one_time\":true,\"transport\":\"vnc-websocket\",\"websocket_path\":\"/api/v1/vms/test-vm/console\"}\\n' 1 $((now+60))\n", encoding="utf-8")
         console_helper.chmod(0o755)
@@ -220,6 +233,8 @@ def main():
             "BEDROCK_ACTION_BROKER_APP_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_REMOTE_DEVICE_HELPER": str(admin_helper),
             "BEDROCK_ACTION_BROKER_REMOTE_PAIRING_APPROVAL_HELPER": str(admin_helper),
+            "BEDROCK_ACTION_BROKER_REMOTE_RELAY_HELPER": str(relay_helper),
+            "BEDROCK_RELAY_ACTION_CALLS": str(relay_calls),
             "BEDROCK_ACTION_BROKER_REMOTE_REQUESTS": str(vm_requests),
             "BEDROCK_ACTION_BROKER_BACKUP_REQUESTS": str(vm_requests),
             "BEDROCK_ACTION_BROKER_STORAGE_REQUESTS": str(vm_requests),
@@ -337,6 +352,15 @@ def main():
             assert exchange(socket_path, pairing_approval_request(approval_id))["status"] == "succeeded"
             assert exchange(socket_path, pairing_approval_request(approval_id))["replayed"] is True
             assert exchange(socket_path, pairing_approval_request(str(uuid.uuid4())) | {"confirmation": "APPROVE REMOTE DEVICE wrong"})["error"]["code"] == "invalid-remote-pairing-approval"
+            relay_id = str(uuid.uuid4())
+            assert exchange(socket_path, relay_request(relay_id))["status"] == "succeeded"
+            assert exchange(socket_path, relay_request(relay_id))["replayed"] is True
+            disable_relay_id = str(uuid.uuid4())
+            assert exchange(socket_path, relay_request(disable_relay_id, "disable"))["status"] == "succeeded"
+            assert exchange(socket_path, relay_request(str(uuid.uuid4())) | {"confirmation": "wrong"})["error"]["code"] == "invalid-remote-relay"
+            relay_actions = [json.loads(line) for line in relay_calls.read_text(encoding="utf-8").splitlines()]
+            assert relay_actions[0]["operation"] == "configure" and "token" not in relay_actions[0]
+            assert relay_actions[1] == {"schema": 1, "operation": "disable", "confirmation": "DISABLE REMOTE RELAY"}
             conversion_id = str(uuid.uuid4())
             assert exchange(socket_path, image_conversion_request(conversion_id))["status"] == "succeeded"
             assert exchange(socket_path, image_conversion_request(conversion_id))["replayed"] is True
@@ -423,7 +447,7 @@ def main():
             assert not any(vm_requests.iterdir())
 
             ledger = json.loads(state.read_text(encoding="utf-8"))
-            assert ledger["schema"] == 1 and len(ledger["results"]) == 35
+            assert ledger["schema"] == 1 and len(ledger["results"]) == 37
             serialized = state.read_text(encoding="utf-8")
             assert "I_ACCEPT" not in serialized and "automatic_checks" not in serialized
             assert state.stat().st_mode & 0o777 == 0o600
