@@ -758,7 +758,11 @@ client.close(); server.close()
                 if process.poll() is not None:
                     raise AssertionError("API exited during upload recovery")
                 if socket_path.exists() and not any("stale" in item.name for item in uploads.iterdir()):
-                    break
+                    try:
+                        if request(socket_path, "GET", "/api/v1/health")[0] == 401:
+                            break
+                    except OSError:
+                        pass
                 time.sleep(0.05)
             else:
                 raise AssertionError("API did not restart after upload recovery")
