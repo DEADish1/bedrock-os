@@ -7,6 +7,22 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
 run() { now=$1; shift; BEDROCK_API_TASK_TEST_MODE=1 BEDROCK_API_TASK_STATE_DIR="$work" BEDROCK_API_TASK_NOW="$now" python3 "$writer" "$@"; }
 
+for phase in journal audit tasks; do
+    recovery="$work/recovery-$phase"
+    BEDROCK_API_TASK_TEST_MODE=1 BEDROCK_API_TASK_STATE_DIR="$recovery" BEDROCK_API_TASK_NOW=600 python3 "$writer" crash-test test queued 600 0 1 steps
+    code=0
+    BEDROCK_API_TASK_TEST_MODE=1 BEDROCK_API_TASK_STATE_DIR="$recovery" BEDROCK_API_TASK_NOW=601 BEDROCK_API_TASK_CRASH_AFTER="$phase" python3 "$writer" crash-test test succeeded 600 1 1 steps || code=$?
+    [ "$code" -eq 86 ]
+    [ -f "$recovery/task-transaction.json" ]
+    BEDROCK_API_TASK_TEST_MODE=1 BEDROCK_API_TASK_STATE_DIR="$recovery" BEDROCK_API_TASK_NOW=602 python3 "$writer" next-task test queued 602 0 1 steps
+    jq -e '.tasks|any(.[]; .id=="crash-test" and .state=="succeeded")' "$recovery/tasks.json" >/dev/null
+    [ ! -e "$recovery/task-transaction.json" ]
+    [ "$(wc -l < "$recovery/audit.jsonl")" -eq 1 ]
+    jq -e '.id=="crash-test-601" and .outcome=="succeeded"' "$recovery/audit.jsonl" >/dev/null
+    BEDROCK_API_TASK_TEST_MODE=1 BEDROCK_API_TASK_STATE_DIR="$recovery" BEDROCK_API_TASK_NOW=603 python3 "$writer" crash-test test succeeded 600 1 1 steps
+    [ "$(wc -l < "$recovery/audit.jsonl")" -eq 1 ]
+done
+
 run 100 update-4 update-download queued 100 0 100 bytes
 run 101 update-4 update-download running 100 25 100 bytes
 before=$(sha256sum "$work/tasks.json")

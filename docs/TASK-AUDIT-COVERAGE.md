@@ -28,7 +28,7 @@ The bounded task writer now retains queued/running tasks ahead of older terminal
 
 ## Closure criteria for 0.6.3
 
-2026-09-26 review: the task writer now rejects dangling state/audit symlinks and indirect lock files, and synchronizes the parent directory after replacing task state. Tests verify rejected links do not create targets or alter a lock target's permissions. Separate task-state and audit writes still have a crash window: a terminal state can be committed before its audit append. A recoverable transaction is required before claiming crash-consistent terminal auditing under new checklist item 0.6.2.
+2026-09-26 review: the task writer rejects dangling state/audit symlinks and indirect lock files, and synchronizes the parent directory after replacing task state. Tests verify rejected links do not create targets or alter a lock target's permissions. A root-only durable transaction now saves the intended task snapshot and bounded audit content before publishing either, then replays under the task lock on the next writer invocation. Atomic audit replacement avoids partial appended lines. Tests terminate after journal, audit and task publication, then verify recovery and duplicate-free replay; Linux validation of the transaction change is pending. Startup recovery integration, disk-full behavior, audit retention, and remaining staging cases still gate checklist item 0.6.2.
 
 - [ ] Add bounded task/audit coverage to direct image upload and discard operations, including failure and interrupted-stream outcomes.
 - [ ] Test every family above against the real broker and Unix API, not just source presence or a mocked browser backend.

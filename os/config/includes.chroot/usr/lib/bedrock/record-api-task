@@ -31,6 +31,12 @@ def valid_task(item: object) -> bool:
         progress["total"] > 0 and progress["unit"] in UNITS
     )
 
+def valid_state(value: object) -> bool:
+    return bool(isinstance(value, dict) and set(value) == {"schema", "generated_unix", "tasks"}
+                and value["schema"] == 1 and type(value["generated_unix"]) is int and value["generated_unix"] >= 0
+                and isinstance(value["tasks"], list) and len(value["tasks"]) <= 256
+                and all(valid_task(item) for item in value["tasks"]))
+
 def load(path: pathlib.Path) -> dict:
     try:
         info = path.lstat()
@@ -42,16 +48,19 @@ def load(path: pathlib.Path) -> dict:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
         fail("task state is invalid")
-    if not isinstance(value, dict) or set(value) != {"schema", "generated_unix", "tasks"} or value["schema"] != 1 or type(value["generated_unix"]) is not int or value["generated_unix"] < 0 or not isinstance(value["tasks"], list) or len(value["tasks"]) > 256 or not all(valid_task(item) for item in value["tasks"]):
+    if not valid_state(value):
         fail("task state is invalid")
     return value
 
-def atomic(path: pathlib.Path, value: object, mode: int, group: int | None) -> None:
+def atomic(path: pathlib.Path, value: object, mode: int, group: int | None, raw: bool = False) -> None:
     handle, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         with os.fdopen(handle, "w", encoding="utf-8") as output:
-            json.dump(value, output, sort_keys=True, separators=(",", ":"))
-            output.write("\n")
+            if raw:
+                output.write(value)
+            else:
+                json.dump(value, output, sort_keys=True, separators=(",", ":"))
+                output.write("\n")
             output.flush()
             os.fsync(output.fileno())
         os.chmod(temporary, mode)
@@ -66,6 +75,56 @@ def atomic(path: pathlib.Path, value: object, mode: int, group: int | None) -> N
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
+
+def read_bounded(path: pathlib.Path, limit: int) -> str:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    with os.fdopen(descriptor, "r", encoding="utf-8") as source:
+        info = os.fstat(source.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+            fail("transaction state is unsafe")
+        value = source.read(limit + 1)
+        if len(value.encode("utf-8")) > limit:
+            fail("transaction state is oversized")
+        return value
+
+def validate_audit(raw: str) -> None:
+    if not isinstance(raw, str) or len(raw.encode("utf-8")) > 1048576:
+        fail("audit state is oversized")
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        event = json.loads(line)
+        if not isinstance(event, dict) or set(event) != {"id", "category", "action", "outcome", "occurred_unix"}:
+            fail("audit state is invalid")
+        if any(not isinstance(event[key], str) or not event[key] or len(event[key]) > limit
+               for key, limit in (("id", 128), ("category", 64), ("action", 64))):
+            fail("audit fields are invalid")
+        if event["outcome"] not in {"succeeded", "failed", "denied"} or type(event["occurred_unix"]) is not int or event["occurred_unix"] < 0:
+            fail("audit outcome is invalid")
+
+def checkpoint(name: str, test_mode: bool) -> None:
+    if test_mode and os.environ.get("BEDROCK_API_TASK_CRASH_AFTER") == name:
+        os._exit(86)
+
+def recover_transaction(directory: pathlib.Path, group: int | None, test_mode: bool) -> None:
+    journal = directory / "task-transaction.json"
+    try:
+        transaction = json.loads(read_bounded(journal, 4194304))
+    except FileNotFoundError:
+        return
+    if not isinstance(transaction, dict) or set(transaction) != {"schema", "tasks", "audit"} or transaction["schema"] != 1 or not valid_state(transaction["tasks"]):
+        fail("task transaction is invalid")
+    validate_audit(transaction["audit"])
+    atomic(directory / "audit.jsonl", transaction["audit"], 0o640, group, raw=True)
+    checkpoint("audit", test_mode)
+    atomic(directory / "tasks.json", transaction["tasks"], 0o640, group)
+    checkpoint("tasks", test_mode)
+    journal.unlink()
+    descriptor = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 def main() -> None:
     if len(sys.argv) != 8:
@@ -95,6 +154,7 @@ def main() -> None:
             fail("task lock is unsafe")
         os.fchmod(lock.fileno(), 0o600)
         fcntl.flock(lock, fcntl.LOCK_EX)
+        recover_transaction(directory, group, test_mode)
         value = load(tasks_path)
         previous = next((item for item in value["tasks"] if isinstance(item, dict) and item.get("id") == task_id), None)
         if previous:
@@ -121,22 +181,24 @@ def main() -> None:
         remaining = sorted(active + (terminals[-terminal_capacity:] if terminal_capacity else []),
                            key=lambda item: item["updated_unix"])
         terminal_transition = state in {"succeeded", "failed", "cancelled"} and (not previous or previous.get("state") != state)
-        if terminal_transition and (audit_path.exists() or audit_path.is_symlink()):
-            audit_info = audit_path.lstat()
-            if not stat.S_ISREG(audit_info.st_mode) or audit_info.st_size > 1048576:
-                fail("audit state is unsafe")
-        atomic(tasks_path, {"schema": 1, "generated_unix": now, "tasks": remaining}, 0o640, group)
+        next_state = {"schema": 1, "generated_unix": now, "tasks": remaining}
         if terminal_transition:
+            try:
+                audit = read_bounded(audit_path, 1048576)
+            except FileNotFoundError:
+                if audit_path.is_symlink():
+                    fail("audit state is indirect")
+                audit = ""
+            validate_audit(audit)
             event = {"id": f"{task_id}-{now}", "category": "task", "action": kind,
                      "outcome": "succeeded" if state == "succeeded" else "failed", "occurred_unix": now}
-            with audit_path.open("a", encoding="utf-8") as audit:
-                json.dump(event, audit, sort_keys=True, separators=(",", ":"))
-                audit.write("\n")
-                audit.flush()
-                os.fsync(audit.fileno())
-            os.chmod(audit_path, 0o640)
-            if group is not None:
-                os.chown(audit_path, 0, group)
+            audit = audit.rstrip("\n") + ("\n" if audit else "") + json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n"
+            validate_audit(audit)
+            atomic(directory / "task-transaction.json", {"schema": 1, "tasks": next_state, "audit": audit}, 0o600, None)
+            checkpoint("journal", test_mode)
+            recover_transaction(directory, group, test_mode)
+        else:
+            atomic(tasks_path, next_state, 0o640, group)
 
 if __name__ == "__main__":
     main()
