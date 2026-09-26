@@ -93,6 +93,10 @@ def main() -> None:
                 fail("task update regresses or changes identity")
             if previous.get("state") in {"succeeded", "failed", "cancelled"} and state != previous["state"]:
                 fail("terminal task cannot change state")
+            if previous["progress"]["total"] != total or previous["progress"]["unit"] != unit:
+                fail("task progress definition cannot change")
+            if previous["state"] == "running" and state == "queued":
+                fail("running task cannot return to queued")
         task = {"id": task_id, "kind": kind, "state": state, "created_unix": created, "updated_unix": now,
                 "progress": {"current": current, "total": total, "unit": unit}}
         remaining = [item for item in value["tasks"] if not (isinstance(item, dict) and item.get("id") == task_id)]

@@ -9,6 +9,11 @@ run() { now=$1; shift; BEDROCK_API_TASK_TEST_MODE=1 BEDROCK_API_TASK_STATE_DIR="
 
 run 100 update-4 update-download queued 100 0 100 bytes
 run 101 update-4 update-download running 100 25 100 bytes
+before=$(sha256sum "$work/tasks.json")
+if run 101 update-4 update-download running 100 25 200 bytes >/dev/null 2>&1; then echo "task total changed" >&2; exit 1; fi
+if run 101 update-4 update-download running 100 25 100 items >/dev/null 2>&1; then echo "task unit changed" >&2; exit 1; fi
+if run 101 update-4 update-download queued 100 25 100 bytes >/dev/null 2>&1; then echo "task state regressed" >&2; exit 1; fi
+[ "$before" = "$(sha256sum "$work/tasks.json")" ]
 run 102 update-4 update-download succeeded 100 100 100 bytes
 jq -e '.schema==1 and .generated_unix==102 and .tasks==[{id:"update-4",kind:"update-download",state:"succeeded",created_unix:100,updated_unix:102,progress:{current:100,total:100,unit:"bytes"}}]' "$work/tasks.json" >/dev/null
 jq -e '.category=="task" and .action=="update-download" and .outcome=="succeeded" and .occurred_unix==102' "$work/audit.jsonl" >/dev/null
