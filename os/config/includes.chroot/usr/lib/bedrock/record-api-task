@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+import errno
 import fcntl
 import grp
 import json
@@ -56,6 +57,8 @@ def atomic(path: pathlib.Path, value: object, mode: int, group: int | None, raw:
     handle, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
         with os.fdopen(handle, "w", encoding="utf-8") as output:
+            if os.environ.get("BEDROCK_API_TASK_TEST_MODE") == "1" and os.environ.get("BEDROCK_API_TASK_FAIL_WRITE") == path.name:
+                raise OSError(errno.ENOSPC, "injected task-state write failure")
             if raw:
                 output.write(value)
             else:

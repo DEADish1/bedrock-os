@@ -27,6 +27,22 @@ for phase in journal audit tasks; do
     [ "$(wc -l < "$recovery/audit.jsonl")" -eq 1 ]
 done
 
+for target in task-transaction.json audit.jsonl tasks.json; do
+    recovery="$work/full-$target"
+    BEDROCK_API_TASK_TEST_MODE=1 BEDROCK_API_TASK_STATE_DIR="$recovery" BEDROCK_API_TASK_NOW=600 python3 "$writer" full-test test queued 600 0 1 steps
+    before=$(sha256sum "$recovery/tasks.json")
+    if BEDROCK_API_TASK_TEST_MODE=1 BEDROCK_API_TASK_STATE_DIR="$recovery" BEDROCK_API_TASK_NOW=601 BEDROCK_API_TASK_FAIL_WRITE="$target" python3 "$writer" full-test test succeeded 600 1 1 steps >/dev/null 2>&1; then
+        echo "injected disk-full failure was ignored" >&2; exit 1
+    fi
+    [ "$before" = "$(sha256sum "$recovery/tasks.json")" ]
+    BEDROCK_API_TASK_TEST_MODE=1 BEDROCK_API_TASK_STATE_DIR="$recovery" python3 "$writer" --recover
+    BEDROCK_API_TASK_TEST_MODE=1 BEDROCK_API_TASK_STATE_DIR="$recovery" BEDROCK_API_TASK_NOW=602 python3 "$writer" full-test test succeeded 600 1 1 steps
+    jq -e '.tasks|length==1 and .[0].state=="succeeded"' "$recovery/tasks.json" >/dev/null
+    [ "$(wc -l < "$recovery/audit.jsonl")" -eq 1 ]
+    [ ! -e "$recovery/task-transaction.json" ]
+    [ -z "$(find "$recovery" -maxdepth 1 -name '.*' -type f -print)" ]
+done
+
 run 100 update-4 update-download queued 100 0 100 bytes
 run 101 update-4 update-download running 100 25 100 bytes
 before=$(sha256sum "$work/tasks.json")
