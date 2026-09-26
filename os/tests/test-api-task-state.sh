@@ -40,6 +40,20 @@ jq -e '.tasks|length==256 and all(.[]; .state=="queued" or .state=="running") an
 printf '{"schema":1,"generated_unix":1,"tasks":[{"id":"bad"}]}\n' > "$work/tasks.json"
 if run 104 update-6 update-download queued 104 0 100 bytes >/dev/null 2>&1; then echo "malformed prior state accepted" >&2; exit 1; fi
 rm "$work/tasks.json"
+ln -s "$work/missing-task-target" "$work/tasks.json"
+if run 504 unsafe test queued 504 0 1 steps >/dev/null 2>&1; then echo "dangling task symlink accepted" >&2; exit 1; fi
+[ -L "$work/tasks.json" ] && [ ! -e "$work/missing-task-target" ]
+rm "$work/tasks.json" "$work/tasks.lock"
+printf 'protected\n' > "$work/lock-target"
+chmod 644 "$work/lock-target"
+ln -s "$work/lock-target" "$work/tasks.lock"
+if run 504 unsafe test queued 504 0 1 steps >/dev/null 2>&1; then echo "indirect lock accepted" >&2; exit 1; fi
+[ "$(stat -c %a "$work/lock-target")" = 644 ]
+[ "$(cat "$work/lock-target")" = protected ]
+rm "$work/tasks.lock" "$work/audit.jsonl"
+ln -s "$work/missing-audit-target" "$work/audit.jsonl"
+if run 504 unsafe test succeeded 504 1 1 steps >/dev/null 2>&1; then echo "dangling audit symlink accepted" >&2; exit 1; fi
+[ ! -e "$work/tasks.json" ] && [ ! -e "$work/missing-audit-target" ]
 ln -s "$work/elsewhere" "$work/unsafe"
 if BEDROCK_API_TASK_TEST_MODE=1 BEDROCK_API_TASK_STATE_DIR="$work/unsafe" python3 "$writer" x test queued 1 0 1 steps >/dev/null 2>&1; then echo "indirect state directory accepted" >&2; exit 1; fi
 

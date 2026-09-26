@@ -32,9 +32,10 @@ def valid_task(item: object) -> bool:
     )
 
 def load(path: pathlib.Path) -> dict:
-    if not path.exists():
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
         return {"schema": 1, "generated_unix": 0, "tasks": []}
-    info = path.lstat()
     if not stat.S_ISREG(info.st_mode) or info.st_size > 1048576:
         fail("task state is unsafe")
     try:
@@ -57,6 +58,11 @@ def atomic(path: pathlib.Path, value: object, mode: int, group: int | None) -> N
         if group is not None:
             os.chown(temporary, 0, group)
         os.replace(temporary, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
@@ -83,8 +89,11 @@ def main() -> None:
         fail("API state directory is unsafe")
     tasks_path, audit_path, lock_path = directory / "tasks.json", directory / "audit.jsonl", directory / "tasks.lock"
     group = None if test_mode else grp.getgrnam("bedrock-api").gr_gid
-    with lock_path.open("a+") as lock:
-        os.chmod(lock_path, 0o600)
+    lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(lock_fd, "a+") as lock:
+        if not stat.S_ISREG(os.fstat(lock.fileno()).st_mode):
+            fail("task lock is unsafe")
+        os.fchmod(lock.fileno(), 0o600)
         fcntl.flock(lock, fcntl.LOCK_EX)
         value = load(tasks_path)
         previous = next((item for item in value["tasks"] if isinstance(item, dict) and item.get("id") == task_id), None)
@@ -112,7 +121,7 @@ def main() -> None:
         remaining = sorted(active + (terminals[-terminal_capacity:] if terminal_capacity else []),
                            key=lambda item: item["updated_unix"])
         terminal_transition = state in {"succeeded", "failed", "cancelled"} and (not previous or previous.get("state") != state)
-        if terminal_transition and audit_path.exists():
+        if terminal_transition and (audit_path.exists() or audit_path.is_symlink()):
             audit_info = audit_path.lstat()
             if not stat.S_ISREG(audit_info.st_mode) or audit_info.st_size > 1048576:
                 fail("audit state is unsafe")
