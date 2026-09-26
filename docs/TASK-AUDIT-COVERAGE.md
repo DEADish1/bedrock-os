@@ -24,6 +24,8 @@ The pairing request/redeem manager is outside the administrator v1 mutation inve
 
 The API holds an exclusive instance lock before replacing its Unix socket. On startup, it marks queued/running image-upload tasks failed through the broker, then removes stale upload temporary files, orphaned data without metadata, and upload locks. A test seeds a queued task plus orphaned files, restarts the API, and checks terminal audit and cleanup while preserving a complete candidate with metadata. Linux validation and real service-UID acceptance remain pending. Discard recovery, broker downtime during reconciliation, and candidate metadata consistency after a crash still require review.
 
+The bounded task writer now retains queued/running tasks ahead of older terminal records, so unrelated completed activity cannot evict the only state needed to reconcile an in-flight operation. It rejects a 257th active task rather than silently losing one. Linux validation of this retention change remains pending.
+
 ## Closure criteria for 0.6.3
 
 - [ ] Add bounded task/audit coverage to direct image upload and discard operations, including failure and interrupted-stream outcomes.

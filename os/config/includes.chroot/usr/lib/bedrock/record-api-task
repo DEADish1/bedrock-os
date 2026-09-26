@@ -97,7 +97,16 @@ def main() -> None:
                 "progress": {"current": current, "total": total, "unit": unit}}
         remaining = [item for item in value["tasks"] if not (isinstance(item, dict) and item.get("id") == task_id)]
         remaining.append(task)
-        remaining = sorted(remaining, key=lambda item: item.get("updated_unix", 0))[-256:]
+        active = [item for item in remaining if item["state"] in {"queued", "running"}]
+        if len(active) > 256:
+            fail("too many active tasks")
+        terminal_capacity = 256 - len(active)
+        if terminal_capacity == 0 and task["state"] in {"succeeded", "failed", "cancelled"} and previous is None:
+            fail("task state is full of active tasks")
+        terminals = sorted((item for item in remaining if item["state"] not in {"queued", "running"}),
+                           key=lambda item: item["updated_unix"])
+        remaining = sorted(active + (terminals[-terminal_capacity:] if terminal_capacity else []),
+                           key=lambda item: item["updated_unix"])
         terminal_transition = state in {"succeeded", "failed", "cancelled"} and (not previous or previous.get("state") != state)
         if terminal_transition and audit_path.exists():
             audit_info = audit_path.lstat()

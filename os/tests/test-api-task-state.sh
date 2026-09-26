@@ -16,6 +16,22 @@ jq -e '.category=="task" and .action=="update-download" and .outcome=="succeeded
 if run 103 update-4 update-download running 100 100 100 bytes >/dev/null 2>&1; then echo "terminal task changed state" >&2; exit 1; fi
 if run 103 update-5 update-download running 100 101 100 bytes >/dev/null 2>&1; then echo "task exceeded total" >&2; exit 1; fi
 if run 99 update-4 update-download succeeded 100 100 100 bytes >/dev/null 2>&1; then echo "task time regressed" >&2; exit 1; fi
+run 200 long-upload image-upload running 200 1 100 bytes
+i=1
+while [ "$i" -le 255 ]; do
+    run "$((200+i))" "done-$i" test succeeded "$((200+i))" 1 1 steps
+    i=$((i+1))
+done
+run 500 newest test succeeded 500 1 1 steps
+jq -e '.tasks|length==256 and any(.[]; .id=="long-upload" and .state=="running") and any(.[]; .id=="newest") and all(.[]; .id!="update-4")' "$work/tasks.json" >/dev/null
+jq -n '{schema:1,generated_unix:500,tasks:[range(0;256)|{id:("active-"+tostring),kind:"test",state:"running",created_unix:500,updated_unix:500,progress:{current:0,total:1,unit:"steps"}}]}' > "$work/tasks.json"
+before=$(sha256sum "$work/tasks.json")
+if run 501 overflow test queued 501 0 1 steps >/dev/null 2>&1; then echo "active task capacity exceeded" >&2; exit 1; fi
+[ "$before" = "$(sha256sum "$work/tasks.json")" ]
+run 502 active-0 test succeeded 500 1 1 steps
+jq -e '.tasks|length==256 and any(.[]; .id=="active-0" and .state=="succeeded")' "$work/tasks.json" >/dev/null
+run 503 admitted test queued 503 0 1 steps
+jq -e '.tasks|length==256 and all(.[]; .state=="queued" or .state=="running") and any(.[]; .id=="admitted")' "$work/tasks.json" >/dev/null
 printf '{"schema":1,"generated_unix":1,"tasks":[{"id":"bad"}]}\n' > "$work/tasks.json"
 if run 104 update-6 update-download queued 104 0 100 bytes >/dev/null 2>&1; then echo "malformed prior state accepted" >&2; exit 1; fi
 rm "$work/tasks.json"

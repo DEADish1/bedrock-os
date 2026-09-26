@@ -1,5 +1,7 @@
 # Bedrock OS remaining-work checklist
 
+Superseded as the execution order on 2026-09-26 by [Goal checklist through 1.0](GOAL-CHECKLIST-1.0.md). Retained for requirement traceability; the new checklist preserves the complete release scope.
+
 This is the fresh, actionable path from the current branch to a signed 1.0 release. Version numbers are target milestones, not claims that a release has shipped. A box closes only when the named acceptance evidence exists on the release-candidate build. `PROJECT-ROADMAP.md` retains the product requirements; this file breaks its open gates into smaller jobs. The relay Settings change is committed and pushed; candidate-image acceptance remains open.
 
 ## 0.2.0 — Bootable foundation acceptance

@@ -11,6 +11,8 @@ Bedrock Server OS has completed **0.1.0 — Product definition** and the indepen
 
 ## Current remaining-work index
 
+The active execution plan is the [2026-09-26 version-numbered goal checklist through 1.0](docs/GOAL-CHECKLIST-1.0.md), including acceptance criteria and mapping to the previous list.
+
 The detailed, individually numbered working checklist is [Remaining work to 1.0](docs/REMAINING-WORK.md). Keep its boxes tied to acceptance evidence; this index is only a summary.
 
 This index is the short, actively maintained view of the open path to 1.0. The milestone sections below remain the authoritative detailed requirements; completing an item here does not close a milestone checkbox until its stated acceptance evidence also passes.
