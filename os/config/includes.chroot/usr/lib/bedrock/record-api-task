@@ -127,18 +127,20 @@ def recover_transaction(directory: pathlib.Path, group: int | None, test_mode: b
         os.close(descriptor)
 
 def main() -> None:
-    if len(sys.argv) != 8:
-        fail("usage: record-api-task ID KIND STATE CREATED CURRENT TOTAL UNIT")
-    task_id, kind, state, created_text, current_text, total_text, unit = sys.argv[1:]
-    if not NAME.fullmatch(task_id) or not NAME.fullmatch(kind) or state not in STATES or unit not in UNITS:
-        fail("task fields are invalid")
-    try:
-        created, current, total = int(created_text), int(current_text), int(total_text)
-    except ValueError:
-        fail("task counters are invalid")
-    now = int(os.environ.get("BEDROCK_API_TASK_NOW", str(int(time.time()))))
-    if min(created, now, current) < 0 or total <= 0 or current > total or now < created:
-        fail("task counters are invalid")
+    recover_only = sys.argv[1:] == ["--recover"]
+    if not recover_only:
+        if len(sys.argv) != 8:
+            fail("usage: record-api-task ID KIND STATE CREATED CURRENT TOTAL UNIT | --recover")
+        task_id, kind, state, created_text, current_text, total_text, unit = sys.argv[1:]
+        if not NAME.fullmatch(task_id) or not NAME.fullmatch(kind) or state not in STATES or unit not in UNITS:
+            fail("task fields are invalid")
+        try:
+            created, current, total = int(created_text), int(current_text), int(total_text)
+        except ValueError:
+            fail("task counters are invalid")
+        now = int(os.environ.get("BEDROCK_API_TASK_NOW", str(int(time.time()))))
+        if min(created, now, current) < 0 or total <= 0 or current > total or now < created:
+            fail("task counters are invalid")
     test_mode = os.environ.get("BEDROCK_API_TASK_TEST_MODE") == "1"
     if not test_mode and os.geteuid() != 0:
         fail("recording API tasks requires root")
@@ -155,6 +157,8 @@ def main() -> None:
         os.fchmod(lock.fileno(), 0o600)
         fcntl.flock(lock, fcntl.LOCK_EX)
         recover_transaction(directory, group, test_mode)
+        if recover_only:
+            return
         value = load(tasks_path)
         previous = next((item for item in value["tasks"] if isinstance(item, dict) and item.get("id") == task_id), None)
         if previous:

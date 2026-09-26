@@ -14,8 +14,12 @@ for phase in journal audit tasks; do
     BEDROCK_API_TASK_TEST_MODE=1 BEDROCK_API_TASK_STATE_DIR="$recovery" BEDROCK_API_TASK_NOW=601 BEDROCK_API_TASK_CRASH_AFTER="$phase" python3 "$writer" crash-test test succeeded 600 1 1 steps || code=$?
     [ "$code" -eq 86 ]
     [ -f "$recovery/task-transaction.json" ]
-    BEDROCK_API_TASK_TEST_MODE=1 BEDROCK_API_TASK_STATE_DIR="$recovery" BEDROCK_API_TASK_NOW=602 python3 "$writer" next-task test queued 602 0 1 steps
+    BEDROCK_API_TASK_TEST_MODE=1 BEDROCK_API_TASK_STATE_DIR="$recovery" python3 "$writer" --recover
     jq -e '.tasks|any(.[]; .id=="crash-test" and .state=="succeeded")' "$recovery/tasks.json" >/dev/null
+    jq -e '.tasks|length==1' "$recovery/tasks.json" >/dev/null
+    before=$(sha256sum "$recovery/tasks.json" "$recovery/audit.jsonl")
+    BEDROCK_API_TASK_TEST_MODE=1 BEDROCK_API_TASK_STATE_DIR="$recovery" python3 "$writer" --recover
+    [ "$before" = "$(sha256sum "$recovery/tasks.json" "$recovery/audit.jsonl")" ]
     [ ! -e "$recovery/task-transaction.json" ]
     [ "$(wc -l < "$recovery/audit.jsonl")" -eq 1 ]
     jq -e '.id=="crash-test-601" and .outcome=="succeeded"' "$recovery/audit.jsonl" >/dev/null
