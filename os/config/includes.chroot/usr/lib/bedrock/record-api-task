@@ -199,7 +199,10 @@ def main() -> None:
             validate_audit(audit)
             event = {"id": f"{task_id}-{now}", "category": "task", "action": kind,
                      "outcome": "succeeded" if state == "succeeded" else "failed", "occurred_unix": now}
-            audit = audit.rstrip("\n") + ("\n" if audit else "") + json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n"
+            # The read API accepts at most 1,000 retained events and returns the newest 100.
+            events = [json.loads(line) for line in audit.splitlines() if line.strip()][-999:]
+            events.append(event)
+            audit = "".join(json.dumps(item, sort_keys=True, separators=(",", ":")) + "\n" for item in events)
             validate_audit(audit)
             atomic(directory / "task-transaction.json", {"schema": 1, "tasks": next_state, "audit": audit}, 0o600, None)
             checkpoint("journal", test_mode)

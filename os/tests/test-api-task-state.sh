@@ -43,6 +43,15 @@ for target in task-transaction.json audit.jsonl tasks.json; do
     [ -z "$(find "$recovery" -maxdepth 1 -name '.*' -type f -print)" ]
 done
 
+retention="$work/retention"
+mkdir "$retention"
+jq -nc 'range(0;1000)|{id:("event-"+tostring),category:"task",action:"test",outcome:"succeeded",occurred_unix:.}' > "$retention/audit.jsonl"
+BEDROCK_API_TASK_TEST_MODE=1 BEDROCK_API_TASK_STATE_DIR="$retention" BEDROCK_API_TASK_NOW=1001 python3 "$writer" retained test succeeded 1001 1 1 steps
+[ "$(wc -l < "$retention/audit.jsonl")" -eq 1000 ]
+jq -se '.[0].id=="event-1" and .[-1].id=="retained-1001"' "$retention/audit.jsonl" >/dev/null
+BEDROCK_API_TASK_TEST_MODE=1 BEDROCK_API_TASK_STATE_DIR="$retention" BEDROCK_API_TASK_NOW=1002 python3 "$writer" retained test succeeded 1001 1 1 steps
+[ "$(wc -l < "$retention/audit.jsonl")" -eq 1000 ]
+
 run 100 update-4 update-download queued 100 0 100 bytes
 run 101 update-4 update-download running 100 25 100 bytes
 before=$(sha256sum "$work/tasks.json")
