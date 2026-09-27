@@ -10,7 +10,9 @@ command -v lb >/dev/null 2>&1 || { printf 'error: live-build is required\n' >&2;
 command -v jq >/dev/null 2>&1 || { printf 'error: jq is required\n' >&2; exit 1; }
 
 installer_staged=0
+ui_staged=0
 cleanup_installer_stage() {
+  [ "$ui_staged" -eq 0 ] || rm -rf -- "$OS_DIR/config/includes.chroot/usr/share/bedrock/management-ui"
   [ "$installer_staged" -eq 0 ] || \
     "$OS_DIR/installer/stage-protected-installer.sh" remove "$OS_DIR/config/includes.chroot"
 }
@@ -24,7 +26,7 @@ trap cleanup_installer_stage EXIT INT TERM
 
 SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git -C "$ROOT" log -1 --format=%ct 2>/dev/null || date +%s)}
 BEDROCK_SOURCE_COMMIT=${BEDROCK_SOURCE_COMMIT:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || printf unknown)}
-export SOURCE_DATE_EPOCH TZ=UTC LC_ALL=C.UTF-8
+export SOURCE_DATE_EPOCH BEDROCK_SOURCE_COMMIT TZ=UTC LC_ALL=C.UTF-8
 protected_writer_enabled=false
 if [ -n "${BEDROCK_ENABLE_SYSTEM_PHYSICAL_WRITER:-}" ]; then
   [ "$BEDROCK_ENABLE_SYSTEM_PHYSICAL_WRITER" = I_ACCEPT_REAL_SYSTEM_DISK_DATA_LOSS ] && \
@@ -39,17 +41,23 @@ mkdir -p "$OUT_DIR"
 cd "$OS_DIR"
 lb clean --purge
 lb config
+sh "$OS_DIR/scripts/build-installed-ui.sh"
+ui_staged=1
+python3 "$OS_DIR/tests/verify-installed-ui.py" "$OS_DIR/config/includes.chroot/usr/share/bedrock/management-ui" "$BEDROCK_SOURCE_COMMIT"
+cp "$OS_DIR/config/includes.chroot/usr/share/bedrock/management-ui/build-manifest.json" "$OUT_DIR/management-ui-manifest.json"
 "$OS_DIR/installer/stage-protected-installer.sh" stage "$OS_DIR/config/includes.chroot"
 installer_staged=1
 lb build 2>&1 | tee "$OUT_DIR/build.log"
 "$OS_DIR/installer/stage-protected-installer.sh" remove "$OS_DIR/config/includes.chroot"
 installer_staged=0
+rm -rf -- "$OS_DIR/config/includes.chroot/usr/share/bedrock/management-ui"
+ui_staged=0
 
 ISO_SOURCE="$OS_DIR/${BEDROCK_IMAGE_NAME}.hybrid.iso"
 [ -s "$ISO_SOURCE" ] || { printf 'error: live-build did not produce %s\n' "$ISO_SOURCE" >&2; exit 1; }
 ISO_OUT="$OUT_DIR/${BEDROCK_IMAGE_NAME}.iso"
 mv "$ISO_SOURCE" "$ISO_OUT"
-"$OS_DIR/scripts/verify-live-installer-package.sh" "$ISO_OUT" "$protected_writer_enabled"
+"$OS_DIR/scripts/verify-live-installer-package.sh" "$ISO_OUT" "$protected_writer_enabled" "$OUT_DIR/management-ui-manifest.json"
 
 cd "$OUT_DIR"
 sha256sum "$(basename "$ISO_OUT")" > "$(basename "$ISO_OUT").sha256"

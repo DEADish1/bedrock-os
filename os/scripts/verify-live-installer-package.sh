@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-[ "$#" -eq 2 ] || { printf 'usage: %s IMAGE.iso true|false\n' "$0" >&2; exit 2; }
+[ "$#" -ge 2 ] && [ "$#" -le 3 ] || { printf 'usage: %s IMAGE.iso true|false [UI-MANIFEST.json]\n' "$0" >&2; exit 2; }
 iso=$1
 expected=$2
 [ "$expected" = true ] || [ "$expected" = false ] || {
@@ -24,7 +24,14 @@ unsquashfs -quiet -d "$rootfs" "$squashfs" \
   etc/systemd/system/multi-user.target.wants/bedrock-install.service \
   usr/lib/bedrock usr/lib/systemd/system/bedrock-install.service \
   usr/sbin/bedrock-install usr/sbin/bedrock-install-system \
-  usr/share/bedrock/installer >/dev/null
+  usr/share/bedrock/installer usr/share/bedrock/management-ui >/dev/null
+python3 "$(dirname "$0")/../tests/verify-installed-ui.py" "$rootfs/usr/share/bedrock/management-ui"
+if [ "$#" -eq 3 ]; then
+  [ -f "$3" ] && [ ! -L "$3" ] || { printf 'error: expected UI manifest is missing or indirect\n' >&2; exit 1; }
+  cmp "$3" "$rootfs/usr/share/bedrock/management-ui/build-manifest.json" || {
+    printf 'error: ISO UI manifest differs from the source build\n' >&2; exit 1;
+  }
+fi
 
 manifest=usr/share/bedrock/installer/package-manifest.sha256
 metadata=usr/share/bedrock/installer/package.json
