@@ -122,7 +122,83 @@ def main():
         assert len(tasks) == 2 and all(item["state"] == "succeeded" for item in tasks)
         events = [json.loads(line) for line in (state / "audit.jsonl").read_text().splitlines()]
         assert len(events) == 2 and {item["action"] for item in events} == {"image-upload", "image-discard"}
+        _, _, headers = request("GET", "/api/v1/images")
+        result, body, _ = request("PUT", "/api/v1/images/recovery/upload", contents,
+            {"Content-Type": "application/octet-stream", "X-Bedrock-Image-Type": "iso", "If-Match": headers["ETag"]})
+        assert result == 200, body
+        api.terminate()
+        api.wait(timeout=5)
+        # Interrupt the actual discard implementation under the production API UID.
+        worker = '''
+import os, runpy, sys
+api = runpy.run_path("/usr/lib/bedrock/bedrock-api")
+scope = api["audited_discard_image_upload"].__globals__
+original = scope["sync_upload_directory"]
+count = 0
+def sync():
+    global count
+    original()
+    count += 1
+    if count == 2:
+        os._exit(86)
+scope["sync_upload_directory"] = sync
+digest = sys.argv[1]
+api["audited_discard_image_upload"]("recovery", {"schema": 1, "sha256": digest,
+    "confirmation": f"DISCARD IMAGE UPLOAD recovery {digest}"})
+'''
+        crashed = subprocess.run(command(account.pw_uid, "/usr/bin/python3", "-c", worker, digest), env=environment, timeout=10)
+        assert crashed.returncode == 86
+        intent = uploads / ".recovery.import.lock"
+        assert intent.stat().st_uid == account.pw_uid and not (uploads / "recovery.json").exists()
+        root_import_lock = uploads / ".active.import.lock"
+        root_import_lock.touch(mode=0o600)
+        assert root_import_lock.stat().st_uid == 0
+        broker.terminate()
+        broker.wait(timeout=5)
+        tasks_before = (state / "tasks.json").read_bytes()
+        audit_before = (state / "audit.jsonl").read_bytes()
+        unavailable = subprocess.run(command(account.pw_uid, "bedrock-api"), env=environment, capture_output=True, timeout=10)
+        assert unavailable.returncode != 0, "API started without completing broker-backed recovery"
+        assert intent.exists(), "lost durable intent while broker was offline"
+        assert (state / "tasks.json").read_bytes() == tasks_before
+        assert (state / "audit.jsonl").read_bytes() == audit_before
+        subprocess.run(command(0, "record-api-task", "--recover"), env=environment, check=True)
+        broker = subprocess.Popen(command(0, "bedrock-action-broker"), env=environment)
+        for _ in range(100):
+            assert broker.poll() is None
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as peer:
+                    peer.settimeout(1)
+                    peer.connect("/run/bedrock-action-broker/action.sock")
+                    if json.loads(peer.recv(4096))["error"]["code"] == "unauthorized-peer":
+                        break
+            except OSError:
+                pass
+            time.sleep(0.05)
+        else:
+            raise AssertionError("broker did not restart")
+        for _restart in range(2):
+            api = subprocess.Popen(command(account.pw_uid, "bedrock-api"), env=environment)
+            for _ in range(100):
+                assert api.poll() is None, "API recovery exited"
+                try:
+                    if request("GET", "/api/v1/images")[0] == 200:
+                        break
+                except OSError:
+                    pass
+                time.sleep(0.05)
+            else:
+                raise AssertionError("API recovery did not finish")
+            assert list(uploads.iterdir()) == [root_import_lock]
+            assert root_import_lock.stat().st_uid == 0 and stat.S_IMODE(root_import_lock.stat().st_mode) == 0o600
+            tasks = json.loads((state / "tasks.json").read_text())["tasks"]
+            assert len(tasks) == 4 and all(item["state"] == "succeeded" for item in tasks)
+            events = [json.loads(line) for line in (state / "audit.jsonl").read_text().splitlines()]
+            assert len(events) == 4, "restart duplicated terminal audit"
+            api.terminate()
+            api.wait(timeout=5)
         print("Production UID boundary passed: API unprivileged, broker root with no capabilities, peer rejection, protected state, upload/discard audit.")
+        print("Production UID recovery passed: interrupted discard, broker outage, root import lock preserved, duplicate-free API restart.")
     finally:
         for process in (api, broker):
             if process is not None:
