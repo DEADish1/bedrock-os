@@ -186,8 +186,13 @@ api["audited_discard_image_upload"]("recovery", {"schema": 1, "sha256": digest,
         broker.wait(timeout=5)
         tasks_before = (state / "tasks.json").read_bytes()
         audit_before = (state / "audit.jsonl").read_bytes()
-        unavailable = subprocess.run(command(account.pw_uid, "bedrock-api"), env=environment, capture_output=True, timeout=10)
+        # systemd removes RuntimeDirectory on stop. Exercise recovery directly in
+        # that variant so an earlier /run permission error cannot falsely pass.
+        recovery_command = command(account.pw_uid, "/usr/bin/python3", "-c",
+            'import runpy; runpy.run_path("/usr/lib/bedrock/bedrock-api")["recover_interrupted_uploads"]()') if managed else command(account.pw_uid, "bedrock-api")
+        unavailable = subprocess.run(recovery_command, env=environment, capture_output=True, timeout=10)
         assert unavailable.returncode != 0, "API started without completing broker-backed recovery"
+        assert b"broker_action" in unavailable.stderr, "failure did not reach broker-backed recovery"
         assert intent.exists(), "lost durable intent while broker was offline"
         assert (state / "tasks.json").read_bytes() == tasks_before
         assert (state / "audit.jsonl").read_bytes() == audit_before
