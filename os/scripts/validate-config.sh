@@ -268,6 +268,7 @@ sh "$OS_DIR/tests/test-vm-passthrough-change.sh"
 sh "$OS_DIR/tests/test-api-token.sh"
 sh "$OS_DIR/tests/test-api-task-state.sh"
 python3 "$OS_DIR/tests/test-bedrock-api.py"
+python3 "$OS_DIR/tests/test-upload-recovery.py"
 if [ "${GITHUB_ACTIONS:-false}" = true ]; then
   sh "$OS_DIR/tests/test-api-service-boundary.sh"
 else

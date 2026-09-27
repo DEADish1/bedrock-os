@@ -312,6 +312,24 @@ def image_conversion_action(request_id: str, source: str, body: object) -> dict:
     return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "image-convert", "source": source,
                          "source_sha256": source_hash, "target": target, "target_type": target_type, "confirmation": confirmation})
 
+def upload_manifest(path: pathlib.Path, name: str) -> dict:
+    value = regular_json(path, 4096)
+    fields = {"schema", "name", "type", "sha256", "size_bytes"}
+    if not isinstance(value, dict) or set(value) != fields or value["schema"] != 1 or value.get("name") != name or not VM_NAME.fullmatch(name) or value.get("type") not in {"iso", "img", "qcow2", "vhdx", "vmdk"} or not SHA256.fullmatch(value["sha256"] if isinstance(value.get("sha256"), str) else "") or type(value.get("size_bytes")) is not int or not 1 <= value["size_bytes"] <= 4398046511104:
+        raise ValueError("invalid upload candidate")
+    return value
+
+
+def validate_upload_data(source: pathlib.Path, size: int) -> None:
+    descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_size != size:
+            raise ValueError("invalid staged upload")
+    finally:
+        os.close(descriptor)
+
+
 def upload_candidates() -> list[dict]:
     if not UPLOADS.exists():
         return []
@@ -319,18 +337,9 @@ def upload_candidates() -> list[dict]:
         raise ValueError("unsafe upload directory")
     candidates = []
     for path in sorted(UPLOADS.glob("*.json")):
-        value = regular_json(path, 4096)
-        fields = {"schema", "name", "type", "sha256", "size_bytes"}
-        if not isinstance(value, dict) or set(value) != fields or value["schema"] != 1 or path.name != f"{value.get('name')}.json" or not VM_NAME.fullmatch(value["name"] if isinstance(value.get("name"), str) else "") or value.get("type") not in {"iso", "img", "qcow2", "vhdx", "vmdk"} or not SHA256.fullmatch(value["sha256"] if isinstance(value.get("sha256"), str) else "") or type(value.get("size_bytes")) is not int or not 1 <= value["size_bytes"] <= 4398046511104:
-            raise ValueError("invalid upload candidate")
+        value = upload_manifest(path, path.stem)
         source = UPLOADS / f"{value['name']}.{value['type']}"
-        descriptor = os.open(source, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0))
-        try:
-            info = os.fstat(descriptor)
-            if not stat.S_ISREG(info.st_mode) or info.st_size != value["size_bytes"]:
-                raise ValueError("invalid staged upload")
-        finally:
-            os.close(descriptor)
+        validate_upload_data(source, value["size_bytes"])
         candidates.append({key: value[key] for key in ("name", "type", "sha256", "size_bytes")})
         if len(candidates) > 16:
             raise ValueError("too many upload candidates")
@@ -1490,12 +1499,65 @@ class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
     request_queue_size = 16
 
+def recover_legacy_discards(entries: list[pathlib.Path]) -> None:
+    names = {match.group(1) for path in entries
+             if (match := re.fullmatch(r"\.([a-z][a-z0-9-]{0,30}[a-z0-9])\.discard\.(?:data|json)", path.name))}
+    def present(path):
+        return path.exists() or path.is_symlink()
+
+    def same_regular(left, right):
+        a, b = left.lstat(), right.lstat()
+        return stat.S_ISREG(a.st_mode) and stat.S_ISREG(b.st_mode) and (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino)
+
+    def restore(tombstone, destination):
+        if not present(destination):
+            os.link(tombstone, destination, follow_symlinks=False)
+            sync_upload_directory()
+        tombstone.unlink()
+        sync_upload_directory()
+
+    for name in sorted(names):
+        lock = UPLOADS / f".{name}.import.lock"
+        info = lock.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_size != 0 or info.st_uid != os.geteuid():
+            raise ValueError("legacy discard ownership is ambiguous")
+        data = UPLOADS / f".{name}.discard.data"
+        discarded_metadata = UPLOADS / f".{name}.discard.json"
+        metadata = UPLOADS / f"{name}.json"
+        value = upload_manifest(discarded_metadata if present(discarded_metadata) else metadata, name)
+        source = UPLOADS / f"{name}.{value['type']}"
+        if present(discarded_metadata) and present(metadata) and not same_regular(discarded_metadata, metadata):
+            raise ValueError("conflicting legacy discard metadata")
+        if present(data):
+            validate_upload_data(data, value["size_bytes"])
+            if present(source) and not same_regular(data, source):
+                raise ValueError("conflicting legacy discard data")
+        elif present(source):
+            validate_upload_data(source, value["size_bytes"])
+        elif not present(discarded_metadata) or present(metadata):
+            raise ValueError("incomplete legacy discard state")
+        # Restore surviving data without replacement. If the old discard already
+        # unlinked its data, only its validated hidden manifest remains to clean up.
+        if present(data):
+            restore(data, source)
+        if present(discarded_metadata):
+            if present(source):
+                restore(discarded_metadata, metadata)
+            else:
+                discarded_metadata.unlink()
+                sync_upload_directory()
+        lock.unlink()
+        sync_upload_directory()
+
+
 def recover_interrupted_uploads() -> None:
     if UPLOADS.is_symlink() or (UPLOADS.exists() and not UPLOADS.is_dir()):
         raise ValueError("unsafe upload directory during recovery")
     entries = list(UPLOADS.iterdir()) if UPLOADS.exists() else []
     if len(entries) > 512:
         raise ValueError("too many upload files during recovery")
+    recover_legacy_discards(entries)
+    entries = list(UPLOADS.iterdir()) if UPLOADS.exists() else []
     for lock in entries:
         if not re.fullmatch(r"\.[a-z][a-z0-9-]{0,30}[a-z0-9]\.import\.lock", lock.name):
             continue
@@ -1536,6 +1598,9 @@ def recover_interrupted_uploads() -> None:
             raise ValueError("unsafe upload lock during recovery")
         name = match.group(1)
         metadata = UPLOADS / f"{name}.json"
+        if metadata.exists() or metadata.is_symlink():
+            value = upload_manifest(metadata, name)
+            validate_upload_data(UPLOADS / f"{name}.{value['type']}", value["size_bytes"])
         for path in entries:
             if path.name.startswith((f".{name}.upload.", f".{name}.metadata.")) and path != lock:
                 if not stat.S_ISREG(path.lstat().st_mode):
