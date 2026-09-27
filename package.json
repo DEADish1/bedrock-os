@@ -9,6 +9,9 @@
   "scripts": {
     "dev": "vinext dev",
     "build": "vinext build",
+    "build:installed-ui": "vite build --config vite.installed.config.ts",
+    "test:installed-ui": "node scripts/test-installed-ui.mjs",
+    "typecheck:installed-ui": "tsc --project tsconfig.installed.json",
     "start": "vinext start",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "test:e2e": "playwright test"
