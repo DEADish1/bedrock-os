@@ -758,6 +758,20 @@ client.close(); server.close()
             process.terminate()
             process.wait(timeout=5)
             environment["BEDROCK_API_TASKS"] = str(action_task_state / "tasks.json")
+            # An import helper can outlive the API. Recovery must not steal its lock.
+            importing = {".importing.import.lock": b"", "importing.iso": b"import-in-progress"}
+            for filename, contents in importing.items():
+                (uploads / filename).write_bytes(contents)
+            staged_before = {item.name: item.read_bytes() for item in uploads.iterdir()}
+            tasks_before = (action_task_state / "tasks.json").read_bytes()
+            audit_before = (action_task_state / "audit.jsonl").read_bytes()
+            unavailable_environment = {**environment, "BEDROCK_API_ACTION_BROKER": str(work / "unavailable.sock")}
+            unavailable = subprocess.run([sys.executable, str(API)], env=unavailable_environment,
+                                         capture_output=True, timeout=10)
+            assert unavailable.returncode != 0, "recovery must fail closed without the broker"
+            assert (action_task_state / "tasks.json").read_bytes() == tasks_before
+            assert (action_task_state / "audit.jsonl").read_bytes() == audit_before
+            assert {item.name: item.read_bytes() for item in uploads.iterdir()} == staged_before
             process = subprocess.Popen([sys.executable, str(API)], env=environment)
             for _ in range(100):
                 if process.poll() is not None:
@@ -775,6 +789,8 @@ client.close(); server.close()
             assert not (uploads / ".complete.upload.lock").exists()
             assert (uploads / "complete.iso").read_bytes() == complete_bytes
             assert (uploads / "complete.json").exists()
+            for filename, contents in importing.items():
+                assert (uploads / filename).read_bytes() == contents
             recovered = json.loads((action_task_state / "tasks.json").read_text(encoding="utf-8"))["tasks"]
             assert next(item for item in recovered if item["id"] == f"image-upload-{interrupted_id}")["state"] == "failed"
             recovered_audit = [json.loads(line) for line in (action_task_state / "audit.jsonl").read_text(encoding="utf-8").splitlines()]

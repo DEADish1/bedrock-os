@@ -10,7 +10,7 @@ Audit date: 2026-09-22. Scope: the 33 mutating method/path combinations in the p
 | Applications | `change-app` invokes `record-api-task` | Install, power, update, delete, and failure/restart paths |
 | Backups | `change-backup` invokes `record-api-task` | Long-running progress, interrupted backup, restore drill |
 | Image import/convert | `import-uploaded-vm-image` and image conversion helper invoke `record-api-task` | Large-image, conversion failure, cleanup, and replay |
-| Image upload/discard | **Gap:** Unix API calls `stage_image_upload` and `discard_image_upload` directly, without task/audit recording | Add bounded, privacy-safe progress and terminal outcomes without recording image bytes or paths |
+| Image upload/discard | Unix API records bounded progress and terminal outcomes through the root broker | Discard crash recovery, candidate consistency, and actual service-UID acceptance |
 | Storage | `change-storage` delegates to `bedrock-storage`, which records bounded task stages | Each destructive operation, reboot, and media failure |
 | NAS identity | `change-nas-identity` invokes `record-api-task` | Credential rotation failures and secret-free audit |
 | VM lifecycle, resources, images, networks, snapshots, passthrough | Guarded VM helpers invoke `record-api-task`; passthrough failure paths were recently extended | Per-action failure, interruption, reboot, and replay matrix |
@@ -26,7 +26,9 @@ The API holds an exclusive instance lock before replacing its Unix socket. On st
 
 The bounded task writer now retains queued/running tasks ahead of older terminal records, so unrelated completed activity cannot evict the only state needed to reconcile an in-flight operation. It rejects a 257th active task rather than silently losing one. Linux validation of this retention change remains pending.
 
-## Closure criteria for 0.6.3
+## Closure criteria for active checklist 0.6.2 and 0.6.6
+
+2026-09-27 evidence update: [run 36270106308 at a668825](https://github.com/DEADish1/bedrock-os/actions/runs/36270106308) passed Linux validation, both image builds, and reproducibility. This supersedes the pending Linux-validation notes below for task retention, symlink rejection, transaction replay, startup recovery, simulated ENOSPC, and audit retention. Physical acceptance was skipped; real service-UID and physical power-loss acceptance remain open. Additional API restart tests now assert that an unavailable broker leaves staged files and task/audit bytes unchanged, and that recovery preserves import-owned locks/data; validation of these newest tests is pending.
 
 Startup integration: `bedrock-action-broker.service` runs `record-api-task --recover` as a root pre-start step. Recovery uses the same exclusive lock as normal writes and creates no synthetic task. Tests cover all three interrupted write stages and an unchanged second recovery invocation. Linux validation and actual systemd/service-UID acceptance are still required.
 
