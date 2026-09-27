@@ -1,6 +1,7 @@
 [Unit]
 Description=Bedrock privileged action broker
-After=local-fs.target
+After=local-fs.target bedrock-remote-identity.service
+Requires=bedrock-remote-identity.service
 
 [Service]
 Type=simple
@@ -10,6 +11,8 @@ User=root
 Group=bedrock-api
 RuntimeDirectory=bedrock-action-broker
 RuntimeDirectoryMode=0750
+StateDirectory=bedrock/api bedrock/settings
+StateDirectoryMode=0750
 UMask=0007
 NoNewPrivileges=true
 PrivateDevices=true

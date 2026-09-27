@@ -271,6 +271,7 @@ python3 "$OS_DIR/tests/test-bedrock-api.py"
 python3 "$OS_DIR/tests/test-upload-recovery.py"
 if [ "${GITHUB_ACTIONS:-false}" = true ]; then
   sh "$OS_DIR/tests/test-api-service-boundary.sh"
+  sh "$OS_DIR/tests/test-api-systemd-boundary.sh"
 else
   printf 'Production UID boundary test requires Docker: run os/tests/test-api-service-boundary.sh separately.\n'
 fi

@@ -17,15 +17,20 @@ def main():
     if os.environ.get("BEDROCK_DISPOSABLE_SERVICE_TEST") != "1" or not pathlib.Path("/.dockerenv").exists() or os.geteuid() != 0:
         raise SystemExit("requires the disposable root Docker test container")
     assert not any(key.endswith("TEST_MODE") for key in os.environ)
+    managed = os.environ.get("BEDROCK_SERVICE_MANAGER") == "systemd"
     root = pathlib.Path(__file__).resolve().parents[1] / "config/includes.chroot"
     destination = pathlib.Path("/usr/lib/bedrock")
     assert not destination.exists() and not pathlib.Path("/var/lib/bedrock").exists()
     subprocess.run(["useradd", "--system", "--user-group", "--home-dir", "/nonexistent", "bedrock-api"], check=True)
     account = pwd.getpwnam("bedrock-api")
     destination.mkdir()
-    for name in ("bedrock-api", "bedrock-action-broker", "record-api-task", "create-api-token"):
+    for name in ("bedrock-api", "bedrock-action-broker", "record-api-task", "create-api-token", "initialize-remote-identity"):
         shutil.copyfile(root / "usr/lib/bedrock" / name, destination / name)
         (destination / name).chmod(0o755)
+    if managed:
+        for name in ("bedrock-api", "bedrock-action-broker", "bedrock-remote-identity"):
+            shutil.copyfile(root / f"usr/lib/systemd/system/{name}.service", f"/etc/systemd/system/{name}.service")
+        subprocess.run(["systemctl", "daemon-reload"], check=True)
     pathlib.Path("/usr/share/bedrock").mkdir()
     shutil.copyfile(root / "usr/share/bedrock/empty-api-tokens.json", "/usr/share/bedrock/empty-api-tokens.json")
     # Provision the token before the broker, as a first-run console would.
@@ -34,14 +39,17 @@ def main():
     state = pathlib.Path("/var/lib/bedrock/api")
     assert state.stat().st_gid == account.pw_gid, "API cannot traverse a root-only token directory"
     uploads = pathlib.Path("/var/lib/bedrock/virtualization/uploads")
-    uploads.mkdir(parents=True)
-    os.chown(uploads, account.pw_uid, account.pw_gid)
-    uploads.chmod(0o750)
+    if not managed:
+        uploads.mkdir(parents=True)
+        os.chown(uploads, account.pw_uid, account.pw_gid)
+        uploads.chmod(0o750)
     sources = state / "sources"
     sources.mkdir()
     sources.chmod(0o755)
     (sources / "images.json").write_text('{"schema":1,"images":[]}')
     for path, uid in (("/run/bedrock-api", account.pw_uid), ("/run/bedrock-action-broker", 0)):
+        if managed:
+            continue
         pathlib.Path(path).mkdir()
         os.chown(path, uid, account.pw_gid)
         os.chmod(path, 0o750)
@@ -51,6 +59,27 @@ def main():
         return ["setpriv", f"--reuid={uid}", f"--regid={account.pw_gid}", "--clear-groups",
                 "--bounding-set=-all", "--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs",
                 str(destination / executable), *args]
+
+    class ManagedService:
+        def __init__(self, name):
+            self.unit = f"{name}.service"
+            subprocess.run(["systemctl", "start", self.unit], check=True, timeout=30)
+
+        @property
+        def pid(self):
+            return int(subprocess.check_output(["systemctl", "show", "--property=MainPID", "--value", self.unit]))
+
+        def poll(self):
+            return None if subprocess.run(["systemctl", "is-active", "--quiet", self.unit]).returncode == 0 else 1
+
+        def terminate(self):
+            subprocess.run(["systemctl", "stop", self.unit], check=True, timeout=30)
+
+        def wait(self, timeout):
+            return 0
+
+    def start(uid, name):
+        return ManagedService(name) if managed else subprocess.Popen(command(uid, name), env=environment)
 
     def request(method, path, body=None, headers=None):
         client = http.client.HTTPConnection("localhost", timeout=5)
@@ -65,7 +94,7 @@ def main():
             client.close()
 
     subprocess.run(command(0, "record-api-task", "--recover"), env=environment, check=True)
-    broker = subprocess.Popen(command(0, "bedrock-action-broker"), env=environment)
+    broker = start(0, "bedrock-action-broker")
     api = None
     try:
         for _ in range(100):
@@ -75,7 +104,7 @@ def main():
             time.sleep(0.05)
         else:
             raise AssertionError("broker did not listen")
-        api = subprocess.Popen(command(account.pw_uid, "bedrock-api"), env=environment)
+        api = start(account.pw_uid, "bedrock-api")
         for _ in range(100):
             assert api.poll() is None, "unprivileged API exited"
             try:
@@ -163,7 +192,7 @@ api["audited_discard_image_upload"]("recovery", {"schema": 1, "sha256": digest,
         assert (state / "tasks.json").read_bytes() == tasks_before
         assert (state / "audit.jsonl").read_bytes() == audit_before
         subprocess.run(command(0, "record-api-task", "--recover"), env=environment, check=True)
-        broker = subprocess.Popen(command(0, "bedrock-action-broker"), env=environment)
+        broker = start(0, "bedrock-action-broker")
         for _ in range(100):
             assert broker.poll() is None
             try:
@@ -178,7 +207,7 @@ api["audited_discard_image_upload"]("recovery", {"schema": 1, "sha256": digest,
         else:
             raise AssertionError("broker did not restart")
         for _restart in range(2):
-            api = subprocess.Popen(command(account.pw_uid, "bedrock-api"), env=environment)
+            api = start(account.pw_uid, "bedrock-api")
             for _ in range(100):
                 assert api.poll() is None, "API recovery exited"
                 try:
@@ -199,6 +228,8 @@ api["audited_discard_image_upload"]("recovery", {"schema": 1, "sha256": digest,
             api.wait(timeout=5)
         print("Production UID boundary passed: API unprivileged, broker root with no capabilities, peer rejection, protected state, upload/discard audit.")
         print("Production UID recovery passed: interrupted discard, broker outage, root import lock preserved, duplicate-free API restart.")
+        if managed:
+            print("Packaged systemd service startup and restart passed with sandbox directives unchanged.")
     finally:
         for process in (api, broker):
             if process is not None:

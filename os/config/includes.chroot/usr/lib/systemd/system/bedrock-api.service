@@ -17,6 +17,7 @@ StateDirectory=bedrock/virtualization/uploads
 StateDirectoryMode=0750
 UMask=0007
 NoNewPrivileges=true
+CapabilityBoundingSet=
 PrivateDevices=true
 PrivateTmp=true
 ProtectHome=true
