@@ -796,6 +796,60 @@ client.close(); server.close()
             recovered_audit = [json.loads(line) for line in (action_task_state / "audit.jsonl").read_text(encoding="utf-8").splitlines()]
             assert any(item["action"] == "image-upload" and item["outcome"] == "failed"
                        and item["id"].startswith(f"image-upload-{interrupted_id}") for item in recovered_audit)
+            process.terminate()
+            process.wait(timeout=5)
+            discard_worker = '''
+import os, runpy, sys
+api = runpy.run_path(sys.argv[1])
+scope = api["audited_discard_image_upload"].__globals__
+phase = int(sys.argv[2])
+original_sync = scope["sync_upload_directory"]
+count = 0
+def sync():
+    global count
+    original_sync()
+    count += 1
+    if count == phase:
+        os._exit(86)
+if phase == 0:
+    os.link = lambda *args, **kwargs: os._exit(86)
+scope["sync_upload_directory"] = sync
+name, digest = sys.argv[3:5]
+api["audited_discard_image_upload"](name, {"schema": 1, "sha256": digest,
+    "confirmation": f"DISCARD IMAGE UPLOAD {name} {digest}"})
+'''
+            recovery_worker = 'import runpy,sys; runpy.run_path(sys.argv[1])["recover_interrupted_uploads"]()'
+            for phase in range(5):
+                name = f"crash{phase}"
+                contents = b"discard-recovery-fixture"
+                digest = hashlib.sha256(contents).hexdigest()
+                (uploads / f"{name}.iso").write_bytes(contents)
+                (uploads / f"{name}.json").write_text(json.dumps({"schema": 1, "name": name, "type": "iso",
+                    "sha256": digest, "size_bytes": len(contents)}), encoding="utf-8")
+                before_ids = {item["id"] for item in json.loads((action_task_state / "tasks.json").read_text())["tasks"]}
+                crashed = subprocess.run([sys.executable, "-c", discard_worker, str(API), str(phase), name, digest],
+                                         env=environment, capture_output=True, timeout=10)
+                assert crashed.returncode == 86, crashed.stderr
+                subprocess.run([sys.executable, "-c", recovery_worker, str(API)], env=environment, check=True, timeout=10)
+                after = json.loads((action_task_state / "tasks.json").read_text())["tasks"]
+                new_tasks = [item for item in after if item["id"] not in before_ids]
+                assert len(new_tasks) == 1 and new_tasks[0]["kind"] == "image-discard"
+                assert new_tasks[0]["state"] == ("failed" if phase == 0 else "succeeded")
+                events = [json.loads(line) for line in (action_task_state / "audit.jsonl").read_text().splitlines()]
+                assert sum(item["id"].startswith(new_tasks[0]["id"]) for item in events) == 1
+                audit_snapshot = (action_task_state / "audit.jsonl").read_bytes()
+                subprocess.run([sys.executable, "-c", recovery_worker, str(API)], env=environment, check=True, timeout=10)
+                assert (action_task_state / "audit.jsonl").read_bytes() == audit_snapshot
+                assert not (uploads / f".{name}.import.lock").exists()
+                assert not list(uploads.glob(".discard-intent-*"))
+                if phase == 0:
+                    assert (uploads / f"{name}.iso").read_bytes() == contents
+                    assert (uploads / f"{name}.json").exists()
+                else:
+                    assert not (uploads / f"{name}.iso").exists()
+                    assert not (uploads / f"{name}.json").exists()
+                for filename, contents in importing.items():
+                    assert (uploads / filename).read_bytes() == contents
         finally:
             process.terminate()
             process.wait(timeout=5)

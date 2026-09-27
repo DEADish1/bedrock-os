@@ -347,7 +347,54 @@ def image_import_action(request_id: str, name: str, body: object) -> dict:
         raise ValueError("invalid image import confirmation")
     return broker_action(request_id, {"schema": 1, "request_id": request_id, "action": "image-import", **item, "confirmation": body["confirmation"]})
 
-def discard_image_upload(name: str, body: object) -> dict:
+def sync_upload_directory() -> None:
+    descriptor = os.open(UPLOADS, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+class DiscardRecoveryPending(OSError):
+    pass
+
+
+def finish_image_discard(lock: pathlib.Path, intent: dict) -> bool:
+    fields = {"schema", "operation", "name", "type", "sha256", "size_bytes", "device", "inode", "upload_id", "created_unix"}
+    if (not isinstance(intent, dict) or set(intent) != fields or intent["schema"] != 1
+            or intent["operation"] != "discard" or not isinstance(intent["name"], str)
+            or not VM_NAME.fullmatch(intent["name"]) or lock.name != f".{intent['name']}.import.lock"
+            or intent["type"] not in {"iso", "img", "qcow2", "vhdx", "vmdk"}
+            or not isinstance(intent["sha256"], str) or not SHA256.fullmatch(intent["sha256"])
+            or not isinstance(intent["upload_id"], str) or not DEVICE_ID.fullmatch(intent["upload_id"])
+            or any(type(intent[key]) is not int or intent[key] < 0 for key in ("device", "inode", "created_unix", "size_bytes"))
+            or not 1 <= intent["size_bytes"] <= 4398046511104):
+        raise ValueError("unsafe discard recovery intent")
+    name = intent["name"]
+    source = UPLOADS / f"{name}.{intent['type']}"
+    metadata = UPLOADS / f"{name}.json"
+    expected = {key: intent[key] for key in ("schema", "name", "type", "sha256", "size_bytes")}
+    # Validate everything before deleting anything. A changed candidate is never discarded.
+    matches = True
+    if metadata.exists() or metadata.is_symlink():
+        matches = regular_json(metadata, 4096) == expected
+    if source.exists() or source.is_symlink():
+        info = source.lstat()
+        matches = matches and stat.S_ISREG(info.st_mode) and (info.st_dev, info.st_ino, info.st_size) == (intent["device"], intent["inode"], intent["size_bytes"])
+    if matches:
+        # Removing the manifest first prevents publication of a missing data file.
+        metadata.unlink(missing_ok=True)
+        sync_upload_directory()
+        source.unlink(missing_ok=True)
+        sync_upload_directory()
+    image_task_transition(intent["upload_id"], "discard", "succeeded" if matches else "failed",
+                          intent["created_unix"], 1 if matches else 0, 1)
+    lock.unlink()
+    sync_upload_directory()
+    return matches
+
+
+def discard_image_upload(name: str, body: object, upload_id: str, created: int) -> dict:
     if not VM_NAME.fullmatch(name) or not isinstance(body, dict) or set(body) != {"schema", "sha256", "confirmation"} or body.get("schema") != 1:
         raise ValueError("invalid image upload discard request")
     source_hash, confirmation = body.get("sha256"), body.get("confirmation")
@@ -356,28 +403,38 @@ def discard_image_upload(name: str, body: object) -> dict:
     if not UPLOADS.exists() or UPLOADS.is_symlink() or not UPLOADS.is_dir():
         raise ValueError("unsafe or unavailable upload directory")
     lock = UPLOADS / f".{name}.import.lock"
-    lock_fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0), 0o600)
-    os.close(lock_fd)
+    upload_lock = UPLOADS / f".{name}.upload.lock"
+    if upload_lock.exists() or upload_lock.is_symlink():
+        raise FileExistsError("image upload is busy")
+    matches = [item for item in upload_candidates() if item["name"] == name and item["sha256"] == source_hash]
+    if len(matches) != 1:
+        raise ValueError("image upload candidate changed or is unavailable")
+    item = matches[0]
+    info = (UPLOADS / f"{name}.{item['type']}").lstat()
+    intent = {"schema": 1, "operation": "discard", **item, "device": info.st_dev, "inode": info.st_ino,
+              "upload_id": upload_id, "created_unix": created}
+    descriptor, temporary = tempfile.mkstemp(prefix=".discard-intent-", dir=UPLOADS)
+    published = False
     try:
-        matches = [item for item in upload_candidates() if item["name"] == name and item["sha256"] == source_hash]
-        if len(matches) != 1:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            json.dump(intent, output, sort_keys=True, separators=(",", ":"))
+            output.flush(); os.fsync(output.fileno())
+        # The exclusive hard link publishes a complete journal and acquires the
+        # existing import lock in one operation. Import-owned empty locks are untouched.
+        os.link(temporary, lock)
+        published = True
+        sync_upload_directory()
+        discarded = finish_image_discard(lock, intent)
+        published = False
+        if not discarded:
             raise ValueError("image upload candidate changed or is unavailable")
-        item = matches[0]
-        source = UPLOADS / f"{name}.{item['type']}"; metadata = UPLOADS / f"{name}.json"
-        discarded_source = UPLOADS / f".{name}.discard.data"; discarded_metadata = UPLOADS / f".{name}.discard.json"
-        if discarded_source.exists() or discarded_source.is_symlink() or discarded_metadata.exists() or discarded_metadata.is_symlink():
-            raise ValueError("unsafe image upload discard state")
-        os.replace(source, discarded_source)
-        try:
-            os.replace(metadata, discarded_metadata)
-        except Exception:
-            os.replace(discarded_source, source)
-            raise
-        discarded_source.unlink(); discarded_metadata.unlink()
         return {"schema": 1, "name": name, "discarded": True}
+    except Exception as error:
+        if published:
+            raise DiscardRecoveryPending("discard requires recovery") from error
+        raise
     finally:
-        if lock.exists() and not lock.is_symlink():
-            lock.unlink()
+        os.unlink(temporary)
 
 def audited_discard_image_upload(name: str, body: object) -> dict:
     if not VM_NAME.fullmatch(name) or not isinstance(body, dict) or set(body) != {"schema", "sha256", "confirmation"} or body.get("schema") != 1:
@@ -388,14 +445,16 @@ def audited_discard_image_upload(name: str, body: object) -> dict:
     upload_id, created = str(uuid.uuid4()), int(time.time())
     image_task_transition(upload_id, "discard", "queued", created, 0, 1)
     try:
-        result = discard_image_upload(name, body)
+        result = discard_image_upload(name, body, upload_id, created)
+    except DiscardRecoveryPending:
+        # Keep the queued task and durable intent for startup reconciliation.
+        raise
     except Exception:
         try:
             image_task_transition(upload_id, "discard", "failed", created, 0, 1)
         except (OSError, ValueError):
             pass
         raise
-    image_task_transition(upload_id, "discard", "succeeded", created, 1, 1)
     return result
 
 def stage_image_upload(stream, name: str, image_type: str, length: int, progress=None) -> dict:
@@ -409,7 +468,11 @@ def stage_image_upload(stream, name: str, image_type: str, length: int, progress
         raise ValueError("unsafe upload directory")
     lock = UPLOADS / f".{name}.upload.lock"; lock_fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0), 0o600)
     os.close(lock_fd); temporary = ""; metadata_temporary = ""; destination = UPLOADS / f"{name}.{image_type}"; metadata = UPLOADS / f"{name}.json"
+    created_destination = False
     try:
+        import_lock = UPLOADS / f".{name}.import.lock"
+        if import_lock.exists() or import_lock.is_symlink():
+            raise FileExistsError("image import or discard is busy")
         if any(UPLOADS.glob(f"{name}.*")):
             raise FileExistsError("upload candidate already exists")
         descriptor, temporary = tempfile.mkstemp(prefix=f".{name}.upload.", dir=UPLOADS)
@@ -427,15 +490,17 @@ def stage_image_upload(stream, name: str, image_type: str, length: int, progress
                     progress(current)
                     reported = current
             output.flush(); os.fsync(output.fileno())
-        os.replace(temporary, destination); temporary = ""
+        os.replace(temporary, destination); temporary = ""; created_destination = True
+        sync_upload_directory()
         descriptor, metadata_temporary = tempfile.mkstemp(prefix=f".{name}.metadata.", dir=UPLOADS)
         value = {"schema": 1, "name": name, "type": image_type, "sha256": digest.hexdigest(), "size_bytes": length}
         with os.fdopen(descriptor, "w", encoding="utf-8") as output:
             os.fchmod(output.fileno(), 0o640); json.dump(value, output, sort_keys=True, separators=(",", ":")); output.write("\n"); output.flush(); os.fsync(output.fileno())
         os.replace(metadata_temporary, metadata); metadata_temporary = ""
+        sync_upload_directory()
         return {key: value[key] for key in ("name", "type", "sha256", "size_bytes")}
     except Exception:
-        if destination.exists() and not destination.is_symlink() and not metadata.exists():
+        if created_destination and destination.exists() and not destination.is_symlink() and not metadata.exists():
             destination.unlink()
         raise
     finally:
@@ -1426,14 +1491,30 @@ class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     request_queue_size = 16
 
 def recover_interrupted_uploads() -> None:
+    if UPLOADS.is_symlink() or (UPLOADS.exists() and not UPLOADS.is_dir()):
+        raise ValueError("unsafe upload directory during recovery")
+    entries = list(UPLOADS.iterdir()) if UPLOADS.exists() else []
+    if len(entries) > 512:
+        raise ValueError("too many upload files during recovery")
+    for lock in entries:
+        if not re.fullmatch(r"\.[a-z][a-z0-9-]{0,30}[a-z0-9]\.import\.lock", lock.name):
+            continue
+        info = lock.lstat()
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError("unsafe import lock during recovery")
+        # Root import helpers create empty locks and may still be running.
+        if info.st_size == 0 or info.st_uid != os.geteuid():
+            continue
+        finish_image_discard(lock, regular_json(lock, 4096))
     if TASKS.exists() or TASKS.is_symlink():
         for task in task_feed()["tasks"]:
-            if task["kind"] != "image-upload" or task["state"] not in {"queued", "running"}:
+            if task["kind"] not in {"image-upload", "image-discard"} or task["state"] not in {"queued", "running"}:
                 continue
-            match = re.fullmatch(r"image-upload-([0-9a-f-]{36})", task["id"])
+            operation = "upload" if task["kind"] == "image-upload" else "discard"
+            match = re.fullmatch(rf"image-{operation}-([0-9a-f-]{{36}})", task["id"])
             if not match or not DEVICE_ID.fullmatch(match.group(1)):
                 raise ValueError("invalid interrupted image upload task")
-            image_task_transition(match.group(1), "upload", "failed", task["created_unix"],
+            image_task_transition(match.group(1), operation, "failed", task["created_unix"],
                                   task["progress"]["current"], task["progress"]["total"])
     if not UPLOADS.exists():
         return
@@ -1443,6 +1524,11 @@ def recover_interrupted_uploads() -> None:
     if len(entries) > 512:
         raise ValueError("too many upload files during recovery")
     for lock in entries:
+        if lock.name.startswith(".discard-intent-"):
+            if not stat.S_ISREG(lock.lstat().st_mode):
+                raise ValueError("unsafe discard temporary file during recovery")
+            lock.unlink()
+            continue
         match = re.fullmatch(r"\.([a-z][a-z0-9-]{0,30}[a-z0-9])\.upload\.lock", lock.name)
         if not match:
             continue
@@ -1463,6 +1549,7 @@ def recover_interrupted_uploads() -> None:
                         raise ValueError("unsafe upload source during recovery")
                     source.unlink()
         lock.unlink()
+    sync_upload_directory()
 
 def main() -> None:
     SOCKET.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
