@@ -268,6 +268,11 @@ sh "$OS_DIR/tests/test-vm-passthrough-change.sh"
 sh "$OS_DIR/tests/test-api-token.sh"
 sh "$OS_DIR/tests/test-api-task-state.sh"
 python3 "$OS_DIR/tests/test-bedrock-api.py"
+if [ "${GITHUB_ACTIONS:-false}" = true ]; then
+  sh "$OS_DIR/tests/test-api-service-boundary.sh"
+else
+  printf 'Production UID boundary test requires Docker: run os/tests/test-api-service-boundary.sh separately.\n'
+fi
 python3 "$OS_DIR/tests/test-action-broker.py"
 sh "$OS_DIR/tests/test-remote-transport-policy.sh"
 sh "$OS_DIR/tests/test-remote-pairing.sh"
