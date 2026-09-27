@@ -55,6 +55,30 @@ def main():
             recover()
             assert snapshot(directory) == before
 
+        original_sync = scope["sync_upload_directory"]
+        for phase in range(1, 8):
+            directory = fixture(f"recovery-interrupted-{phase}")
+            calls = 0
+            def interrupted_sync():
+                nonlocal calls
+                original_sync()
+                calls += 1
+                if calls == phase:
+                    raise OSError("simulated recovery interruption")
+            scope["sync_upload_directory"] = interrupted_sync
+            try:
+                recover()
+            except OSError:
+                pass
+            else:
+                raise AssertionError("recovery interruption was not reached")
+            finally:
+                scope["sync_upload_directory"] = original_sync
+            recover()
+            assert {path.name for path in directory.iterdir()} == {"legacy.iso", "legacy.json"}
+            assert (directory / "legacy.iso").read_bytes() == contents
+            assert json.loads((directory / "legacy.json").read_text()) == manifest
+
         for unsafe in ("missing-lock", "indirect-lock", "indirect-data", "conflicting-data", "conflicting-metadata", "invalid-metadata"):
             directory = fixture(unsafe)
             if unsafe in {"missing-lock", "indirect-lock"}:

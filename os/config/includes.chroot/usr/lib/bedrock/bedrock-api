@@ -1501,7 +1501,7 @@ class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
 
 def recover_legacy_discards(entries: list[pathlib.Path]) -> None:
     names = {match.group(1) for path in entries
-             if (match := re.fullmatch(r"\.([a-z][a-z0-9-]{0,30}[a-z0-9])\.discard\.(?:data|json)", path.name))}
+             if (match := re.fullmatch(r"\.([a-z][a-z0-9-]{0,30}[a-z0-9])\.discard\.(?:data|json|recovery)", path.name))}
     def present(path):
         return path.exists() or path.is_symlink()
 
@@ -1518,11 +1518,25 @@ def recover_legacy_discards(entries: list[pathlib.Path]) -> None:
 
     for name in sorted(names):
         lock = UPLOADS / f".{name}.import.lock"
+        data = UPLOADS / f".{name}.discard.data"
+        discarded_metadata = UPLOADS / f".{name}.discard.json"
+        marker = UPLOADS / f".{name}.discard.recovery"
+        if present(marker):
+            info = marker.lstat()
+            if not stat.S_ISREG(info.st_mode) or info.st_size != 0 or info.st_uid != os.geteuid():
+                raise ValueError("unsafe legacy recovery marker")
+            if not present(data) and not present(discarded_metadata):
+                if present(lock) and same_regular(marker, lock):
+                    lock.unlink()
+                    sync_upload_directory()
+                marker.unlink()
+                sync_upload_directory()
+                continue
+            if not present(lock) or not same_regular(marker, lock):
+                raise ValueError("legacy recovery lock changed")
         info = lock.lstat()
         if not stat.S_ISREG(info.st_mode) or info.st_size != 0 or info.st_uid != os.geteuid():
             raise ValueError("legacy discard ownership is ambiguous")
-        data = UPLOADS / f".{name}.discard.data"
-        discarded_metadata = UPLOADS / f".{name}.discard.json"
         metadata = UPLOADS / f"{name}.json"
         value = upload_manifest(discarded_metadata if present(discarded_metadata) else metadata, name)
         source = UPLOADS / f"{name}.{value['type']}"
@@ -1536,6 +1550,11 @@ def recover_legacy_discards(entries: list[pathlib.Path]) -> None:
             validate_upload_data(source, value["size_bytes"])
         elif not present(discarded_metadata) or present(metadata):
             raise ValueError("incomplete legacy discard state")
+        # Retain lock identity until cleanup is durable, including interruptions
+        # after the last tombstone disappears or another importer acquires the name.
+        if not present(marker):
+            os.link(lock, marker, follow_symlinks=False)
+            sync_upload_directory()
         # Restore surviving data without replacement. If the old discard already
         # unlinked its data, only its validated hidden manifest remains to clean up.
         if present(data):
@@ -1547,6 +1566,8 @@ def recover_legacy_discards(entries: list[pathlib.Path]) -> None:
                 discarded_metadata.unlink()
                 sync_upload_directory()
         lock.unlink()
+        sync_upload_directory()
+        marker.unlink()
         sync_upload_directory()
 
 
