@@ -9,7 +9,9 @@ if not re.fullmatch(r"/[A-Za-z0-9_./@-]+", credentials) or ".." in credentials.s
 for name in ("tls-cert", "tls-key"):
     credential = pathlib.Path(credentials) / name
     if not credential.is_file() or credential.is_symlink():
-        raise SystemExit("gateway TLS credential is unavailable or indirect")
+        raise SystemExit(f"gateway TLS credential is unavailable or indirect: {credential}; "
+                         f"exists={credential.exists()} symlink={credential.is_symlink()} "
+                         f"directory_entries={sorted(path.name for path in pathlib.Path(credentials).iterdir())}")
 runtime = pathlib.Path("/run/bedrock-web")
 if not runtime.is_dir() or runtime.is_symlink():
     raise SystemExit("gateway runtime directory is unavailable or indirect")
