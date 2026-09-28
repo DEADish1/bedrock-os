@@ -37,8 +37,8 @@ dropin = pathlib.Path("/etc/systemd/system/nginx.service.d")
 dropin.mkdir(exist_ok=True)
 shutil.copyfile(root / "etc/systemd/system/nginx.service.d/bedrock.conf", dropin / "bedrock.conf")
 ui = pathlib.Path("/usr/share/bedrock/management-ui")
-ui.mkdir()
-(ui / "index.html").write_text("<!doctype html><title>Bedrock gateway fixture</title>")
+shutil.copytree(root / "usr/share/bedrock/management-ui", ui)
+manifest = json.loads((ui / "build-manifest.json").read_text())
 subprocess.run(["systemctl", "daemon-reload"], check=True)
 subprocess.run(["systemctl", "stop", "nginx"], check=True)
 subprocess.run(["systemctl", "start", "nginx"], check=True)
@@ -77,10 +77,19 @@ def wait_ready():
 try:
     wait_ready()
     status, body, headers = request("GET", "/")
-    assert status == 200 and b"Bedrock gateway fixture" in body
+    assert status == 200 and body == (ui / "index.html").read_bytes()
     assert headers["X-Content-Type-Options"] == "nosniff"
     assert headers["Referrer-Policy"] == "no-referrer"
     assert "frame-ancestors 'none'" in headers["Content-Security-Policy"]
+    for asset in manifest["files"]:
+        status, payload, asset_headers = request("GET", "/" + asset["path"])
+        assert status == 200 and len(payload) == asset["size_bytes"]
+        assert hashlib.sha256(payload).hexdigest() == asset["sha256"], "gateway changed an installed UI asset"
+        assert asset_headers["X-Content-Type-Options"] == "nosniff"
+        if asset["path"].endswith(".js"):
+            assert "javascript" in asset_headers["Content-Type"]
+        if asset["path"].endswith(".css"):
+            assert asset_headers["Content-Type"].startswith("text/css")
     auth = {"Authorization": f"Bearer {token}", "Origin": "https://127.0.0.1:8443", "Sec-Fetch-Site": "same-origin"}
     assert request("GET", "/api/v1/images")[0] == 401
     assert request("GET", "/api/v1/images", headers={**auth, "Authorization": "Bearer " + "0" * 64})[0] == 401
