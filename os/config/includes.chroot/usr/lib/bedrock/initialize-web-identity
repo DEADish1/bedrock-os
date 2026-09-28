@@ -4,9 +4,14 @@ set -eu
 directory=/var/lib/bedrock/web
 identity=$directory/identity
 [ -d "$directory" ] && [ ! -L "$directory" ] || { printf 'error: web identity state is unavailable or indirect\n' >&2; exit 1; }
+[ "$(stat -c '%u:%a' "$directory")" = 0:700 ] || { printf 'error: web identity state must be root-private\n' >&2; exit 1; }
 if [ -e "$identity" ] || [ -L "$identity" ]; then
   [ -d "$identity" ] && [ ! -L "$identity" ] || exit 1
-  for file in server.crt server.key; do [ -f "$identity/$file" ] && [ ! -L "$identity/$file" ] || exit 1; done
+  [ "$(stat -c '%u:%a' "$identity")" = 0:700 ] || { printf 'error: web identity directory must be root-private\n' >&2; exit 1; }
+  for file in server.crt server.key; do
+    [ -f "$identity/$file" ] && [ ! -L "$identity/$file" ] || exit 1
+    [ "$(stat -c '%u:%a:%h' "$identity/$file")" = 0:600:1 ] || { printf 'error: web identity files must be root-private and unlinked\n' >&2; exit 1; }
+  done
   openssl x509 -in "$identity/server.crt" -checkend 0 -noout >/dev/null
   certificate_key=$(openssl x509 -in "$identity/server.crt" -pubkey -noout | openssl pkey -pubin -outform DER | sha256sum)
   private_key=$(openssl pkey -in "$identity/server.key" -pubout -outform DER | sha256sum)

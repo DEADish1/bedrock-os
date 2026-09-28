@@ -129,6 +129,19 @@ try:
     finally:
         private_key.unlink()
         saved_key.rename(private_key)
+    for unsafe_mode in (0o640, 0o644):
+        private_key.chmod(unsafe_mode)
+        try:
+            assert subprocess.run([str(helper)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0
+            assert private_key.stat().st_mode & 0o777 == unsafe_mode
+            assert hashlib.sha256(certificate.read_bytes()).hexdigest() == identity_before
+        finally:
+            private_key.chmod(0o600)
+    os.link(private_key, saved_key)
+    try:
+        assert subprocess.run([str(helper)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0
+    finally:
+        saved_key.unlink()
     subprocess.run(["systemctl", "start", "bedrock-web"], check=True)
     wait_ready()
     print("HTTPS gateway passed: trusted local TLS, real API authorization, origin/host checks, request limits, no default HTTP site, stable identity and unprivileged service.")
