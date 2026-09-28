@@ -21,13 +21,21 @@ source = pathlib.Path(__file__).resolve().parents[1] / "config/includes.chroot/u
 destination = pathlib.Path("/usr/sbin/bedrock-setup-management")
 shutil.copyfile(source, destination)
 destination.chmod(0o755)
+wizard = pathlib.Path("/usr/sbin/bedrock-first-run")
+shutil.copyfile(source.with_name("bedrock-first-run"), wizard)
+wizard.chmod(0o755)
+marker = pathlib.Path("/var/lib/bedrock/setup/complete.json")
+assert not marker.exists()
+marker.parent.mkdir(exist_ok=True)
+marker.write_text('{"setup_complete":true}\n')
+marker_before = marker.read_bytes()
 # Ordinary redirected execution must not issue credentials or start services.
 assert subprocess.run([str(destination)], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                       stderr=subprocess.PIPE).returncode != 0
 child, terminal = pty.fork()
 if child == 0:
     fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
-    os.execve(str(destination), [str(destination)], {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "TERM": "xterm"})
+    os.execve(str(wizard), [str(wizard)], {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "TERM": "xterm"})
 
 
 def screen_contains(needle):
@@ -52,6 +60,10 @@ def screen_contains(needle):
 
 
 try:
+    screen_contains(b"Initial setup is already complete")
+    os.write(terminal, b"\r")
+    screen_contains(b"Management access")
+    os.write(terminal, b"\r")
     screen_contains(b"Bedrock management access")
     os.write(terminal, b"\r")
     screen_contains(b"Access token name")
@@ -82,7 +94,8 @@ try:
         raise AssertionError("console did not exit after cancellation")
     subprocess.run(["/usr/lib/bedrock/manage-api-tokens", "revoke", "console-acceptance"],
                    check=True, stdout=subprocess.DEVNULL)
-    print("Real management PTY passed: menu, issuance, private token display, cleanup, exit, redirected-input rejection.")
+    assert marker.read_bytes() == marker_before, "management handoff changed completed first-run state"
+    print("Real management PTY passed: completed-wizard handoff, menu, issuance, private token display, cleanup, exit, unchanged setup state, redirected-input rejection.")
 finally:
     os.close(terminal)
     if child is not None:
@@ -91,3 +104,4 @@ finally:
         except ProcessLookupError:
             pass
         os.waitpid(child, 0)
+    marker.unlink()

@@ -8,9 +8,19 @@ export PATH LC_ALL
 for tool in dialog jq openssl; do
   command -v "$tool" >/dev/null 2>&1 || { printf 'error: first-run setup requires %s\n' "$tool" >&2; exit 2; }
 done
+offer_management() {
+  if dialog --title 'Management access' --yesno \
+    'Configure local management access now? You can issue a private token and enable loopback HTTPS. LAN access is not yet configured. Choosing No keeps your completed server settings.' 11 72; then
+    if ! /usr/sbin/bedrock-setup-management; then
+      dialog --title 'Management setup incomplete' --msgbox \
+        'Your server settings remain saved. Management setup did not finish. You can reopen it from the local administrator console with sudo bedrock-setup-management.' 11 72 || true
+    fi
+  fi
+}
 marker=/var/lib/bedrock/setup/complete.json
 if [ -s "$marker" ]; then
   dialog --title 'Bedrock setup' --msgbox 'Initial setup is already complete.' 7 54
+  offer_management
   exit 0
 fi
 
@@ -98,6 +108,7 @@ summary=$(jq -r '
 dialog --title 'Review setup' --yesno "$summary\n\nApply these settings now? Network connectivity may briefly restart." 16 72 || cancelled
 if /usr/sbin/bedrock-apply-first-run "$work/config.json" > "$work/result.json"; then
   dialog --title 'Setup complete' --msgbox 'Bedrock initial setup is complete. You can now sign in with the administrator account.' 9 68
+  offer_management
 else
   dialog --title 'Setup failed safely' --msgbox 'Bedrock could not apply every setting and attempted to restore the previous state. Review the local system log and run setup again.' 10 70
   exit 1
