@@ -5,7 +5,7 @@ command -v docker >/dev/null 2>&1 || { printf 'Docker is required for the dispos
 container_id=$(docker run --detach --privileged --cgroupns=private \
   --tmpfs /run --tmpfs /run/lock --volume "$root:/workspace:ro" --workdir /workspace \
   --env container=docker --env BEDROCK_DISPOSABLE_SERVICE_TEST=1 --env BEDROCK_SERVICE_MANAGER=systemd \
-  debian:13.6-slim sh -ec 'apt-get update -qq && apt-get install -y --no-install-recommends systemd systemd-sysv dbus python3 util-linux passwd jq openssl xxd ca-certificates nginx-light >/dev/null && mount -o remount,rw /sys/fs/cgroup && exec /sbin/init')
+  debian:13.6-slim sh -ec 'apt-get update -qq && apt-get install -y --no-install-recommends systemd systemd-sysv dbus python3 util-linux passwd jq openssl xxd ca-certificates nginx-light >/dev/null && mount -o remount,rw /sys/fs/cgroup && mount --make-shared /run && exec /sbin/init')
 cleanup() {
   status=$?
   if [ "$status" -ne 0 ]; then
