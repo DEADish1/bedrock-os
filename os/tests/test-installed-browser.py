@@ -5,6 +5,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import time
 
 assert os.geteuid() == 0 and pathlib.Path("/.dockerenv").exists()
 assert os.environ.get("BEDROCK_DISPOSABLE_SERVICE_TEST") == "1"
@@ -57,6 +58,38 @@ try:
       return 'BEDROCK_BROWSER_API_OK';
     })()""".replace("TOKEN", json.dumps(token))
     assert "BEDROCK_BROWSER_API_OK" in browser(["eval", "--stdin"], script).stdout
+    # Drive the actual controlled token field without putting the secret in argv.
+    entry = """(() => {
+      const input = document.querySelector('input[type="password"]');
+      if (!input) throw new Error('Missing token input');
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, TOKEN);
+      input.dispatchEvent(new Event('input', {bubbles:true}));
+      return 'INPUT_READY';
+    })()""".replace("TOKEN", json.dumps(token))
+    assert "INPUT_READY" in browser(["eval", "--stdin"], entry).stdout
+    browser(["find", "role", "button", "click", "--name", "Connect"])
+    deadline = time.monotonic() + 25
+    while time.monotonic() < deadline:
+        visible = browser(["get", "text", "body"]).stdout
+        if "Connected to Bedrock" in visible:
+            break
+        if "Server unavailable" in visible:
+            raise AssertionError("actual UI connection failed after valid token submission")
+        time.sleep(0.2)
+    else:
+        raise AssertionError("actual UI did not finish connecting")
+    assert "Your Bedrock server" in visible and "Some services need attention" in visible
+    assert "Live server data available" not in visible, "partial fixture was presented as fully healthy"
+    connected = browser(["snapshot", "-i"]).stdout
+    assert "Refresh" in connected and 'textbox "API token"' not in connected
+    browser(["screenshot", "/run/bedrock-connected-browser.png"])
+    assert "BEDROCK_NO_STORAGE" in browser(["eval", "--stdin"],
+        "(() => { if (localStorage.length || sessionStorage.length) throw new Error('Persisted credentials'); return 'BEDROCK_NO_STORAGE'; })()").stdout
+    # A page reload discards the in-memory credential and returns to the gate.
+    browser(["reload"])
+    browser(["wait", "--load", "networkidle"])
+    assert "Connect to your server" in browser(["snapshot", "-i"]).stdout
+    print("Installed UI form passed: token submission, real partial dashboard rendering, credential not persisted, reload returns to authentication.")
     print("Installed Chromium passed: explicit TLS trust, real bundle rendering, CSP-constrained authenticated/unauthenticated API fetch, no browser storage.")
 finally:
     browser(["close"], require_success=False)
