@@ -104,11 +104,13 @@ try:
     wait_ready()
     assert request("GET", "/api/v1/images", headers=auth)[0] == 200
     assert hashlib.sha256(certificate.read_bytes()).hexdigest() == identity_before
-    # Check actual access as the gateway UID, not only systemd configuration text.
+    # Check access with the running service's mount namespace and UID/groups.
+    pid = int(subprocess.check_output(["systemctl", "show", "--property=MainPID", "--value", "bedrock-web"]))
     account = pwd.getpwnam("bedrock-web")
     for protected in ("/var/lib/bedrock/web/identity/server.key", "/var/lib/bedrock/api/tokens.json"):
         denied = subprocess.run([
-            "setpriv", f"--reuid={account.pw_uid}", f"--regid={account.pw_gid}", "--init-groups",
+            "nsenter", f"--target={pid}", "--mount", "setpriv",
+            f"--reuid={account.pw_uid}", f"--regid={account.pw_gid}", "--groups=bedrock-api",
             "python3", "-c", "import pathlib,sys; pathlib.Path(sys.argv[1]).open('rb').close()", protected,
         ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         assert denied.returncode != 0, f"gateway UID can read protected state: {protected}"
