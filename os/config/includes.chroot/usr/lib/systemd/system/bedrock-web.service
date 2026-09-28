@@ -6,7 +6,8 @@ ConditionPathExists=/usr/share/bedrock/management-ui/index.html
 
 [Service]
 Type=simple
-ExecStart=/usr/sbin/nginx -c /etc/bedrock/web-gateway.conf -g "daemon off;"
+ExecStartPre=/usr/lib/bedrock/prepare-web-gateway
+ExecStart=/usr/sbin/nginx -c /run/bedrock-web/nginx.conf -g "daemon off;"
 Restart=on-failure
 RestartSec=2
 User=bedrock-web

@@ -7,6 +7,7 @@ import os
 import pathlib
 import pwd
 import shutil
+import socket
 import ssl
 import subprocess
 import sys
@@ -23,6 +24,9 @@ for name in ("bedrock-web", "bedrock-web-identity"):
 helper = pathlib.Path("/usr/lib/bedrock/initialize-web-identity")
 shutil.copyfile(root / "usr/lib/bedrock/initialize-web-identity", helper)
 helper.chmod(0o755)
+preparer = pathlib.Path("/usr/lib/bedrock/prepare-web-gateway")
+shutil.copyfile(root / "usr/lib/bedrock/prepare-web-gateway", preparer)
+preparer.chmod(0o755)
 pathlib.Path("/etc/bedrock").mkdir(exist_ok=True)
 for name in ("web-gateway.conf", "web-proxy.conf"):
     shutil.copyfile(root / "etc/bedrock" / name, pathlib.Path("/etc/bedrock") / name)
@@ -36,6 +40,11 @@ subprocess.run(["systemctl", "daemon-reload"], check=True)
 subprocess.run(["systemctl", "stop", "nginx"], check=True)
 subprocess.run(["systemctl", "start", "nginx"], check=True)
 assert subprocess.run(["systemctl", "is-active", "--quiet", "nginx"]).returncode != 0
+try:
+    with socket.create_connection(("127.0.0.1", 80), timeout=1):
+        raise AssertionError("distribution HTTP listener is still active")
+except ConnectionRefusedError:
+    pass
 subprocess.run(["systemctl", "start", "bedrock-web"], check=True)
 certificate = pathlib.Path("/var/lib/bedrock/web/identity/server.crt")
 context = ssl.create_default_context(cafile=str(certificate))
