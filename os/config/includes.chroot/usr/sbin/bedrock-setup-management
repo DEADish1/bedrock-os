@@ -1,0 +1,99 @@
+#!/usr/bin/python3
+"""Root-console management setup. Never pass bearer tokens to dialog argv."""
+import json
+import os
+import pathlib
+import re
+import subprocess
+import tempfile
+
+
+def run(arguments, **kwargs):
+    return subprocess.run(arguments, env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
+                                         "LC_ALL": "C", "TERM": os.environ.get("TERM", "linux")},
+                          text=True, **kwargs)
+
+
+def dialog(kind, title, message, *extra):
+    return run(["dialog", "--stdout", "--title", title, kind, message, "18", "76", *extra],
+               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+
+def activate():
+    state = json.loads(run(["/usr/lib/bedrock/manage-api-tokens", "list"],
+                           check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout)
+    if not any(item.get("revoked") is False for item in state["tokens"]):
+        raise ValueError("Issue an access token before enabling management.")
+    # Start first: an unsuccessful start must not newly enable boot activation.
+    run(["systemctl", "start", "bedrock-web.service"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    run(["systemctl", "is-active", "--quiet", "bedrock-web.service"], check=True)
+    run(["systemctl", "enable", "bedrock-web.service"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
+def issue_token():
+    result = dialog("--inputbox", "Access token name", "Use a unique lowercase name (2-32 letters, digits or hyphens).")
+    if result.returncode:
+        return
+    name = result.stdout.strip()
+    if not re.fullmatch(r"[a-z][a-z0-9-]{0,30}[a-z0-9]", name):
+        raise ValueError("Invalid token name. No token was issued.")
+    if dialog("--yesno", "Issue administrator access", "This token grants management access. Store it privately. Continue?").returncode:
+        return
+    result = run(["/usr/lib/bedrock/create-api-token", name], check=True,
+                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    token = json.loads(result.stdout)["token"]
+    if not re.fullmatch(r"[0-9a-f]{64}", token):
+        raise ValueError("Token helper returned an invalid result. Review token state locally.")
+    # The secret is displayed from a root-private tmpfs file, never in argv/logs.
+    try:
+        with tempfile.TemporaryDirectory(prefix="bedrock-management-", dir="/run") as temporary:
+            message = pathlib.Path(temporary) / "access.txt"
+            with message.open("x", encoding="utf-8") as output:
+                message.chmod(0o600)
+                output.write(f"Token name: {name}\n\n{token}\n\nStore this token privately. It will not be shown again.\n")
+            shown = dialog("--textbox", "Private management token", str(message))
+            if shown.returncode:
+                raise ValueError("Token display was cancelled; the newly issued token was revoked.")
+    except BaseException:
+        run(["/usr/lib/bedrock/manage-api-tokens", "revoke", name], check=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        raise
+
+
+def main():
+    if os.geteuid() != 0 or not all(os.isatty(fd) for fd in (0, 1, 2)):
+        raise SystemExit("Management setup requires a root-operated local terminal.")
+    os.umask(0o077)
+    while True:
+        choice = dialog("--menu", "Bedrock management access",
+                        "Local HTTPS only: https://127.0.0.1:8443. This does not enable LAN access.",
+                        "5", "token", "Issue a private access token", "enable", "Enable local HTTPS and boot startup",
+                        "trust", "Show certificate fingerprint", "disable", "Disable local HTTPS", "exit", "Return")
+        if choice.returncode or choice.stdout.strip() == "exit":
+            return
+        try:
+            action = choice.stdout.strip()
+            if action == "token":
+                issue_token()
+            elif action == "enable":
+                if dialog("--yesno", "Enable local management", "Enable loopback HTTPS now and at boot? An access token is required. No LAN listener will be opened.").returncode:
+                    continue
+                activate()
+                dialog("--msgbox", "Local management enabled", "Open https://127.0.0.1:8443 on this server. Verify the certificate fingerprint using this menu before trusting it. Enter the access token in the UI. LAN access is not configured.")
+            elif action == "trust":
+                fingerprint = run(["openssl", "x509", "-in", "/var/lib/bedrock/web/identity/server.crt",
+                                   "-noout", "-fingerprint", "-sha256"], check=True,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
+                dialog("--msgbox", "Verify local TLS identity", fingerprint + "\nCompare this SHA-256 fingerprint with the browser certificate before trusting it. Do not bypass a mismatch.")
+            elif action == "disable":
+                if dialog("--yesno", "Disable local management", "Stop HTTPS and disable boot startup? Tokens and the TLS identity will be preserved.").returncode:
+                    continue
+                run(["systemctl", "disable", "--now", "bedrock-web.service"], check=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except (ValueError, KeyError, OSError, subprocess.CalledProcessError):
+            # Do not display subprocess output: token-producing helpers may contain secrets.
+            dialog("--msgbox", "Management setup incomplete", "The operation did not finish. Existing tokens and identity are not automatically replaced. Check local service status; use a new token name if a previous issuance succeeded. No LAN listener was configured.")
+
+
+if __name__ == "__main__":
+    main()
