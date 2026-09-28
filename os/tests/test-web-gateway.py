@@ -45,7 +45,11 @@ try:
         raise AssertionError("distribution HTTP listener is still active")
 except ConnectionRefusedError:
     pass
-subprocess.run(["systemctl", "start", "bedrock-web"], check=True)
+subprocess.run(["systemctl", "log-level", "debug"], check=True)
+try:
+    subprocess.run(["systemctl", "start", "bedrock-web"], check=True)
+finally:
+    subprocess.run(["systemctl", "log-level", "info"], check=True)
 certificate = pathlib.Path("/var/lib/bedrock/web/identity/server.crt")
 context = ssl.create_default_context(cafile=str(certificate))
 
