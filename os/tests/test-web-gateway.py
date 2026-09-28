@@ -155,6 +155,7 @@ try:
         saved_key.unlink()
     subprocess.run(["systemctl", "start", "bedrock-web"], check=True)
     wait_ready()
+    subprocess.run(["python3", str(pathlib.Path(__file__).with_name("test-management-console.py"))], check=True, timeout=45)
     print("HTTPS gateway passed: trusted local TLS, real API authorization, origin/host checks, request limits, no default HTTP site, stable identity and unprivileged service.")
 finally:
     subprocess.run(["systemctl", "stop", "bedrock-web"], check=True)
