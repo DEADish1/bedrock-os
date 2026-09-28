@@ -25,4 +25,23 @@ if BEDROCK_API_TEST_MODE=1 BEDROCK_API_STATE_ROOT="$work" BEDROCK_API_TOKENS="$w
   printf 'error: already revoked API token was revoked again\n' >&2
   exit 1
 fi
+# A full store can recover a revoked name without replacing any active grant.
+jq -n --arg hash "$expected" '{schema:1,tokens:[range(0;16) | {name:("slot-"+tostring),sha256:$hash,created_at:"2026-08-31T00:00:00Z",revoked:(.==0)}]}' > "$work/tokens.json"
+cp "$work/tokens.json" "$work/before.json"
+fresh=$(printf 'c%.0s' $(seq 1 64))
+if BEDROCK_API_TEST_MODE=1 BEDROCK_API_STATE_ROOT="$work" BEDROCK_API_TOKENS="$work/tokens.json" BEDROCK_API_TOKEN="$fresh" "$creator" slot-new >/dev/null 2>&1; then
+  printf 'error: full token store accepted an unrelated name\n' >&2; exit 1
+fi
+cmp "$work/before.json" "$work/tokens.json"
+BEDROCK_API_TEST_MODE=1 BEDROCK_API_STATE_ROOT="$work" BEDROCK_API_TOKENS="$work/tokens.json" BEDROCK_API_TOKEN="$fresh" "$creator" slot-0 >/dev/null
+fresh_hash=$(printf '%s' "$fresh" | sha256sum | awk '{print $1}')
+jq -e --arg hash "$fresh_hash" '(.tokens|length)==16 and any(.tokens[]; .name=="slot-0" and .revoked==false and .sha256==$hash)' "$work/tokens.json" >/dev/null
+jq -S '[.tokens[]|select(.name!="slot-0")]|sort_by(.name)' "$work/before.json" > "$work/active-before.json"
+jq -S '[.tokens[]|select(.name!="slot-0")]|sort_by(.name)' "$work/tokens.json" > "$work/active-after.json"
+cmp "$work/active-before.json" "$work/active-after.json"
+cp "$work/tokens.json" "$work/recovered.json"
+if BEDROCK_API_TEST_MODE=1 BEDROCK_API_STATE_ROOT="$work" BEDROCK_API_TOKENS="$work/tokens.json" "$creator" slot-0 >/dev/null 2>&1; then
+  printf 'error: active recovered name was replaced\n' >&2; exit 1
+fi
+cmp "$work/recovered.json" "$work/tokens.json"
 printf 'Bedrock API token tests passed.\n'

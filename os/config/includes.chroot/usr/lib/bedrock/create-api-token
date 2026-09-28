@@ -25,10 +25,15 @@ chmod 0750 "$directory"
 if [ "${BEDROCK_API_TEST_MODE:-0}" != 1 ]; then chown root:bedrock-api "$directory"; fi
 if [ ! -e "$state" ]; then install -m 0640 /usr/share/bedrock/empty-api-tokens.json "$state"; fi
 [ -f "$state" ] && [ ! -L "$state" ] || fail "API token state is missing or indirect"
-jq -e --arg name "$name" '
-  (keys|sort)==(["schema","tokens"]|sort) and .schema==1 and (.tokens|type=="array" and length<16) and
-  all(.tokens[]; (keys|sort)==(["created_at","name","revoked","sha256"]|sort) and .name!=$name)
-' "$state" >/dev/null || fail "API token state is invalid, full, or already contains this name"
+valid='(keys|sort)==(["schema","tokens"]|sort) and .schema==1 and (.tokens|type=="array" and length<=16) and
+  all(.tokens[]; (keys|sort)==(["created_at","name","revoked","sha256"]|sort) and
+    (.name|type)=="string" and (.name|test("^[a-z][a-z0-9-]{0,30}[a-z0-9]$")) and
+    (.sha256|type)=="string" and (.sha256|test("^[0-9a-f]{64}$")) and
+    (.created_at|type)=="string" and (.revoked|type)=="boolean") and
+  (([.tokens[].name]|unique|length)==(.tokens|length)) and
+  all(.tokens[]; .name!=$name or .revoked==true) and
+  ((.tokens|length)<16 or any(.tokens[]; .name==$name and .revoked==true))'
+jq -e --arg name "$name" "$valid" "$state" >/dev/null || fail "API token state is invalid, full, or the name is active"
 hash=$(printf '%s' "$token" | sha256sum | awk '{print $1}')
 lock=$directory/.token.lock
 mkdir "$lock" 2>/dev/null || fail "another API token operation is running"
@@ -36,8 +41,8 @@ temporary=$(mktemp "$directory/.tokens.XXXXXX")
 cleanup() { status=$?; rm -f "$temporary"; rmdir "$lock" 2>/dev/null || true; exit "$status"; }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
-jq -e --arg name "$name" '(.tokens|length)<16 and all(.tokens[]; .name!=$name)' "$state" >/dev/null || fail "API token was added concurrently"
-jq -S --arg name "$name" --arg hash "$hash" --arg created "$now" '.tokens += [{name:$name,sha256:$hash,created_at:$created,revoked:false}] | .tokens |= sort_by(.name)' "$state" > "$temporary"
+jq -e --arg name "$name" "$valid" "$state" >/dev/null || fail "API token state changed concurrently"
+jq -S --arg name "$name" --arg hash "$hash" --arg created "$now" '.tokens = ([.tokens[] | select(.name!=$name)] + [{name:$name,sha256:$hash,created_at:$created,revoked:false}]) | .tokens |= sort_by(.name)' "$state" > "$temporary"
 chmod 0640 "$temporary"
 if [ "${BEDROCK_API_TEST_MODE:-0}" != 1 ]; then chown root:bedrock-api "$temporary"; fi
 mv "$temporary" "$state"; temporary=

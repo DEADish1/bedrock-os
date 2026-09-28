@@ -92,8 +92,14 @@ try:
     assert request("GET", "/api/v1/images", headers=replacement_auth)[0] == 200
     subprocess.run([str(manager), "revoke", "gateway-replacement"], check=True, stdout=subprocess.DEVNULL)
     assert request("GET", "/api/v1/images", headers=replacement_auth)[0] == 401
+    renewed = json.loads(subprocess.check_output(
+        ["/usr/lib/bedrock/create-api-token", "gateway-replacement"], text=True))["token"]
+    assert renewed != replacement
+    assert request("GET", "/api/v1/images", headers={**auth, "Authorization": f"Bearer {renewed}"})[0] == 200
+    assert request("GET", "/api/v1/images", headers=replacement_auth)[0] == 401
+    subprocess.run([str(manager), "revoke", "gateway-replacement"], check=True, stdout=subprocess.DEVNULL)
     assert request("GET", "/api/v1/images", headers=auth)[0] == 200
-    del replacement, replacement_auth
+    del replacement, replacement_auth, renewed
     assert request("GET", "/api/v1/images", headers={**auth, "Origin": "https://attacker.invalid"})[0] == 403
     assert request("GET", "/api/v1/images", headers={**auth, "Origin": "null"})[0] == 403
     assert request("GET", "/api/v1/images", headers={**auth, "Sec-Fetch-Site": "cross-site"})[0] == 403

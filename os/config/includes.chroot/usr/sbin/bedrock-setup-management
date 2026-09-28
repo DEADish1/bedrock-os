@@ -31,13 +31,13 @@ def activate():
 
 
 def issue_token():
-    result = dialog("--inputbox", "Access token name", "Use a unique lowercase name (2-32 letters, digits or hyphens).")
+    result = dialog("--inputbox", "Access token name", "Use a lowercase name (2-32 letters, digits or hyphens). A revoked name may be reused to recover a full token store; active names cannot be replaced.")
     if result.returncode:
         return
     name = result.stdout.strip()
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,30}[a-z0-9]", name):
         raise ValueError("Invalid token name. No token was issued.")
-    if dialog("--yesno", "Issue administrator access", "This token grants management access. Store it privately. Continue?").returncode:
+    if dialog("--yesno", "Issue administrator access", "This token grants management access. Reusing a revoked name replaces its saved grant record with a new key; the old key stays invalid. Store the new token privately. Continue?").returncode:
         return
     result = run(["/usr/lib/bedrock/create-api-token", name], check=True,
                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
