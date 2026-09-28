@@ -16,7 +16,7 @@ def run(arguments, **kwargs):
 
 def dialog(kind, title, message, *extra):
     return run(["dialog", "--stdout", "--title", title, kind, message, "18", "76", *extra],
-               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+               stdout=subprocess.PIPE)
 
 
 def activate():
