@@ -32,7 +32,15 @@ try:
         print((rejected.stdout + rejected.stderr)[-3000:], file=sys.stderr)
         raise AssertionError("untrusted-page rejection was not a certificate validation failure")
     browser(["close"], require_success=False)
-    base += ["--ca-cert", certificate]
+    # Chromium's Linux NSS store explicitly trusts this self-signed server leaf.
+    # The legacy location, when present, takes precedence over the M146+ default.
+    # https://chromium.googlesource.com/chromium/src/+/main/docs/linux/cert_management.md
+    trust = pathlib.Path.home() / ".pki/nssdb"
+    trust.mkdir(parents=True, exist_ok=True)
+    if not (trust / "cert9.db").exists():
+        subprocess.run(["certutil", "-N", "--empty-password", "-d", "sql:" + str(trust)], check=True)
+    subprocess.run(["certutil", "-A", "-d", "sql:" + str(trust), "-t", "P,,",
+                    "-n", "bedrock-disposable-server", "-i", certificate], check=True)
     browser(["open", "https://127.0.0.1:8443/"])
     browser(["wait", "--load", "networkidle"])
     snapshot = browser(["snapshot", "-i"]).stdout
