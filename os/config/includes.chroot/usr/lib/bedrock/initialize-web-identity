@@ -1,0 +1,28 @@
+#!/bin/sh
+set -eu
+[ "$(id -u)" -eq 0 ] || { printf 'error: web identity initialization requires root\n' >&2; exit 1; }
+directory=/var/lib/bedrock/web
+identity=$directory/identity
+[ -d "$directory" ] && [ ! -L "$directory" ] || { printf 'error: web identity state is unavailable or indirect\n' >&2; exit 1; }
+if [ -e "$identity" ] || [ -L "$identity" ]; then
+  [ -d "$identity" ] && [ ! -L "$identity" ] || exit 1
+  for file in server.crt server.key; do [ -f "$identity/$file" ] && [ ! -L "$identity/$file" ] || exit 1; done
+  openssl x509 -in "$identity/server.crt" -checkend 0 -noout >/dev/null
+  certificate_key=$(openssl x509 -in "$identity/server.crt" -pubkey -noout | openssl pkey -pubin -outform DER | sha256sum)
+  private_key=$(openssl pkey -in "$identity/server.key" -pubout -outform DER | sha256sum)
+  [ "$certificate_key" = "$private_key" ] || { printf 'error: web identity key does not match certificate\n' >&2; exit 1; }
+else
+  temporary=$(mktemp -d "$directory/.identity.XXXXXX")
+  trap 'rm -rf -- "$temporary"' EXIT
+  trap 'exit 130' INT TERM
+  umask 077
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -sha256 -nodes -days 365 \
+    -subj /CN=localhost -addext subjectAltName=DNS:localhost,IP:127.0.0.1 \
+    -keyout "$temporary/server.key" -out "$temporary/server.crt" >/dev/null 2>&1
+  chmod 0600 "$temporary/server.key" "$temporary/server.crt"
+  sync -f "$temporary"
+  mv -T "$temporary" "$identity"
+  sync -f "$directory"
+  trap - EXIT INT TERM
+fi
+openssl x509 -in "$identity/server.crt" -noout -fingerprint -sha256

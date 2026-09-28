@@ -151,6 +151,9 @@ def main():
         assert len(tasks) == 2 and all(item["state"] == "succeeded" for item in tasks)
         events = [json.loads(line) for line in (state / "audit.jsonl").read_text().splitlines()]
         assert len(events) == 2 and {item["action"] for item in events} == {"image-upload", "image-discard"}
+        if managed:
+            subprocess.run(["python3", str(pathlib.Path(__file__).with_name("test-web-gateway.py"))],
+                           input=token, text=True, check=True, timeout=60)
         _, _, headers = request("GET", "/api/v1/images")
         result, body, _ = request("PUT", "/api/v1/images/recovery/upload", contents,
             {"Content-Type": "application/octet-stream", "X-Bedrock-Image-Type": "iso", "If-Match": headers["ETag"]})

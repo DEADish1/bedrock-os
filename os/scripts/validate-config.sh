@@ -271,6 +271,7 @@ python3 "$OS_DIR/tests/test-bedrock-api.py"
 python3 "$OS_DIR/tests/test-upload-recovery.py"
 python3 "$OS_DIR/tests/test-installed-ui-manifest.py"
 sh -n "$OS_DIR/scripts/build-installed-ui.sh"
+sh -n "$OS_DIR/config/includes.chroot/usr/lib/bedrock/initialize-web-identity"
 if [ "${GITHUB_ACTIONS:-false}" = true ]; then
   sh "$OS_DIR/tests/test-api-service-boundary.sh"
   sh "$OS_DIR/tests/test-api-systemd-boundary.sh"

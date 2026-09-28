@@ -1,0 +1,35 @@
+[Unit]
+Description=Bedrock local HTTPS management gateway
+Requires=bedrock-api.service bedrock-web-identity.service
+After=bedrock-api.service bedrock-web-identity.service
+ConditionPathExists=/usr/share/bedrock/management-ui/index.html
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/nginx -c /etc/bedrock/web-gateway.conf -g "daemon off;"
+Restart=on-failure
+RestartSec=2
+User=bedrock-web
+Group=bedrock-web
+SupplementaryGroups=bedrock-api
+RuntimeDirectory=bedrock-web
+RuntimeDirectoryMode=0700
+LoadCredential=tls-cert:/var/lib/bedrock/web/identity/server.crt
+LoadCredential=tls-key:/var/lib/bedrock/web/identity/server.key
+UMask=0077
+NoNewPrivileges=true
+CapabilityBoundingSet=
+PrivateDevices=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+InaccessiblePaths=/var/lib/bedrock
+RestrictAddressFamilies=AF_UNIX AF_INET
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

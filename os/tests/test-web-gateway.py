@@ -1,0 +1,95 @@
+#!/usr/bin/python3
+"""Run inside the disposable systemd fixture while the real API is active."""
+import hashlib
+import http.client
+import json
+import os
+import pathlib
+import pwd
+import shutil
+import ssl
+import subprocess
+import sys
+import time
+
+assert os.environ.get("BEDROCK_DISPOSABLE_SERVICE_TEST") == "1" and pathlib.Path("/.dockerenv").exists()
+assert os.geteuid() == 0
+token = sys.stdin.read().strip()
+assert len(token) == 64
+root = pathlib.Path(__file__).resolve().parents[1] / "config/includes.chroot"
+subprocess.run(["useradd", "--system", "--user-group", "--home-dir", "/nonexistent", "bedrock-web"], check=True)
+for name in ("bedrock-web", "bedrock-web-identity"):
+    shutil.copyfile(root / f"usr/lib/systemd/system/{name}.service", f"/etc/systemd/system/{name}.service")
+helper = pathlib.Path("/usr/lib/bedrock/initialize-web-identity")
+shutil.copyfile(root / "usr/lib/bedrock/initialize-web-identity", helper)
+helper.chmod(0o755)
+pathlib.Path("/etc/bedrock").mkdir(exist_ok=True)
+for name in ("web-gateway.conf", "web-proxy.conf"):
+    shutil.copyfile(root / "etc/bedrock" / name, pathlib.Path("/etc/bedrock") / name)
+dropin = pathlib.Path("/etc/systemd/system/nginx.service.d")
+dropin.mkdir(exist_ok=True)
+shutil.copyfile(root / "etc/systemd/system/nginx.service.d/bedrock.conf", dropin / "bedrock.conf")
+ui = pathlib.Path("/usr/share/bedrock/management-ui")
+ui.mkdir()
+(ui / "index.html").write_text("<!doctype html><title>Bedrock gateway fixture</title>")
+subprocess.run(["systemctl", "daemon-reload"], check=True)
+subprocess.run(["systemctl", "stop", "nginx"], check=True)
+subprocess.run(["systemctl", "start", "nginx"], check=True)
+assert subprocess.run(["systemctl", "is-active", "--quiet", "nginx"]).returncode != 0
+subprocess.run(["systemctl", "start", "bedrock-web"], check=True)
+certificate = pathlib.Path("/var/lib/bedrock/web/identity/server.crt")
+context = ssl.create_default_context(cafile=str(certificate))
+
+
+def request(method, path, body=None, headers=None):
+    connection = http.client.HTTPSConnection("127.0.0.1", 8443, context=context, timeout=5)
+    try:
+        connection.request(method, path, body=body, headers=headers or {})
+        result = connection.getresponse()
+        return result.status, result.read(), dict(result.getheaders())
+    finally:
+        connection.close()
+
+
+try:
+    for _ in range(100):
+        try:
+            if request("GET", "/")[0] == 200:
+                break
+        except OSError:
+            pass
+        time.sleep(0.05)
+    else:
+        raise AssertionError("HTTPS gateway did not start")
+    status, body, headers = request("GET", "/")
+    assert status == 200 and b"Bedrock gateway fixture" in body
+    assert headers["X-Content-Type-Options"] == "nosniff"
+    assert headers["Referrer-Policy"] == "no-referrer"
+    assert "frame-ancestors 'none'" in headers["Content-Security-Policy"]
+    auth = {"Authorization": f"Bearer {token}", "Origin": "https://127.0.0.1:8443", "Sec-Fetch-Site": "same-origin"}
+    assert request("GET", "/api/v1/images")[0] == 401
+    assert request("GET", "/api/v1/images", headers={**auth, "Authorization": "Bearer " + "0" * 64})[0] == 401
+    status, body, headers = request("GET", "/api/v1/images", headers=auth)
+    assert status == 200 and json.loads(body)["schema"] == 1 and "ETag" in headers
+    assert request("GET", "/api/v1/images", headers={**auth, "Origin": "https://attacker.invalid"})[0] == 403
+    assert request("GET", "/api/v1/images", headers={**auth, "Origin": "null"})[0] == 403
+    assert request("GET", "/api/v1/images", headers={**auth, "Sec-Fetch-Site": "cross-site"})[0] == 403
+    assert request("GET", "/api/v1/images", headers={**auth, "Host": "attacker.invalid:8443"})[0] == 421
+    assert request("GET", "/.git/config")[0] == 404
+    assert request("GET", "/build-manifest.json")[0] == 404
+    assert request("GET", "/var/lib/bedrock/api/tokens.json")[0] == 404
+    assert request("POST", "/api/v1/settings", b"x" * 65537, auth)[0] == 413
+    websocket = {**auth, "Connection": "Upgrade", "Upgrade": "websocket", "Sec-WebSocket-Version": "13",
+                 "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==", "Sec-WebSocket-Protocol": "binary"}
+    assert request("GET", "/api/v1/vms/guest/console", headers=websocket)[0] == 400
+    assert request("GET", "/api/v1/vms/guest/console", headers={**websocket, "Origin": "https://attacker.invalid"})[0] == 403
+    pid = int(subprocess.check_output(["systemctl", "show", "--property=MainPID", "--value", "bedrock-web"]))
+    process = dict(line.split(":", 1) for line in pathlib.Path(f"/proc/{pid}/status").read_text().splitlines() if ":" in line)
+    assert all(int(value) == pwd.getpwnam("bedrock-web").pw_uid for value in process["Uid"].split())
+    assert int(process["CapBnd"].strip(), 16) == 0 and process["NoNewPrivs"].strip() == "1"
+    identity_before = hashlib.sha256(certificate.read_bytes()).hexdigest()
+    subprocess.run(["systemctl", "restart", "bedrock-web"], check=True)
+    assert hashlib.sha256(certificate.read_bytes()).hexdigest() == identity_before
+    print("HTTPS gateway passed: trusted local TLS, real API authorization, origin/host checks, request limits, no default HTTP site, stable identity and unprivileged service.")
+finally:
+    subprocess.run(["systemctl", "stop", "bedrock-web"], check=True)

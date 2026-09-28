@@ -1,0 +1,22 @@
+[Unit]
+Description=Initialize Bedrock local management TLS identity
+Before=bedrock-web.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/bedrock/initialize-web-identity
+User=root
+Group=root
+StateDirectory=bedrock/web
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+CapabilityBoundingSet=
+PrivateDevices=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true

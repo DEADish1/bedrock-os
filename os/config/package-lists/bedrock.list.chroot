@@ -29,6 +29,7 @@ lvm2
 mdadm
 network-manager
 nfs-kernel-server
+nginx-light
 nut-client
 nvme-cli
 openssh-client
