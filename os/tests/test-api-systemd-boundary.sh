@@ -24,7 +24,7 @@ stage_created=1
 container_id=$(docker run --detach --privileged --cgroupns=private \
   --tmpfs /run --tmpfs /run/lock --volume "$root:/workspace:ro" --workdir /workspace \
   --env container=docker --env BEDROCK_DISPOSABLE_SERVICE_TEST=1 --env BEDROCK_SERVICE_MANAGER=systemd \
-  debian:13.6-slim sh -ec 'apt-get update -qq && apt-get install -y --no-install-recommends systemd systemd-sysv dbus python3 util-linux passwd jq openssl xxd ca-certificates nginx-light dialog >/dev/null && mount -o remount,rw /sys/fs/cgroup && mount --make-shared /run && exec /sbin/init')
+  debian:13.6-slim sh -ec 'apt-get update -qq && apt-get install -y --no-install-recommends systemd systemd-sysv dbus python3 util-linux passwd jq openssl xxd ca-certificates nginx-light dialog chromium nodejs npm libnss3-tools >/dev/null && npm install --global --no-audit --no-fund agent-browser@0.38.1 >/dev/null && mount -o remount,rw /sys/fs/cgroup && mount --make-shared /run && exec /sbin/init')
 ready=0
 for attempt in $(seq 1 120); do
   [ "$(docker inspect --format '{{.State.Running}}' "$container_id")" = true ] || break

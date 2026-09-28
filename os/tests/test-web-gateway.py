@@ -172,6 +172,7 @@ try:
     wait_ready()
     for scenario in ("issue", "decline", "failure"):
         subprocess.run(["python3", str(pathlib.Path(__file__).with_name("test-management-console.py")), scenario], check=True, timeout=45)
+    subprocess.run(["python3", str(pathlib.Path(__file__).with_name("test-installed-browser.py"))], input=token, text=True, check=True, timeout=180)
     print("HTTPS gateway passed: trusted local TLS, real API authorization, origin/host checks, request limits, no default HTTP site, stable identity and unprivileged service.")
 finally:
     subprocess.run(["systemctl", "stop", "bedrock-web"], check=True)

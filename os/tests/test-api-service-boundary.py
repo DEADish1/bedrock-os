@@ -153,7 +153,7 @@ def main():
         assert len(events) == 2 and {item["action"] for item in events} == {"image-upload", "image-discard"}
         if managed:
             subprocess.run(["python3", str(pathlib.Path(__file__).with_name("test-web-gateway.py"))],
-                           input=token, text=True, check=True, timeout=60)
+                           input=token, text=True, check=True, timeout=240)
         _, _, headers = request("GET", "/api/v1/images")
         result, body, _ = request("PUT", "/api/v1/images/recovery/upload", contents,
             {"Content-Type": "application/octet-stream", "X-Bedrock-Image-Type": "iso", "If-Match": headers["ETag"]})
