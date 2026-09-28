@@ -75,6 +75,25 @@ class ManagementSetupTests(unittest.TestCase):
     def test_private_display_and_cleanup(self):
         self.check_display(False)
 
+    def test_revocation_warns_on_last_token(self):
+        state = '{"tokens":[{"name":"owner","revoked":false},{"name":"old","revoked":true}]}'
+        with patch.object(setup, "run", return_value=SimpleNamespace(stdout=state)) as command, patch.object(setup, "dialog", side_effect=[SimpleNamespace(returncode=0, stdout="owner"), SimpleNamespace(returncode=0), SimpleNamespace(returncode=0)]) as screen:
+            setup.revoke_token()
+            self.assertIn("LAST active token", screen.call_args_list[1].args[2])
+            self.assertNotIn("old", screen.call_args_list[0].args)
+            self.assertEqual(command.call_args_list[-1].args[0], ["/usr/lib/bedrock/manage-api-tokens", "revoke", "owner"])
+
+    def test_revocation_cancel_does_not_mutate(self):
+        with patch.object(setup, "run", return_value=SimpleNamespace(stdout='{"tokens":[{"name":"owner","revoked":false}]}')) as command, patch.object(setup, "dialog", side_effect=[SimpleNamespace(returncode=0, stdout="owner"), SimpleNamespace(returncode=1)]):
+            setup.revoke_token()
+            self.assertEqual(command.call_count, 1)
+
+    def test_revocation_rejects_unlisted_selection(self):
+        with patch.object(setup, "run", return_value=SimpleNamespace(stdout='{"tokens":[{"name":"owner","revoked":false}]}')) as command, patch.object(setup, "dialog", return_value=SimpleNamespace(returncode=0, stdout="other")):
+            with self.assertRaises(ValueError):
+                setup.revoke_token()
+            self.assertEqual(command.call_count, 1)
+
     def test_display_cancel_revokes_token(self):
         self.check_display(True)
 

@@ -60,6 +60,32 @@ def issue_token():
         raise
 
 
+def revoke_token():
+    state = json.loads(run(["/usr/lib/bedrock/manage-api-tokens", "list"], check=True,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout)
+    active = [item["name"] for item in state["tokens"] if item["revoked"] is False]
+    if not active:
+        dialog("--msgbox", "Access tokens", "There are no active access tokens.")
+        return
+    if not all(re.fullmatch(r"[a-z][a-z0-9-]{0,30}[a-z0-9]", name) for name in active):
+        raise ValueError("Invalid saved token name.")
+    entries = [value for name in active for value in (name, "Active administrator token")]
+    selected = dialog("--menu", "Revoke access token", "Choose the token to permanently revoke.", "8", *entries)
+    if selected.returncode:
+        return
+    name = selected.stdout.strip()
+    if name not in active:
+        raise ValueError("Selected token is no longer available.")
+    warning = f"Permanently revoke '{name}'? New API requests using it will be rejected."
+    if len(active) == 1:
+        warning += " This is the LAST active token. Browser management will be locked out until you issue another token locally."
+    if dialog("--yesno", "Confirm token revocation", warning).returncode:
+        return
+    run(["/usr/lib/bedrock/manage-api-tokens", "revoke", name], check=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    dialog("--msgbox", "Token revoked", "The selected token is revoked. Existing open streams may need to be closed separately. Issue and verify a replacement token before revoking another working credential.")
+
+
 def main():
     if os.geteuid() != 0 or not all(os.isatty(fd) for fd in (0, 1, 2)):
         raise SystemExit("Management setup requires a root-operated local terminal.")
@@ -67,7 +93,8 @@ def main():
     while True:
         choice = dialog("--menu", "Bedrock management access",
                         "Local HTTPS only: https://127.0.0.1:8443. This does not enable LAN access.",
-                        "5", "token", "Issue a private access token", "enable", "Enable local HTTPS and boot startup",
+                        "6", "token", "Issue a private access token", "revoke", "Revoke an access token",
+                        "enable", "Enable local HTTPS and boot startup",
                         "trust", "Show certificate fingerprint", "disable", "Disable local HTTPS", "exit", "Return")
         if choice.returncode or choice.stdout.strip() == "exit":
             return
@@ -75,6 +102,8 @@ def main():
             action = choice.stdout.strip()
             if action == "token":
                 issue_token()
+            elif action == "revoke":
+                revoke_token()
             elif action == "enable":
                 if dialog("--yesno", "Enable local management", "Enable loopback HTTPS now and at boot? An access token is required. No LAN listener will be opened.").returncode:
                     continue
