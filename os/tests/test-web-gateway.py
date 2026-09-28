@@ -27,6 +27,9 @@ helper.chmod(0o755)
 preparer = pathlib.Path("/usr/lib/bedrock/prepare-web-gateway")
 shutil.copyfile(root / "usr/lib/bedrock/prepare-web-gateway", preparer)
 preparer.chmod(0o755)
+manager = pathlib.Path("/usr/lib/bedrock/manage-api-tokens")
+shutil.copyfile(root / "usr/lib/bedrock/manage-api-tokens", manager)
+manager.chmod(0o755)
 pathlib.Path("/etc/bedrock").mkdir(exist_ok=True)
 for name in ("web-gateway.conf", "web-proxy.conf"):
     shutil.copyfile(root / "etc/bedrock" / name, pathlib.Path("/etc/bedrock") / name)
@@ -83,6 +86,14 @@ try:
     assert request("GET", "/api/v1/images", headers={**auth, "Authorization": "Bearer " + "0" * 64})[0] == 401
     status, body, headers = request("GET", "/api/v1/images", headers=auth)
     assert status == 200 and json.loads(body)["schema"] == 1 and "ETag" in headers
+    replacement = json.loads(subprocess.check_output(
+        ["/usr/lib/bedrock/create-api-token", "gateway-replacement"], text=True))["token"]
+    replacement_auth = {**auth, "Authorization": f"Bearer {replacement}"}
+    assert request("GET", "/api/v1/images", headers=replacement_auth)[0] == 200
+    subprocess.run([str(manager), "revoke", "gateway-replacement"], check=True, stdout=subprocess.DEVNULL)
+    assert request("GET", "/api/v1/images", headers=replacement_auth)[0] == 401
+    assert request("GET", "/api/v1/images", headers=auth)[0] == 200
+    del replacement, replacement_auth
     assert request("GET", "/api/v1/images", headers={**auth, "Origin": "https://attacker.invalid"})[0] == 403
     assert request("GET", "/api/v1/images", headers={**auth, "Origin": "null"})[0] == 403
     assert request("GET", "/api/v1/images", headers={**auth, "Sec-Fetch-Site": "cross-site"})[0] == 403
