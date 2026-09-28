@@ -107,12 +107,15 @@ try:
     # Check access with the running service's mount namespace and UID/groups.
     pid = int(subprocess.check_output(["systemctl", "show", "--property=MainPID", "--value", "bedrock-web"]))
     account = pwd.getpwnam("bedrock-web")
+    sandbox_reader = [
+        "nsenter", f"--target={pid}", "--mount", "setpriv",
+        f"--reuid={account.pw_uid}", f"--regid={account.pw_gid}", "--groups=bedrock-api",
+        "python3", "-c", "import pathlib,sys; pathlib.Path(sys.argv[1]).open('rb').close()",
+    ]
+    # Positive control prevents a broken nsenter/setpriv invocation from passing denials.
+    subprocess.run(sandbox_reader + ["/run/credentials/bedrock-web.service/tls-cert"], check=True)
     for protected in ("/var/lib/bedrock/web/identity/server.key", "/var/lib/bedrock/api/tokens.json"):
-        denied = subprocess.run([
-            "nsenter", f"--target={pid}", "--mount", "setpriv",
-            f"--reuid={account.pw_uid}", f"--regid={account.pw_gid}", "--groups=bedrock-api",
-            "python3", "-c", "import pathlib,sys; pathlib.Path(sys.argv[1]).open('rb').close()", protected,
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        denied = subprocess.run(sandbox_reader + [protected], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         assert denied.returncode != 0, f"gateway UID can read protected state: {protected}"
     # A bad persistent identity must fail closed without replacing owner trust.
     subprocess.run(["systemctl", "stop", "bedrock-web"], check=True)
