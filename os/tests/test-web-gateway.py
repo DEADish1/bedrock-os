@@ -45,11 +45,7 @@ try:
         raise AssertionError("distribution HTTP listener is still active")
 except ConnectionRefusedError:
     pass
-subprocess.run(["systemctl", "log-level", "debug"], check=True)
-try:
-    subprocess.run(["systemctl", "start", "bedrock-web"], check=True)
-finally:
-    subprocess.run(["systemctl", "log-level", "info"], check=True)
+subprocess.run(["systemctl", "start", "bedrock-web"], check=True)
 certificate = pathlib.Path("/var/lib/bedrock/web/identity/server.crt")
 context = ssl.create_default_context(cafile=str(certificate))
 
@@ -64,16 +60,19 @@ def request(method, path, body=None, headers=None):
         connection.close()
 
 
-try:
+def wait_ready():
     for _ in range(100):
         try:
             if request("GET", "/")[0] == 200:
-                break
+                return
         except OSError:
             pass
         time.sleep(0.05)
-    else:
-        raise AssertionError("HTTPS gateway did not start")
+    raise AssertionError("HTTPS gateway did not start")
+
+
+try:
+    wait_ready()
     status, body, headers = request("GET", "/")
     assert status == 200 and b"Bedrock gateway fixture" in body
     assert headers["X-Content-Type-Options"] == "nosniff"
@@ -102,7 +101,31 @@ try:
     assert int(process["CapBnd"].strip(), 16) == 0 and process["NoNewPrivs"].strip() == "1"
     identity_before = hashlib.sha256(certificate.read_bytes()).hexdigest()
     subprocess.run(["systemctl", "restart", "bedrock-web"], check=True)
+    wait_ready()
+    assert request("GET", "/api/v1/images", headers=auth)[0] == 200
     assert hashlib.sha256(certificate.read_bytes()).hexdigest() == identity_before
+    # Check actual access as the gateway UID, not only systemd configuration text.
+    account = pwd.getpwnam("bedrock-web")
+    for protected in ("/var/lib/bedrock/web/identity/server.key", "/var/lib/bedrock/api/tokens.json"):
+        denied = subprocess.run([
+            "setpriv", f"--reuid={account.pw_uid}", f"--regid={account.pw_gid}", "--init-groups",
+            "python3", "-c", "import pathlib,sys; pathlib.Path(sys.argv[1]).open('rb').close()", protected,
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        assert denied.returncode != 0, f"gateway UID can read protected state: {protected}"
+    # A bad persistent identity must fail closed without replacing owner trust.
+    subprocess.run(["systemctl", "stop", "bedrock-web"], check=True)
+    private_key = certificate.with_name("server.key")
+    saved_key = private_key.with_name("server.key.saved")
+    private_key.rename(saved_key)
+    try:
+        private_key.symlink_to(saved_key.name)
+        assert subprocess.run([str(helper)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0
+        assert private_key.is_symlink() and hashlib.sha256(certificate.read_bytes()).hexdigest() == identity_before
+    finally:
+        private_key.unlink()
+        saved_key.rename(private_key)
+    subprocess.run(["systemctl", "start", "bedrock-web"], check=True)
+    wait_ready()
     print("HTTPS gateway passed: trusted local TLS, real API authorization, origin/host checks, request limits, no default HTTP site, stable identity and unprivileged service.")
 finally:
     subprocess.run(["systemctl", "stop", "bedrock-web"], check=True)
