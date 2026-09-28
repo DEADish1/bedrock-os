@@ -18,6 +18,8 @@ certificate = "/var/lib/bedrock/web/identity/server.crt"
 def browser(arguments, script=None, require_success=True):
     result = subprocess.run(base + arguments, input=script, text=True, capture_output=True, timeout=45)
     if require_success and result.returncode:
+        if arguments[0] == "open":
+            print((result.stdout + result.stderr)[-3000:], file=sys.stderr)
         # Neither argv nor captured output should print secret-bearing evaluations.
         raise AssertionError("installed browser command failed: " + arguments[0])
     return result
@@ -26,6 +28,9 @@ def browser(arguments, script=None, require_success=True):
 try:
     rejected = browser(["open", "https://127.0.0.1:8443/"], require_success=False)
     assert rejected.returncode != 0, "browser unexpectedly trusted the unprovisioned self-signed identity"
+    if "ERR_CERT_AUTHORITY_INVALID" not in rejected.stdout + rejected.stderr:
+        print((rejected.stdout + rejected.stderr)[-3000:], file=sys.stderr)
+        raise AssertionError("untrusted-page rejection was not a certificate validation failure")
     browser(["close"], require_success=False)
     base += ["--ca-cert", certificate]
     browser(["open", "https://127.0.0.1:8443/"])
