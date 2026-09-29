@@ -13,6 +13,7 @@ import ssl
 import subprocess
 import sys
 import time
+import uuid
 
 assert os.environ.get("BEDROCK_DISPOSABLE_SERVICE_TEST") == "1" and pathlib.Path("/.dockerenv").exists()
 assert os.geteuid() == 0
@@ -31,6 +32,10 @@ preparer.chmod(0o755)
 manager = pathlib.Path("/usr/lib/bedrock/manage-api-tokens")
 shutil.copyfile(root / "usr/lib/bedrock/manage-api-tokens", manager)
 manager.chmod(0o755)
+for relative in ("usr/sbin/bedrock-update-settings", "usr/lib/bedrock/require-normal-mode", "usr/share/bedrock/default-update-policy.json"):
+    installed = pathlib.Path("/") / relative
+    shutil.copyfile(root / relative, installed)
+    installed.chmod(0o644 if relative.endswith(".json") else 0o755)
 pathlib.Path("/etc/bedrock").mkdir(exist_ok=True)
 for name in ("web-gateway.conf", "web-proxy.conf"):
     shutil.copyfile(root / "etc/bedrock" / name, pathlib.Path("/etc/bedrock") / name)
@@ -164,6 +169,40 @@ try:
     events = [json.loads(line) for line in audit_file.read_text().splitlines()]
     assert len(events) == events_before + 2
     assert {event["action"] for event in events[-2:]} == {"image-upload", "image-discard"}
+    settings_tasks = len(json.loads(task_file.read_text())["tasks"])
+    settings_audit = len(audit_file.read_text().splitlines())
+    def settings_request(body, key, match=None):
+        if match is None:
+            code, _, current = request("GET", "/api/v1/settings", headers=auth)
+            assert code == 200
+            match = current["ETag"]
+        return request("PUT", "/api/v1/settings", json.dumps(body),
+                       {**auth, "Content-Type": "application/json", "Idempotency-Key": key, "If-Match": match})
+    change = {"schema": 1, "setting": "automatic_checks", "value": True, "beta_risk_acknowledged": False}
+    key = str(uuid.uuid4())
+    assert settings_request(change, key, '"stale"')[0] == 412
+    assert settings_request({**change, "unexpected": True}, key)[0] == 400
+    assert settings_request(change, key)[0] == 200
+    policy = pathlib.Path("/var/lib/bedrock/settings/update-policy.json")
+    assert json.loads(policy.read_text())["automatic_checks"] is True
+    code, replay, _ = settings_request(change, key)
+    assert code == 200 and json.loads(replay)["replayed"] is True
+    assert settings_request({**change, "value": False}, key)[0] == 409
+    assert json.loads(policy.read_text())["automatic_checks"] is True
+    assert settings_request({**change, "value": False}, str(uuid.uuid4()))[0] == 200
+    beta = {"schema": 1, "setting": "channel", "value": "beta", "beta_risk_acknowledged": False}
+    assert settings_request(beta, str(uuid.uuid4()))[0] == 400
+    assert json.loads(policy.read_text())["channel"] == "stable"
+    assert settings_request({**beta, "beta_risk_acknowledged": True}, str(uuid.uuid4()))[0] == 200
+    assert json.loads(policy.read_text())["channel"] == "beta"
+    assert settings_request({**beta, "value": "stable"}, str(uuid.uuid4()))[0] == 200
+    assert json.loads(policy.read_text())["channel"] == "stable"
+    assert json.loads(policy.read_text())["automatic_checks"] is False
+    assert len(json.loads(task_file.read_text())["tasks"]) == settings_tasks + 4
+    settings_events = [json.loads(line) for line in audit_file.read_text().splitlines()]
+    assert len(settings_events) == settings_audit + 4
+    assert all(event["action"] == "update-policy" for event in settings_events[-4:])
+    print("HTTPS update-policy mutations passed: real policy changes, stale/malformed denial, replay/conflict, beta acknowledgement, four terminal audit events.")
     websocket = {**auth, "Connection": "Upgrade", "Upgrade": "websocket", "Sec-WebSocket-Version": "13",
                  "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==", "Sec-WebSocket-Protocol": "binary"}
     assert request("GET", "/api/v1/vms/guest/console", headers=websocket)[0] == 400

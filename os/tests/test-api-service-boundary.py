@@ -229,9 +229,9 @@ api["audited_discard_image_upload"]("recovery", {"schema": 1, "sha256": digest,
             assert list(uploads.iterdir()) == [root_import_lock]
             assert root_import_lock.stat().st_uid == 0 and stat.S_IMODE(root_import_lock.stat().st_mode) == 0o600
             tasks = json.loads((state / "tasks.json").read_text())["tasks"]
-            assert len(tasks) == (6 if managed else 4) and all(item["state"] == "succeeded" for item in tasks)
+            assert len(tasks) == (10 if managed else 4) and all(item["state"] == "succeeded" for item in tasks)
             events = [json.loads(line) for line in (state / "audit.jsonl").read_text().splitlines()]
-            assert len(events) == (6 if managed else 4), "restart duplicated terminal audit"
+            assert len(events) == (10 if managed else 4), "restart duplicated terminal audit"
             api.terminate()
             api.wait(timeout=5)
         print("Production UID boundary passed: API unprivileged, broker root with no capabilities, peer rejection, protected state, upload/discard audit.")
