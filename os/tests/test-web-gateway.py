@@ -117,6 +117,36 @@ try:
     assert request("GET", "/build-manifest.json")[0] == 404
     assert request("GET", "/var/lib/bedrock/api/tokens.json")[0] == 404
     assert request("POST", "/api/v1/settings", b"x" * 65537, auth)[0] == 413
+    # Exercise mutations through nginx, including an upload above the ordinary 64 KiB limit.
+    task_file = pathlib.Path("/var/lib/bedrock/api/tasks.json")
+    audit_file = task_file.with_name("audit.jsonl")
+    tasks_before = len(json.loads(task_file.read_text())["tasks"])
+    events_before = len(audit_file.read_text().splitlines())
+    upload_path = "/api/v1/images/gateway-upload/upload"
+    _, _, before_headers = request("GET", "/api/v1/images", headers=auth)
+    upload_headers = {**auth, "Content-Type": "application/octet-stream", "X-Bedrock-Image-Type": "iso", "If-Match": before_headers["ETag"]}
+    assert request("PUT", upload_path, b"denied", {**upload_headers, "Authorization": "Bearer " + "0" * 64})[0] == 401
+    assert request("PUT", upload_path, b"stale", {**upload_headers, "If-Match": '"stale"'})[0] == 412
+    payload = b"gateway-streaming-acceptance\n" * 3000
+    assert len(payload) > 65536
+    assert request("PUT", upload_path, payload, upload_headers)[0] == 200
+    staged = pathlib.Path("/var/lib/bedrock/virtualization/uploads/gateway-upload.iso")
+    assert staged.read_bytes() == payload
+    digest = hashlib.sha256(payload).hexdigest()
+    _, _, refreshed = request("GET", "/api/v1/images", headers=auth)
+    assert refreshed["ETag"] != before_headers["ETag"]
+    discard = {"schema": 1, "sha256": digest, "confirmation": f"DISCARD IMAGE UPLOAD gateway-upload {digest}"}
+    discard_headers = {**auth, "Content-Type": "application/json", "If-Match": refreshed["ETag"]}
+    assert request("DELETE", upload_path, json.dumps(discard), {**discard_headers, "If-Match": before_headers["ETag"]})[0] == 412
+    assert request("DELETE", upload_path, json.dumps({**discard, "confirmation": "wrong"}), discard_headers)[0] == 400
+    assert staged.read_bytes() == payload
+    assert request("DELETE", upload_path, json.dumps(discard), discard_headers)[0] == 200
+    assert not staged.exists()
+    assert request("DELETE", upload_path, json.dumps(discard), discard_headers)[0] == 412
+    assert len(json.loads(task_file.read_text())["tasks"]) == tasks_before + 2
+    events = [json.loads(line) for line in audit_file.read_text().splitlines()]
+    assert len(events) == events_before + 2
+    assert {event["action"] for event in events[-2:]} == {"image-upload", "image-discard"}
     websocket = {**auth, "Connection": "Upgrade", "Upgrade": "websocket", "Sec-WebSocket-Version": "13",
                  "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==", "Sec-WebSocket-Protocol": "binary"}
     assert request("GET", "/api/v1/vms/guest/console", headers=websocket)[0] == 400
