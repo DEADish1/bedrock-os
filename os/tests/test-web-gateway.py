@@ -6,6 +6,7 @@ import json
 import os
 import pathlib
 import pwd
+import re
 import shutil
 import socket
 import ssl
@@ -91,6 +92,22 @@ try:
         if asset["path"].endswith(".css"):
             assert asset_headers["Content-Type"].startswith("text/css")
     auth = {"Authorization": f"Bearer {token}", "Origin": "https://127.0.0.1:8443", "Sec-Fetch-Site": "same-origin"}
+    contract = json.loads((root / "usr/share/bedrock/api/openapi-v1.json").read_text())
+    mutations = [(method.upper(), re.sub(r"\{[^}]+\}", "gateway-probe", path))
+                 for path, operations in contract["paths"].items()
+                 for method in operations if method in {"post", "put", "patch", "delete"}]
+    assert len(mutations) == 33, "review frozen mutation inventory when contract routes change"
+    protected_state = [pathlib.Path("/var/lib/bedrock/api") / name for name in ("tasks.json", "audit.jsonl")]
+    protected_before = [path.read_bytes() for path in protected_state]
+    for method, path in mutations:
+        common = {"Content-Type": "application/json"}
+        for denied_headers in (common, {**common, "Authorization": "Bearer " + "0" * 64}):
+            status, body, _ = request(method, path, b"{}", denied_headers)
+            assert status == 401 and json.loads(body)["error"] == "unauthorized", f"authorization gate failed: {method} {path}"
+        status, _, _ = request(method, path, b"{}", {**common, **auth, "Origin": "https://attacker.invalid"})
+        assert status == 403, f"origin gate failed: {method} {path}"
+    assert [path.read_bytes() for path in protected_state] == protected_before, "denied route probes changed task/audit state"
+    print("HTTPS mutation denial matrix passed: all 33 declared routes, missing/invalid tokens and foreign Origin; task/audit state unchanged.")
     assert request("GET", "/api/v1/images")[0] == 401
     assert request("GET", "/api/v1/images", headers={**auth, "Authorization": "Bearer " + "0" * 64})[0] == 401
     status, body, headers = request("GET", "/api/v1/images", headers=auth)
