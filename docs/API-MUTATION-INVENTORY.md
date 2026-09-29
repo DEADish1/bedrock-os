@@ -4,6 +4,8 @@ Audit date: 2026-09-22. Sources: `release/1.0-contract.json`, packaged OpenAPI a
 
 ## Confirmed contract coverage
 
+Gateway follow-up: [c18b4f5 validation](https://github.com/DEADish1/bedrock-os/actions/runs/36502127756/job/109195182400) derives all 33 mutating method/path combinations from the packaged OpenAPI and checks each through real nginx/API services. Missing and invalid tokens return 401; a valid token with a foreign Origin returns 403. All 99 probes leave task/audit bytes unchanged. Valid placeholder resource names and empty JSON bodies deliberately test the shared access-control boundary, not each operation's payload schema, successful mutation, resource-specific permissions or side effects. A route-count assertion forces review when the frozen inventory changes. Both image builds/reproducibility for this revision remain pending.
+
 All 33 mutating method/path combinations in the packaged OpenAPI have a corresponding Unix API dispatcher and guarded backend path. The following groups are represented in the interface source; each still needs the cross-area real-server and negative-path browser acceptance listed in 0.6.4–0.6.5.
 
 | Area | API mutation paths and operations | Interface source | Remaining acceptance |
