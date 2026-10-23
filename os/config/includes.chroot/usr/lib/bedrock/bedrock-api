@@ -161,8 +161,14 @@ def relay_action(request_id: str, body: object) -> dict:
         raise ValueError("invalid relay request")
     operation = body.get("operation")
     if operation == "configure" and set(body) == {"schema", "operation", "host", "port", "server_route", "token", "confirmation"}:
+        host, port, route, token, confirmation = body["host"], body["port"], body["server_route"], body["token"], body["confirmation"]
+        expected = f"CONFIGURE REMOTE RELAY {host}:{port} ROUTE {route}"
+        if not isinstance(host, str) or not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", host) or ".." in host or host.startswith(".") or host.endswith(".") or type(port) is not int or not 1 <= port <= 65535 or not isinstance(route, str) or not DEVICE_ID.fullmatch(route) or not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", token) or not isinstance(confirmation, str) or not hmac.compare_digest(confirmation, expected):
+            raise ValueError("invalid relay request")
         request = body | {"request_id": request_id, "action": "remote-relay"}
     elif operation == "disable" and set(body) == {"schema", "operation", "confirmation"}:
+        if not isinstance(body["confirmation"], str) or not hmac.compare_digest(body["confirmation"], "DISABLE REMOTE RELAY"):
+            raise ValueError("invalid relay request")
         request = body | {"request_id": request_id, "action": "remote-relay"}
     else:
         raise ValueError("invalid relay request")

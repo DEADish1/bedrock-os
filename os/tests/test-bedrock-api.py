@@ -684,6 +684,10 @@ client.close(); server.close()
             relay_headers = {"Content-Type": "application/json", "Idempotency-Key": relay_id, "If-Match": settings_headers["ETag"]}
             assert request(socket_path, "PUT", "/api/v1/settings", body=relay_body, extra_headers=relay_headers) == (200, {"schema": 1, "request_id": relay_id, "status": "succeeded", "replayed": False})
             assert request(socket_path, "PUT", "/api/v1/settings", body=relay_body, extra_headers=relay_headers)[1]["replayed"] is True
+            invalid_relay_headers = relay_headers | {"Idempotency-Key": str(uuid.uuid4())}
+            assert request(socket_path, "PUT", "/api/v1/settings", body=relay_body | {"confirmation": "wrong"}, extra_headers=invalid_relay_headers)[0] == 400
+            invalid_disable = {"schema": 1, "operation": "disable", "confirmation": "wrong"}
+            assert request(socket_path, "PUT", "/api/v1/settings", body=invalid_disable, extra_headers=invalid_relay_headers | {"Idempotency-Key": str(uuid.uuid4())})[0] == 400
             admin_requests = [json.loads(line) for line in admin_action_calls.read_text(encoding="utf-8").splitlines()]
             assert admin_requests[-1] == relay_body
             relay_status.write_text(json.dumps({"schema": 1, "configured": True}), encoding="utf-8")

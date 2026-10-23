@@ -36,6 +36,22 @@ for relative in ("usr/sbin/bedrock-update-settings", "usr/lib/bedrock/require-no
     installed = pathlib.Path("/") / relative
     shutil.copyfile(root / relative, installed)
     installed.chmod(0o644 if relative.endswith(".json") else 0o755)
+relay_helper = pathlib.Path("/usr/lib/bedrock/configure-remote-relay")
+shutil.copyfile(root / "usr/lib/bedrock/configure-remote-relay", relay_helper)
+relay_helper.chmod(0o755)
+relay_fixture = pathlib.Path("/usr/lib/bedrock/test-relay-connector")
+relay_fixture.write_text("#!/bin/sh\nset -eu\n[ ! -e /run/bedrock-relay-fixture-fail ] || exit 1\nexec sleep infinity\n")
+relay_fixture.chmod(0o755)
+pathlib.Path("/etc/systemd/system/bedrock-relay-connector.service").write_text("""[Unit]
+Description=Disposable Bedrock relay connector acceptance fixture
+ConditionPathExists=/var/lib/bedrock/remote/relay.json
+ConditionPathExists=/var/lib/bedrock/remote/relay-token
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/test ! -e /run/bedrock-relay-fixture-fail
+ExecStart=/usr/lib/bedrock/test-relay-connector
+""")
 pathlib.Path("/etc/bedrock").mkdir(exist_ok=True)
 for name in ("web-gateway.conf", "web-proxy.conf"):
     shutil.copyfile(root / "etc/bedrock" / name, pathlib.Path("/etc/bedrock") / name)
@@ -203,6 +219,54 @@ try:
     assert len(settings_events) == settings_audit + 4
     assert all(event["action"] == "update-policy" for event in settings_events[-4:])
     print("HTTPS update-policy mutations passed: real policy changes, stale/malformed denial, replay/conflict, beta acknowledgement, four terminal audit events.")
+    relay_tasks = len(json.loads(task_file.read_text())["tasks"])
+    relay_audit = len(audit_file.read_text().splitlines())
+    route = "42345678-1234-4123-8123-123456789abc"
+    relay_token = "relay_https_secret_ABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789"
+    relay = {"schema": 1, "operation": "configure", "host": "relay.bedrock.test", "port": 443,
+             "server_route": route, "token": relay_token,
+             "confirmation": f"CONFIGURE REMOTE RELAY relay.bedrock.test:443 ROUTE {route}"}
+    relay_key = str(uuid.uuid4())
+    assert settings_request({**relay, "confirmation": "wrong"}, str(uuid.uuid4()))[0] == 400
+    assert settings_request(relay, relay_key, '"stale"')[0] == 412
+    code, relay_result, _ = settings_request(relay, relay_key)
+    assert code == 200 and json.loads(relay_result)["replayed"] is False
+    relay_config = pathlib.Path("/var/lib/bedrock/remote/relay.json")
+    relay_secret = relay_config.with_name("relay-token")
+    assert json.loads(relay_config.read_text())["server_route"] == route
+    assert relay_secret.read_text().strip() == relay_token
+    assert oct(relay_config.stat().st_mode & 0o777) == "0o600" and oct(relay_secret.stat().st_mode & 0o777) == "0o600"
+    code, settings_body, _ = request("GET", "/api/v1/settings", headers=auth)
+    assert code == 200 and json.loads(settings_body)["remote_relay"] == {"configured": True}
+    code, replay, _ = settings_request(relay, relay_key)
+    assert code == 200 and json.loads(replay)["replayed"] is True
+    assert settings_request({**relay, "token": "changed_relay_secret_ABCDEFGHIJKLMNOPQRSTUVWXYZ_012345"}, relay_key)[0] == 409
+    for exposed in (relay_result, replay, task_file.read_bytes(), audit_file.read_bytes(), pathlib.Path("/var/lib/bedrock/api/action-results.json").read_bytes(), relay_config.read_bytes()):
+        assert relay_token.encode() not in exposed
+    previous_config, previous_token = relay_config.read_bytes(), relay_secret.read_bytes()
+    failure_marker = pathlib.Path("/run/bedrock-relay-fixture-fail")
+    failure_marker.touch()
+    failed = {**relay, "server_route": "52345678-1234-4123-8123-123456789abc",
+              "token": "failed_relay_secret_ABCDEFGHIJKLMNOPQRSTUVWXYZ_012345",
+              "confirmation": "CONFIGURE REMOTE RELAY relay.bedrock.test:443 ROUTE 52345678-1234-4123-8123-123456789abc"}
+    try:
+        assert settings_request(failed, str(uuid.uuid4()))[0] == 422
+    finally:
+        failure_marker.unlink(missing_ok=True)
+    assert relay_config.read_bytes() == previous_config and relay_secret.read_bytes() == previous_token
+    subprocess.run(["systemctl", "restart", "bedrock-relay-connector.service"], check=True)
+    disable = {"schema": 1, "operation": "disable", "confirmation": "DISABLE REMOTE RELAY"}
+    assert settings_request({**disable, "confirmation": "wrong"}, str(uuid.uuid4()))[0] == 400
+    assert settings_request(disable, str(uuid.uuid4()))[0] == 200
+    assert not relay_config.exists() and not relay_secret.exists()
+    assert subprocess.run(["systemctl", "is-active", "--quiet", "bedrock-relay-connector.service"]).returncode != 0
+    code, settings_body, _ = request("GET", "/api/v1/settings", headers=auth)
+    assert code == 200 and json.loads(settings_body)["remote_relay"] == {"configured": False}
+    relay_events = [json.loads(line) for line in audit_file.read_text().splitlines()[relay_audit:]]
+    assert len(json.loads(task_file.read_text())["tasks"]) == relay_tasks + 3
+    assert len(relay_events) == 3 and [event["action"] for event in relay_events] == ["remote-relay-configure", "remote-relay-configure", "remote-relay-disable"]
+    assert [event["outcome"] for event in relay_events] == ["succeeded", "failed", "succeeded"]
+    print("HTTPS relay mutations passed: configure/replay/conflict, secret containment, failed-restart rollback, disable, and terminal task/audit outcomes.")
     websocket = {**auth, "Connection": "Upgrade", "Upgrade": "websocket", "Sec-WebSocket-Version": "13",
                  "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==", "Sec-WebSocket-Protocol": "binary"}
     assert request("GET", "/api/v1/vms/guest/console", headers=websocket)[0] == 400
