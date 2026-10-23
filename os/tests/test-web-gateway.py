@@ -479,7 +479,18 @@ try:
     import_headers = {**auth, "Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": uploaded_state["ETag"]}
     assert request("POST", import_path, json.dumps({**import_body, "confirmation": "wrong"}), {**import_headers, "Idempotency-Key": str(uuid.uuid4())})[0] == 400
     assert request("POST", import_path, json.dumps(import_body), {**import_headers, "Idempotency-Key": str(uuid.uuid4()), "If-Match": '"stale"'})[0] == 412
-    assert request("POST", import_path, json.dumps(import_body), import_headers)[0] == 200
+    import_result = request("POST", import_path, json.dumps(import_body), import_headers)
+    assert import_result[0] == 200, {
+        "response": (import_result[0], import_result[1].decode(errors="replace")),
+        "upload": (virtualization / f"uploads/{disk_name}.img").exists(),
+        "manifest": (virtualization / f"uploads/{disk_name}.json").exists(),
+        "request": (virtualization / f"requests/import-{disk_name}.json").exists(),
+        "lock": (virtualization / f"uploads/.{disk_name}.import.lock").exists(),
+        "library": (virtualization / f"images/{disk_name}.img").exists(),
+        "state": (virtualization / "images.json").read_text(),
+        "qemu_formats": pathlib.Path("/run/bedrock-qemu-formats.json").read_text() if pathlib.Path("/run/bedrock-qemu-formats.json").exists() else None,
+        "tasks": json.loads(task_file.read_text())["tasks"][-2:],
+    }
     imported_file = virtualization / f"images/{disk_name}.img"
     assert imported_file.read_bytes() == disk_payload
     assert not (virtualization / f"uploads/{disk_name}.img").exists() and not (virtualization / f"uploads/{disk_name}.json").exists()
