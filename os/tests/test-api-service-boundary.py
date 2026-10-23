@@ -234,13 +234,13 @@ api["audited_discard_image_upload"]("recovery", {"schema": 1, "sha256": digest,
             assert list(uploads.iterdir()) == [root_import_lock]
             assert root_import_lock.stat().st_uid == 0 and stat.S_IMODE(root_import_lock.stat().st_mode) == 0o600
             tasks = json.loads((state / "tasks.json").read_text())["tasks"]
-            assert len(tasks) == (23 if managed else 4)
+            assert len(tasks) == (27 if managed else 4)
             terminal_states = [item["state"] for item in tasks]
-            assert terminal_states.count("failed") == (3 if managed else 0) and terminal_states.count("succeeded") == (20 if managed else 4)
+            assert terminal_states.count("failed") == (4 if managed else 0) and terminal_states.count("succeeded") == (23 if managed else 4)
             if managed:
-                assert [item["kind"] for item in tasks if item["state"] == "failed"] == ["remote-relay-configure", "app-update-latest", "backup-run"]
+                assert [item["kind"] for item in tasks if item["state"] == "failed"] == ["remote-relay-configure", "app-update-latest", "backup-run", "image-convert"]
             events = [json.loads(line) for line in (state / "audit.jsonl").read_text().splitlines()]
-            assert len(events) == (23 if managed else 4), "restart duplicated terminal audit"
+            assert len(events) == (27 if managed else 4), "restart duplicated terminal audit"
             api.terminate()
             api.wait(timeout=5)
         print("Production UID boundary passed: API unprivileged, broker root with no capabilities, peer rejection, protected state, upload/discard audit.")

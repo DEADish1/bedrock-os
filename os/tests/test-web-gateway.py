@@ -113,6 +113,31 @@ staged_backup = {"id": "nightly", "name": "Nightly files", "source": str(backup_
                  "retention": {"daily": 7, "weekly": 4, "monthly": 6}, "initialize": True}
 (backup_state / "staged-plans.json").write_text(json.dumps({"schema": 1, "plans": [staged_backup]}))
 subprocess.run([str(backup_manager), "list"], check=True, stdout=subprocess.DEVNULL)
+for name in ("change-vm-image", "convert-vm-image", "import-uploaded-vm-image", "import-vm-image", "collect-image-status"):
+    installed = pathlib.Path("/usr/lib/bedrock") / name
+    shutil.copyfile(root / "usr/lib/bedrock" / name, installed)
+    installed.chmod(0o755)
+qemu_img = pathlib.Path("/usr/bin/qemu-img")
+qemu_img.write_text("""#!/usr/bin/python3
+import json,pathlib,shutil,sys
+args=sys.argv[1:]; formats=pathlib.Path('/run/bedrock-qemu-formats.json')
+mapping=json.loads(formats.read_text()) if formats.exists() else {}
+if args[0]=='info':
+    source=pathlib.Path(args[-1]); print(json.dumps({'format':mapping.get(str(source),'raw'),'virtual-size':source.stat().st_size,'encrypted':False})); raise SystemExit
+if args[0]=='convert':
+    marker=pathlib.Path('/run/bedrock-qemu-convert-fail-once')
+    if marker.exists(): marker.unlink(); raise SystemExit(1)
+    source,target=pathlib.Path(args[-2]),pathlib.Path(args[-1]); shutil.copyfile(source,target)
+    with target.open('ab') as stream: stream.write(b'-converted')
+    mapping[str(target)]='qcow2' if args[args.index('-O')+1]=='qcow2' else 'raw'; formats.write_text(json.dumps(mapping)); raise SystemExit
+raise SystemExit(2)
+""")
+qemu_img.chmod(0o755)
+virtualization = pathlib.Path("/var/lib/bedrock/virtualization")
+virtualization.mkdir(parents=True, exist_ok=True)
+(virtualization / "images.json").write_text('{"schema":1,"images":[]}\n')
+(virtualization / "image-provenance.json").write_text('{"schema":1,"conversions":[]}\n')
+subprocess.run(["/usr/lib/bedrock/collect-image-status"], check=True, stdout=subprocess.DEVNULL)
 pathlib.Path("/etc/bedrock").mkdir(exist_ok=True)
 for name in ("web-gateway.conf", "web-proxy.conf"):
     shutil.copyfile(root / "etc/bedrock" / name, pathlib.Path("/etc/bedrock") / name)
@@ -439,6 +464,58 @@ try:
     assert [event["action"] for event in backup_events] == ["backup-create", "backup-run", "backup-run", "backup-restore-latest"]
     assert [event["outcome"] for event in backup_events] == ["succeeded", "succeeded", "failed", "succeeded"]
     print("HTTPS backup mutations passed: staged creation, encrypted run/retention, failed-run state preservation, latest restore, secret-free refresh, replay/conflict, and terminal audit outcomes.")
+    image_tasks = len(json.loads(task_file.read_text())["tasks"])
+    image_audit = len(audit_file.read_text().splitlines())
+    disk_name = "gateway-disk"
+    disk_payload = b"bedrock-raw-disk-image-acceptance"
+    disk_hash = hashlib.sha256(disk_payload).hexdigest()
+    disk_upload_path = f"/api/v1/images/{disk_name}/upload"
+    _, _, disk_before = request("GET", "/api/v1/images", headers=auth)
+    disk_upload_headers = {**auth, "Content-Type": "application/octet-stream", "X-Bedrock-Image-Type": "img", "If-Match": disk_before["ETag"]}
+    assert request("PUT", disk_upload_path, disk_payload, disk_upload_headers)[0] == 200
+    _, _, uploaded_state = request("GET", "/api/v1/images", headers=auth)
+    import_path = f"/api/v1/images/{disk_name}/import"
+    import_body = {"schema": 1, "confirmation": f"IMPORT IMG {disk_name} {disk_hash}"}
+    import_headers = {**auth, "Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": uploaded_state["ETag"]}
+    assert request("POST", import_path, json.dumps({**import_body, "confirmation": "wrong"}), {**import_headers, "Idempotency-Key": str(uuid.uuid4())})[0] == 400
+    assert request("POST", import_path, json.dumps(import_body), {**import_headers, "Idempotency-Key": str(uuid.uuid4()), "If-Match": '"stale"'})[0] == 412
+    assert request("POST", import_path, json.dumps(import_body), import_headers)[0] == 200
+    imported_file = virtualization / f"images/{disk_name}.img"
+    assert imported_file.read_bytes() == disk_payload
+    assert not (virtualization / f"uploads/{disk_name}.img").exists() and not (virtualization / f"uploads/{disk_name}.json").exists()
+    code, images_body, imported_state = request("GET", "/api/v1/images", headers=auth)
+    images_feed = json.loads(images_body)
+    imported = next(item for item in images_feed["images"] if item["name"] == disk_name)
+    assert code == 200 and imported == {"name": disk_name, "type": "img", "sha256": disk_hash, "size_bytes": len(disk_payload), "converted": False}
+    code, import_replay, _ = request("POST", import_path, json.dumps(import_body), {**import_headers, "If-Match": imported_state["ETag"]})
+    assert code == 200 and json.loads(import_replay)["replayed"] is True
+    convert_path = f"/api/v1/images/{disk_name}/convert"
+    convert_body = {"schema": 1, "target": "gateway-converted", "target_type": "qcow2", "source_sha256": disk_hash,
+                    "confirmation": f"CONVERT IMAGE {disk_name} {disk_hash} TO QCOW2 gateway-converted"}
+    assert request("POST", convert_path, json.dumps(convert_body), {**auth, "Content-Type": "application/json", "Idempotency-Key": import_headers["Idempotency-Key"], "If-Match": imported_state["ETag"]})[0] == 409
+    convert_headers = {**auth, "Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": imported_state["ETag"]}
+    assert request("POST", convert_path, json.dumps(convert_body), convert_headers)[0] == 200
+    code, images_body, converted_state = request("GET", "/api/v1/images", headers=auth)
+    converted_feed = json.loads(images_body)
+    converted = next(item for item in converted_feed["images"] if item["name"] == "gateway-converted")
+    assert code == 200 and converted["type"] == "qcow2" and converted["converted"] is True
+    provenance = json.loads((virtualization / "image-provenance.json").read_text())["conversions"]
+    assert len(provenance) == 1 and provenance[0]["source"] == disk_name and provenance[0]["target"] == "gateway-converted"
+    pathlib.Path("/run/bedrock-qemu-convert-fail-once").touch()
+    failed_convert = {**convert_body, "target": "gateway-failed", "confirmation": f"CONVERT IMAGE {disk_name} {disk_hash} TO QCOW2 gateway-failed"}
+    failed_headers = {**auth, "Content-Type": "application/json", "Idempotency-Key": str(uuid.uuid4()), "If-Match": converted_state["ETag"]}
+    images_before_failure = (virtualization / "images.json").read_bytes()
+    provenance_before_failure = (virtualization / "image-provenance.json").read_bytes()
+    assert request("POST", convert_path, json.dumps(failed_convert), failed_headers)[0] == 422
+    assert (virtualization / "images.json").read_bytes() == images_before_failure
+    assert (virtualization / "image-provenance.json").read_bytes() == provenance_before_failure
+    assert not (virtualization / "images/gateway-failed.qcow2").exists()
+    image_events = [json.loads(line) for line in audit_file.read_text().splitlines()[image_audit:]]
+    assert len(json.loads(task_file.read_text())["tasks"]) == image_tasks + 4
+    assert len(image_events) == 4
+    assert [event["action"] for event in image_events] == ["image-upload", "image-import", "image-convert", "image-convert"]
+    assert [event["outcome"] for event in image_events] == ["succeeded", "succeeded", "succeeded", "failed"]
+    print("HTTPS image mutations passed: upload/import, checksum-bound conversion/provenance, failed-conversion rollback, refresh, replay/conflict, and terminal audit outcomes.")
     websocket = {**auth, "Connection": "Upgrade", "Upgrade": "websocket", "Sec-WebSocket-Version": "13",
                  "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==", "Sec-WebSocket-Protocol": "binary"}
     assert request("GET", "/api/v1/vms/guest/console", headers=websocket)[0] == 400

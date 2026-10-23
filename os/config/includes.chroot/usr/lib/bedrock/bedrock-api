@@ -355,6 +355,9 @@ def image_import_action(request_id: str, name: str, body: object) -> dict:
     if not VM_NAME.fullmatch(name) or not isinstance(body, dict) or set(body) != {"schema", "confirmation"} or body.get("schema") != 1:
         raise ValueError("invalid image import request")
     matches = [item for item in upload_candidates() if item["name"] == name]
+    if not matches:
+        matches = [{key: item[key] for key in ("name", "type", "sha256", "size_bytes")}
+                   for item in image_feed()["images"] if item["name"] == name]
     if len(matches) != 1:
         raise ValueError("image upload candidate is unavailable")
     item = matches[0]; expected = f"IMPORT {item['type'].upper()} {name} {item['sha256']}"
