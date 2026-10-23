@@ -309,7 +309,15 @@ try:
     assert app_request("POST", install_path, install, match='"stale"')[0] == 412
     install_key = str(uuid.uuid4())
     code, installed, _ = app_request("POST", install_path, install, install_key)
-    assert code == 200 and json.loads(installed)["replayed"] is False
+    if code != 200 or json.loads(installed).get("replayed") is not False:
+        app_diagnostics = {
+            "status": code,
+            "response": installed.decode(errors="replace"),
+            "staged": (apps_state / "staged-installs.json").read_text() if (apps_state / "staged-installs.json").exists() else "missing",
+            "runtime_calls": (apps_state / "runtime-calls").read_text() if (apps_state / "runtime-calls").exists() else "missing",
+            "recent_tasks": json.loads(task_file.read_text())["tasks"][-2:],
+        }
+        raise AssertionError(f"staged application install failed: {app_diagnostics}")
     code, apps_body, _ = request("GET", "/api/v1/apps", headers=auth)
     apps_feed = json.loads(apps_body)
     assert code == 200 and apps_feed["install_candidates"] == []
