@@ -10,7 +10,7 @@ All 33 mutating method/path combinations in the packaged OpenAPI have a correspo
 
 | Area | API mutation paths and operations | Interface source | Remaining acceptance |
 | --- | --- | --- | --- |
-| Settings | `PUT /settings`: update choice/channel, relay configure/disable | Settings | Real-server save, stale-state, failure recovery |
+| Settings | `PUT /settings`: update choice/channel, relay configure/disable | Settings | Update-policy real-server acceptance passed; relay variants and UI interaction remain |
 | Remote trust | `POST /remote/devices/{id}`: rename, expiry, revoke; `POST /remote/pairings/{id}/approve` | Remote access | Pairing/client session and live revocation |
 | Applications | `POST /apps/{id}/install`, `/power`, `/update`; `DELETE /apps/{id}` | Apps | Root-staged install and lifecycle on candidate image |
 | Backups | `POST /backups/{id}/create`, `/run`, `/restore-latest` | Backup | Encrypted restore and failure-path drill |
@@ -20,6 +20,8 @@ All 33 mutating method/path combinations in the packaged OpenAPI have a correspo
 | Virtual machines | `POST /vms` create; `POST /vms/{name}/power`, `/snapshots`, `/clone`, `/resources`, `/images`, `/networks`, `/passthrough`, `/console-sessions`; `DELETE /vms/{name}` | Virtual machines | Linux/Windows guests, real console, passthrough |
 
 The table groups all 33 method/path combinations; actions that share a path have multiple strict request variants. The server must continue to reject fields such as host paths, commands, raw device identities, or arbitrary credentials. OpenAPI route agreement alone does not establish that every UI control sends the right variant.
+
+Update-policy follow-up: [32a40bc validation](https://github.com/DEADish1/bedrock-os/actions/runs/40035480321/job/120693767351) exercises `PUT /settings` through the real nginx/API/broker chain. It accepts real automatic-check and stable/beta policy changes; rejects stale ETags, undeclared fields, beta without acknowledgement, and idempotency-key reuse with a changed body; returns the prior result for an exact replay; refreshes settings after each accepted operation; and records exactly four terminal tasks and audit events. The test changes only the packaged update policy and does not download or install an update. Relay configure/disable, browser-control interaction, helper failure/broker-outage behavior in this HTTPS scenario, and image-build evidence remain open.
 
 ## Open release-blocking gaps
 
