@@ -10,7 +10,7 @@ All 33 mutating method/path combinations in the packaged OpenAPI have a correspo
 
 | Area | API mutation paths and operations | Interface source | Remaining acceptance |
 | --- | --- | --- | --- |
-| Settings | `PUT /settings`: update choice/channel, relay configure/disable | Settings | Update-policy real-server acceptance passed; relay variants and UI interaction remain |
+| Settings | `PUT /settings`: update choice/channel, relay configure/disable | Settings | Update-policy and relay HTTPS acceptance passed; UI interaction and production relay remain |
 | Remote trust | `POST /remote/devices/{id}`: rename, expiry, revoke; `POST /remote/pairings/{id}/approve` | Remote access | Pairing/client session and live revocation |
 | Applications | `POST /apps/{id}/install`, `/power`, `/update`; `DELETE /apps/{id}` | Apps | Root-staged install and lifecycle on candidate image |
 | Backups | `POST /backups/{id}/create`, `/run`, `/restore-latest` | Backup | Encrypted restore and failure-path drill |
@@ -22,6 +22,8 @@ All 33 mutating method/path combinations in the packaged OpenAPI have a correspo
 The table groups all 33 method/path combinations; actions that share a path have multiple strict request variants. The server must continue to reject fields such as host paths, commands, raw device identities, or arbitrary credentials. OpenAPI route agreement alone does not establish that every UI control sends the right variant.
 
 Update-policy follow-up: [32a40bc validation](https://github.com/DEADish1/bedrock-os/actions/runs/40035480321/job/120693767351) exercises `PUT /settings` through the real nginx/API/broker chain. It accepts real automatic-check and stable/beta policy changes; rejects stale ETags, undeclared fields, beta without acknowledgement, and idempotency-key reuse with a changed body; returns the prior result for an exact replay; refreshes settings after each accepted operation; and records exactly four terminal tasks and audit events. The test changes only the packaged update policy and does not download or install an update. Relay configure/disable, browser-control interaction, helper failure/broker-outage behavior in this HTTPS scenario, and image-build evidence remain open.
+
+Relay follow-up: [ab65e3c validation](https://github.com/DEADish1/bedrock-os/actions/runs/40036344852/job/120696658996) exercises configure and disable through the same real HTTPS, API, broker, root-staging and production helper path. It verifies stale ETag and malformed-confirmation denial, exact replay, changed-body conflict, mode-0600 split credential storage, absence of the relay token from responses/config/task/audit/broker state, public configured-state refresh, failed connector restart with byte-for-byte restoration, disablement, and one succeeded/failed/succeeded terminal sequence without restart duplication. The disposable fixture substitutes only the external connector lifecycle service; it does not prove a production relay endpoint, TLS/Noise routing, outage recovery, or network fallback. Those remain in 0.7.3. Image builds/reproducibility for this revision are running.
 
 ## Open release-blocking gaps
 
