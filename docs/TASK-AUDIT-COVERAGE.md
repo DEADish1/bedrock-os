@@ -7,7 +7,7 @@ Audit date: 2026-09-22. Scope: the 33 mutating method/path combinations in the p
 | Settings update policy | Root action broker invokes `record-api-task` | Replay, broker crash, and persisted outcome tests |
 | Settings relay configure/disable | `configure-remote-relay` invokes `record-api-task` | Candidate-image restart failure and rollback |
 | Remote trust changes and pairing approval | `change-remote-device` and `approve-remote-pairing` invoke `record-api-task` | Revocation, rejection, and client-visible privacy checks |
-| Applications | `change-app` invokes `record-api-task` | Install, power, update, delete, and failure/restart paths |
+| Applications | `change-app` invokes `record-api-task` | HTTPS install/power/update/delete, rollback and restart passed; candidate-image Podman/registry drill remains |
 | Backups | `change-backup` invokes `record-api-task` | Long-running progress, interrupted backup, restore drill |
 | Image import/convert | `import-uploaded-vm-image` and image conversion helper invoke `record-api-task` | Large-image, conversion failure, cleanup, and replay |
 | Image upload/discard | Unix API records bounded progress and terminal outcomes through the root broker | Discard crash recovery, candidate consistency, and actual service-UID acceptance |
