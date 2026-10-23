@@ -11,8 +11,8 @@ assert os.geteuid() == 0 and pathlib.Path("/.dockerenv").exists()
 assert os.environ.get("BEDROCK_DISPOSABLE_SERVICE_TEST") == "1"
 token = sys.stdin.read().strip()
 assert len(token) == 64
-base = ["agent-browser", "--session", "bedrock-acceptance", "--executable-path", "/usr/bin/chromium",
-        "--args", "--no-sandbox"]  # Disposable privileged test container only, never image configuration.
+launch = ["--executable-path", "/usr/bin/chromium", "--args", "--no-sandbox"]
+base = ["agent-browser", "--session", "bedrock-acceptance", *launch]
 certificate = "/var/lib/bedrock/web/identity/server.crt"
 
 
@@ -27,12 +27,15 @@ def browser(arguments, script=None, require_success=True):
 
 
 try:
-    rejected = browser(["open", "https://127.0.0.1:8443/"], require_success=False)
+    untrusted = ["agent-browser", "--session", "bedrock-untrusted", *launch]
+    result = subprocess.run(untrusted + ["open", "https://127.0.0.1:8443/"], text=True,
+                            capture_output=True, timeout=45)
+    rejected = result
     assert rejected.returncode != 0, "browser unexpectedly trusted the unprovisioned self-signed identity"
     if "ERR_CERT_AUTHORITY_INVALID" not in rejected.stdout + rejected.stderr:
         print((rejected.stdout + rejected.stderr)[-3000:], file=sys.stderr)
         raise AssertionError("untrusted-page rejection was not a certificate validation failure")
-    browser(["close"], require_success=False)
+    subprocess.run(untrusted + ["close"], text=True, capture_output=True, timeout=45)
     # Chromium's Linux NSS store explicitly trusts this self-signed server leaf.
     # The legacy location, when present, takes precedence over the M146+ default.
     # https://chromium.googlesource.com/chromium/src/+/main/docs/linux/cert_management.md
