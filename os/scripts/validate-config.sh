@@ -200,6 +200,7 @@ grep -q '^User=bedrock-api$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/sys
 grep -q '^RestrictAddressFamilies=AF_UNIX AF_INET$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-api.service"
 grep -q '^ProtectSystem=strict$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-api.service"
 grep -q '^StateDirectory=bedrock/virtualization/uploads$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-api.service"
+grep -q '^StateDirectoryMode=0770$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-api.service"
 grep -q '^User=root$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-action-broker.service"
 grep -q '^NoNewPrivileges=true$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-action-broker.service"
 grep -q '^CapabilityBoundingSet=$' "$OS_DIR/config/includes.chroot/usr/lib/systemd/system/bedrock-action-broker.service"
