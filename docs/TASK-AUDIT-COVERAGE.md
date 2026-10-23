@@ -8,7 +8,7 @@ Audit date: 2026-09-22. Scope: the 33 mutating method/path combinations in the p
 | Settings relay configure/disable | `configure-remote-relay` invokes `record-api-task` | Candidate-image restart failure and rollback |
 | Remote trust changes and pairing approval | `change-remote-device` and `approve-remote-pairing` invoke `record-api-task` | Revocation, rejection, and client-visible privacy checks |
 | Applications | `change-app` invokes `record-api-task` | HTTPS install/power/update/delete, rollback and restart passed; candidate-image Podman/registry drill remains |
-| Backups | `change-backup` invokes `record-api-task` | Long-running progress, interrupted backup, restore drill |
+| Backups | `change-backup` invokes `record-api-task` | HTTPS create/run/failure/restore and restart passed; long-running interruption and real restore drill remain |
 | Image import/convert | `import-uploaded-vm-image` and image conversion helper invoke `record-api-task` | Large-image, conversion failure, cleanup, and replay |
 | Image upload/discard | Unix API records bounded progress and terminal outcomes through the root broker | Discard crash recovery, candidate consistency, and actual service-UID acceptance |
 | Storage | `change-storage` delegates to `bedrock-storage`, which records bounded task stages | Each destructive operation, reboot, and media failure |

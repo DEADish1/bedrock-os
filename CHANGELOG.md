@@ -4,6 +4,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Restored packaged backup mutations through the hardened broker by declaring only backup state, confined restore output and root-staged `/mnt` repositories writable, with boot-time restore-directory provisioning. Real HTTPS acceptance now covers staged creation, encrypted run/retention, failed-run state preservation, latest restore, secret-free refresh, replay/conflict, and terminal task/audit outcomes using a deterministic Restic substitute.
 - Restored packaged application mutations through the hardened root broker by adding only the app state and data directories to its writable systemd boundary and provisioning the data directory at boot. Real HTTPS acceptance now covers staged install, power, pinned update, failed-update rollback, data-preserving removal, refresh, replay/conflict, and terminal task/audit outcomes with a disposable runtime shim.
 - VM GPU/USB passthrough changes now publish bounded queued/terminal tasks and privacy-safe audit outcomes, including denied running-guest changes, without exposing VM names or device topology.
 - Relay configuration and disablement now publish bounded success/failure tasks and one terminal privacy-safe audit event; failed connector restart retains the previous settings and records a failed operation.
