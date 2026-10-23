@@ -79,6 +79,40 @@ staged_app = {"id": "photos", "name": "Photos", "image": "registry.bedrock.test/
               "resources": {"cpus": 1, "memory_mib": 512, "pids": 128}, "update_policy": "notify"}
 (apps_state / "staged-installs.json").write_text(json.dumps({"schema": 1, "apps": [staged_app]}))
 subprocess.run([str(app_manager), "list"], check=True, stdout=subprocess.DEVNULL)
+backup_helper = pathlib.Path("/usr/lib/bedrock/change-backup")
+shutil.copyfile(root / "usr/lib/bedrock/change-backup", backup_helper)
+backup_helper.chmod(0o755)
+backup_manager = pathlib.Path("/usr/sbin/bedrock-backup")
+shutil.copyfile(root / "usr/sbin/bedrock-backup", backup_manager)
+backup_manager.chmod(0o755)
+restic = pathlib.Path("/usr/bin/restic")
+restic.write_text("""#!/usr/bin/python3
+import json,pathlib,sys
+state=pathlib.Path('/var/lib/bedrock/backup')
+with (state/'restic-calls').open('a') as stream: stream.write(' '.join(sys.argv[1:])+'\\n')
+args=sys.argv[1:]
+marker=pathlib.Path('/run/bedrock-restic-fail-once')
+if 'backup' in args and marker.exists(): marker.unlink(); raise SystemExit(1)
+if 'init' in args: pathlib.Path(args[args.index('-r')+1]).mkdir(parents=True,exist_ok=True)
+if 'snapshots' in args: print(json.dumps([{'id':'0123456789abcdef0123456789abcdef'}]))
+if 'restore' in args: pathlib.Path(args[args.index('--target')+1]).mkdir(parents=True)
+""")
+restic.chmod(0o755)
+backup_state = pathlib.Path("/var/lib/bedrock/backup")
+backup_state.mkdir(parents=True, exist_ok=True)
+(backup_state / "secrets").mkdir(exist_ok=True)
+backup_password = backup_state / "secrets/nightly.password"
+backup_password.write_text("fixture-backup-password")
+backup_password.chmod(0o600)
+backup_source = pathlib.Path("/srv/bedrock/backup-source")
+backup_source.mkdir(parents=True, exist_ok=True)
+(backup_source / "data.txt").write_text("backup acceptance data")
+staged_backup = {"id": "nightly", "name": "Nightly files", "source": str(backup_source),
+                 "repository": "/mnt/bedrock-backup-fixture", "kind": "local",
+                 "schedule": {"frequency": "daily", "hour_utc": 0, "weekday": None},
+                 "retention": {"daily": 7, "weekly": 4, "monthly": 6}, "initialize": True}
+(backup_state / "staged-plans.json").write_text(json.dumps({"schema": 1, "plans": [staged_backup]}))
+subprocess.run([str(backup_manager), "list"], check=True, stdout=subprocess.DEVNULL)
 pathlib.Path("/etc/bedrock").mkdir(exist_ok=True)
 for name in ("web-gateway.conf", "web-proxy.conf"):
     shutil.copyfile(root / "etc/bedrock" / name, pathlib.Path("/etc/bedrock") / name)
@@ -359,6 +393,52 @@ try:
     assert [event["action"] for event in app_events] == ["app-install-staged", "app-stop", "app-start", "app-update-latest", "app-update-latest", "app-remove"]
     assert [event["outcome"] for event in app_events] == ["succeeded", "succeeded", "succeeded", "succeeded", "failed", "succeeded"]
     print("HTTPS application mutations passed: staged install, power, update, failed-update rollback, data-preserving removal, refresh, replay/conflict, and terminal audit outcomes.")
+    backup_tasks = len(json.loads(task_file.read_text())["tasks"])
+    backup_audit = len(audit_file.read_text().splitlines())
+    def backup_request(path, body, key=None, match=None):
+        if match is None:
+            code, _, current = request("GET", "/api/v1/backups", headers=auth)
+            assert code == 200
+            match = current["ETag"]
+        return request("POST", path, json.dumps(body),
+                       {**auth, "Content-Type": "application/json", "Idempotency-Key": key or str(uuid.uuid4()), "If-Match": match})
+    create_path = "/api/v1/backups/nightly/create"
+    create = {"schema": 1, "confirmation": "CREATE ENCRYPTED BACKUP nightly"}
+    assert backup_request(create_path, {**create, "confirmation": "wrong"})[0] == 400
+    assert backup_request(create_path, create, match='"stale"')[0] == 412
+    create_key = str(uuid.uuid4())
+    assert backup_request(create_path, create, create_key)[0] == 200
+    code, backups_body, _ = request("GET", "/api/v1/backups", headers=auth)
+    backups_feed = json.loads(backups_body)
+    assert code == 200 and backups_feed["create_candidates"] == [] and len(backups_feed["plans"]) == 1
+    assert not any(secret in backups_body.decode() for secret in ("source", "repository", "password", "last_snapshot"))
+    code, replay, _ = backup_request(create_path, create, create_key)
+    assert code == 200 and json.loads(replay)["replayed"] is True
+    run_path = "/api/v1/backups/nightly/run"
+    run_backup = {"schema": 1, "confirmation": "RUN ENCRYPTED BACKUP nightly"}
+    assert backup_request(run_path, run_backup, create_key)[0] == 409
+    assert backup_request(run_path, run_backup)[0] == 200
+    plan_state = backup_state / "plans.json"
+    completed_plan = json.loads(plan_state.read_text())["plans"][0]
+    assert completed_plan["last_snapshot"] == "0123456789abcdef0123456789abcdef" and completed_plan["last_success_unix"] is not None
+    pathlib.Path("/run/bedrock-restic-fail-once").touch()
+    before_failed_run = plan_state.read_bytes()
+    assert backup_request(run_path, run_backup)[0] == 422
+    assert plan_state.read_bytes() == before_failed_run
+    restore_path = "/api/v1/backups/nightly/restore-latest"
+    restore = {"schema": 1, "confirmation": "RESTORE LATEST BACKUP nightly"}
+    assert backup_request(restore_path, restore)[0] == 200
+    restored = pathlib.Path("/srv/bedrock/restores/nightly")
+    assert restored.is_dir()
+    restic_calls = (backup_state / "restic-calls").read_text()
+    assert "fixture-backup-password" not in restic_calls and " backup " in restic_calls and "forget --prune" in restic_calls and " restore " in restic_calls
+    assert not any(path.name.endswith(".json") for path in (backup_state / "requests").iterdir())
+    backup_events = [json.loads(line) for line in audit_file.read_text().splitlines()[backup_audit:]]
+    assert len(json.loads(task_file.read_text())["tasks"]) == backup_tasks + 4
+    assert len(backup_events) == 4
+    assert [event["action"] for event in backup_events] == ["backup-create", "backup-run", "backup-run", "backup-restore-latest"]
+    assert [event["outcome"] for event in backup_events] == ["succeeded", "succeeded", "failed", "succeeded"]
+    print("HTTPS backup mutations passed: staged creation, encrypted run/retention, failed-run state preservation, latest restore, secret-free refresh, replay/conflict, and terminal audit outcomes.")
     websocket = {**auth, "Connection": "Upgrade", "Upgrade": "websocket", "Sec-WebSocket-Version": "13",
                  "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==", "Sec-WebSocket-Protocol": "binary"}
     assert request("GET", "/api/v1/vms/guest/console", headers=websocket)[0] == 400
