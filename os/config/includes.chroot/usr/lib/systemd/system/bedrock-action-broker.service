@@ -1,6 +1,6 @@
 [Unit]
 Description=Bedrock privileged action broker
-After=local-fs.target bedrock-remote-identity.service
+After=local-fs.target systemd-tmpfiles-setup.service bedrock-remote-identity.service
 Requires=bedrock-remote-identity.service
 
 [Service]
@@ -11,7 +11,7 @@ User=root
 Group=bedrock-api
 RuntimeDirectory=bedrock-action-broker
 RuntimeDirectoryMode=0750
-StateDirectory=bedrock/api bedrock/settings
+StateDirectory=bedrock/api bedrock/settings bedrock/apps
 StateDirectoryMode=0750
 UMask=0007
 NoNewPrivileges=true
@@ -19,7 +19,7 @@ PrivateDevices=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/bedrock/api /var/lib/bedrock/settings /var/lib/bedrock/remote -/var/lib/bedrock/virtualization /run/bedrock-action-broker -/run/libvirt
+ReadWritePaths=/var/lib/bedrock/api /var/lib/bedrock/settings /var/lib/bedrock/apps /srv/bedrock/apps /var/lib/bedrock/remote -/var/lib/bedrock/virtualization /run/bedrock-action-broker -/run/libvirt
 CapabilityBoundingSet=
 RestrictNamespaces=true
 ProtectClock=true

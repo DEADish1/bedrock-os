@@ -73,7 +73,7 @@ esac
 """)
 podman.chmod(0o755)
 apps_state = pathlib.Path("/var/lib/bedrock/apps")
-apps_state.mkdir(parents=True)
+apps_state.mkdir(parents=True, exist_ok=True)
 staged_app = {"id": "photos", "name": "Photos", "image": "registry.bedrock.test/apps/photos:1.0",
               "digest": "sha256:" + "a" * 64, "network": "bridge", "ports": [],
               "resources": {"cpus": 1, "memory_mib": 512, "pids": 128}, "update_policy": "notify"}

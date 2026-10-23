@@ -47,6 +47,10 @@ def main():
     sources.mkdir()
     sources.chmod(0o755)
     (sources / "images.json").write_text('{"schema":1,"images":[]}')
+    if managed:
+        for directory in (pathlib.Path("/var/lib/bedrock/apps"), pathlib.Path("/srv/bedrock/apps")):
+            directory.mkdir(parents=True, exist_ok=True)
+            directory.chmod(0o700)
     for path, uid in (("/run/bedrock-api", account.pw_uid), ("/run/bedrock-action-broker", 0)):
         if managed:
             continue
