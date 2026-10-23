@@ -52,6 +52,33 @@ Type=simple
 ExecStartPre=/usr/bin/test ! -e /run/bedrock-relay-fixture-fail
 ExecStart=/usr/lib/bedrock/test-relay-connector
 """)
+app_helper = pathlib.Path("/usr/lib/bedrock/change-app")
+shutil.copyfile(root / "usr/lib/bedrock/change-app", app_helper)
+app_helper.chmod(0o755)
+app_manager = pathlib.Path("/usr/sbin/bedrock-apps")
+shutil.copyfile(root / "usr/sbin/bedrock-apps", app_manager)
+app_manager.chmod(0o755)
+podman = pathlib.Path("/usr/bin/podman")
+podman.write_text("""#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> /var/lib/bedrock/apps/runtime-calls
+case "${1:-}" in
+  inspect) [ -f /var/lib/bedrock/apps/runtime-running ] && cat /var/lib/bedrock/apps/runtime-running || printf 'false\n' ;;
+  start) printf 'true\n' > /var/lib/bedrock/apps/runtime-running ;;
+  stop|rm) printf 'false\n' > /var/lib/bedrock/apps/runtime-running ;;
+  create) if [ -e /run/bedrock-app-create-fail-once ]; then rm -f /run/bedrock-app-create-fail-once; exit 1; fi ;;
+  pull) ;;
+  *) exit 2 ;;
+esac
+""")
+podman.chmod(0o755)
+apps_state = pathlib.Path("/var/lib/bedrock/apps")
+apps_state.mkdir(parents=True)
+staged_app = {"id": "photos", "name": "Photos", "image": "registry.bedrock.test/apps/photos:1.0",
+              "digest": "sha256:" + "a" * 64, "network": "bridge", "ports": [],
+              "resources": {"cpus": 1, "memory_mib": 512, "pids": 128}, "update_policy": "notify"}
+(apps_state / "staged-installs.json").write_text(json.dumps({"schema": 1, "apps": [staged_app]}))
+subprocess.run([str(app_manager), "list"], check=True, stdout=subprocess.DEVNULL)
 pathlib.Path("/etc/bedrock").mkdir(exist_ok=True)
 for name in ("web-gateway.conf", "web-proxy.conf"):
     shutil.copyfile(root / "etc/bedrock" / name, pathlib.Path("/etc/bedrock") / name)
@@ -267,6 +294,63 @@ try:
     assert len(relay_events) == 3 and [event["action"] for event in relay_events] == ["remote-relay-configure", "remote-relay-configure", "remote-relay-disable"]
     assert [event["outcome"] for event in relay_events] == ["succeeded", "failed", "succeeded"]
     print("HTTPS relay mutations passed: configure/replay/conflict, secret containment, failed-restart rollback, disable, and terminal task/audit outcomes.")
+    app_tasks = len(json.loads(task_file.read_text())["tasks"])
+    app_audit = len(audit_file.read_text().splitlines())
+    def app_request(method, path, body, key=None, match=None):
+        if match is None:
+            code, _, current = request("GET", "/api/v1/apps", headers=auth)
+            assert code == 200
+            match = current["ETag"]
+        return request(method, path, json.dumps(body),
+                       {**auth, "Content-Type": "application/json", "Idempotency-Key": key or str(uuid.uuid4()), "If-Match": match})
+    install_path = "/api/v1/apps/photos/install"
+    install = {"schema": 1, "confirmation": "INSTALL APPLICATION photos"}
+    assert app_request("POST", install_path, {**install, "confirmation": "wrong"})[0] == 400
+    assert app_request("POST", install_path, install, match='"stale"')[0] == 412
+    install_key = str(uuid.uuid4())
+    code, installed, _ = app_request("POST", install_path, install, install_key)
+    assert code == 200 and json.loads(installed)["replayed"] is False
+    code, apps_body, _ = request("GET", "/api/v1/apps", headers=auth)
+    apps_feed = json.loads(apps_body)
+    assert code == 200 and apps_feed["install_candidates"] == []
+    assert len(apps_feed["apps"]) == 1 and apps_feed["apps"][0]["id"] == "photos" and apps_feed["apps"][0]["running"] is True
+    assert "image" not in apps_body.decode() and "digest" not in apps_body.decode()
+    code, replay, _ = app_request("POST", install_path, install, install_key)
+    assert code == 200 and json.loads(replay)["replayed"] is True
+    power_path = "/api/v1/apps/photos/power"
+    stop = {"schema": 1, "operation": "stop", "confirmation": "STOP APPLICATION photos"}
+    assert app_request("POST", power_path, stop, install_key)[0] == 409
+    assert app_request("POST", power_path, stop)[0] == 200
+    assert json.loads(request("GET", "/api/v1/apps", headers=auth)[1])["apps"][0]["running"] is False
+    start = {"schema": 1, "operation": "start", "confirmation": "START APPLICATION photos"}
+    assert app_request("POST", power_path, start)[0] == 200
+    assert json.loads(request("GET", "/api/v1/apps", headers=auth)[1])["apps"][0]["running"] is True
+    candidate_file = apps_state / "update-candidates.json"
+    candidate_file.write_text(json.dumps({"schema": 1, "candidates": {"photos": "sha256:" + "b" * 64}}))
+    subprocess.run([str(app_manager), "list"], check=True, stdout=subprocess.DEVNULL)
+    update_path = "/api/v1/apps/photos/update"
+    update = {"schema": 1, "confirmation": "UPDATE APPLICATION photos"}
+    assert app_request("POST", update_path, update)[0] == 200
+    app_state_file = apps_state / "apps.json"
+    assert json.loads(app_state_file.read_text())["apps"][0]["digest"] == "sha256:" + "b" * 64
+    candidate_file.write_text(json.dumps({"schema": 1, "candidates": {"photos": "sha256:" + "c" * 64}}))
+    subprocess.run([str(app_manager), "list"], check=True, stdout=subprocess.DEVNULL)
+    pathlib.Path("/run/bedrock-app-create-fail-once").touch()
+    assert app_request("POST", update_path, update)[0] == 422
+    assert json.loads(app_state_file.read_text())["apps"][0]["digest"] == "sha256:" + "b" * 64
+    assert json.loads(request("GET", "/api/v1/apps", headers=auth)[1])["apps"][0]["update_available"] is True
+    remove_path = "/api/v1/apps/photos"
+    remove = {"schema": 1, "confirmation": "REMOVE APPLICATION photos"}
+    assert app_request("DELETE", remove_path, remove)[0] == 200
+    assert json.loads(request("GET", "/api/v1/apps", headers=auth)[1])["apps"] == []
+    assert pathlib.Path("/srv/bedrock/apps/photos").is_dir(), "application data was not preserved on removal"
+    assert not any(path.name.endswith(".json") for path in pathlib.Path("/var/lib/bedrock/apps/requests").iterdir())
+    app_events = [json.loads(line) for line in audit_file.read_text().splitlines()[app_audit:]]
+    assert len(json.loads(task_file.read_text())["tasks"]) == app_tasks + 6
+    assert len(app_events) == 6
+    assert [event["action"] for event in app_events] == ["app-install-staged", "app-stop", "app-start", "app-update-latest", "app-update-latest", "app-remove"]
+    assert [event["outcome"] for event in app_events] == ["succeeded", "succeeded", "succeeded", "succeeded", "failed", "succeeded"]
+    print("HTTPS application mutations passed: staged install, power, update, failed-update rollback, data-preserving removal, refresh, replay/conflict, and terminal audit outcomes.")
     websocket = {**auth, "Connection": "Upgrade", "Upgrade": "websocket", "Sec-WebSocket-Version": "13",
                  "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==", "Sec-WebSocket-Protocol": "binary"}
     assert request("GET", "/api/v1/vms/guest/console", headers=websocket)[0] == 400
