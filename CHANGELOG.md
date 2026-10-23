@@ -4,6 +4,7 @@ This file records completed work, decisions, validation, and the next starting p
 
 ## Unreleased
 
+- Completed real HTTPS image upload/import/conversion acceptance, including byte and checksum binding, import replay after staged-upload cleanup, conversion provenance refresh, conflict rejection, failed-conversion rollback and terminal audit outcomes. Fixed the installed sandbox startup and group-permission boundaries that had prevented the capability-free broker from consuming API-staged images.
 - Restored packaged backup mutations through the hardened broker by declaring only backup state, confined restore output and root-staged `/mnt` repositories writable, with boot-time restore-directory provisioning. Real HTTPS acceptance now covers staged creation, encrypted run/retention, failed-run state preservation, latest restore, secret-free refresh, replay/conflict, and terminal task/audit outcomes using a deterministic Restic substitute.
 - Restored packaged application mutations through the hardened root broker by adding only the app state and data directories to its writable systemd boundary and provisioning the data directory at boot. Real HTTPS acceptance now covers staged install, power, pinned update, failed-update rollback, data-preserving removal, refresh, replay/conflict, and terminal task/audit outcomes with a disposable runtime shim.
 - VM GPU/USB passthrough changes now publish bounded queued/terminal tasks and privacy-safe audit outcomes, including denied running-guest changes, without exposing VM names or device topology.
