@@ -138,6 +138,67 @@ virtualization.mkdir(parents=True, exist_ok=True)
 (virtualization / "images.json").write_text('{"schema":1,"images":[]}\n')
 (virtualization / "image-provenance.json").write_text('{"schema":1,"conversions":[]}\n')
 subprocess.run(["/usr/lib/bedrock/collect-image-status"], check=True, stdout=subprocess.DEVNULL)
+storage_helper = pathlib.Path("/usr/lib/bedrock/change-storage")
+shutil.copyfile(root / "usr/lib/bedrock/change-storage", storage_helper)
+storage_helper.chmod(0o755)
+storage_state = pathlib.Path("/var/lib/bedrock/storage")
+storage_state.mkdir(parents=True, exist_ok=True)
+(storage_state / "resources.json").write_text('{"schema":1,"pools":[]}\n')
+storage_ids = [f"disk-{digit * 20}" for digit in "12345"]
+storage_paths = [f"/dev/fixture-{digit}" for digit in "12345"]
+(storage_state / "fixture-disks.json").write_text(json.dumps([
+    {"id": disk_id, "path": path, "model": f"Fixture disk {index + 1}", "size_bytes": 1099511627776,
+     "transport": "sata", "health": "healthy"}
+    for index, (disk_id, path) in enumerate(zip(storage_ids, storage_paths))
+]))
+storage_manager = pathlib.Path("/usr/sbin/bedrock-storage")
+storage_manager.write_text(r'''#!/usr/bin/python3
+import json,pathlib,subprocess,sys,time,uuid
+assert sys.argv[1]=='apply' and len(sys.argv)==3
+request=json.loads(pathlib.Path(sys.argv[2]).read_text()); root=pathlib.Path('/var/lib/bedrock/storage')
+state_path=root/'resources.json'; state=json.loads(state_path.read_text()); action=request['action']; now=int(time.time())
+task=f"storage-{action}-{uuid.uuid4()}"; writer='/usr/lib/bedrock/record-api-task'
+subprocess.run([writer,task,f'storage-{action}','queued',str(now),'0','3','steps'],check=True)
+marker=pathlib.Path('/run/bedrock-storage-fail-once')
+if marker.exists():
+    marker.unlink(); subprocess.run([writer,task,f'storage-{action}','failed',str(now),'1','3','steps'],check=True); raise SystemExit(1)
+pool=next((item for item in state['pools'] if item['name']==request['pool']),None)
+if action=='create':
+    assert pool is None; state['pools'].append({'name':request['pool'],'backend':request['backend'],'layout':request['layout'],'devices':request['devices'],'state':'online','last_scrub_unix':None,'last_operation_unix':now})
+else:
+    assert pool is not None
+    if action=='expand': pool['devices']+=request['devices']
+    elif action=='replace': pool['devices']=[item for item in pool['devices'] if item!=request['devices'][0]]+[request['devices'][1]]; pool['state']='rebuilding'
+    elif action=='scrub': pool['last_scrub_unix']=now; pool['state']='online'
+    elif action=='export': pool['state']='exported'
+    elif action=='import': pool['state']='online'
+    pool['last_operation_unix']=now
+state_path.write_text(json.dumps(state,sort_keys=True,separators=(',',':'))+'\n')
+subprocess.run([writer,task,f'storage-{action}','succeeded',str(now),'3','3','steps'],check=True)
+''')
+storage_manager.chmod(0o755)
+storage_collector = pathlib.Path("/usr/lib/bedrock/collect-storage-health")
+storage_collector.write_text(r'''#!/usr/bin/python3
+import json,pathlib,time
+root=pathlib.Path('/var/lib/bedrock/storage'); resources=json.loads((root/'resources.json').read_text())
+disks=json.loads((root/'fixture-disks.json').read_text()); members={path for pool in resources['pools'] for path in pool['devices']}
+candidates=[]
+for disk in disks:
+    managed=disk['path'] in members
+    candidates.append({**disk,'eligible':not managed,'reason':'managed' if managed else 'available'})
+(root/'candidates.json').write_text(json.dumps({'schema':1,'generated_unix':int(time.time()),'disks':candidates},sort_keys=True,separators=(',',':'))+'\n')
+ids={disk['path']:disk['id'] for disk in disks}
+public_candidates=[{key:item[key] for key in ('id','model','size_bytes','transport','health','eligible','reason')} for item in candidates]
+managed=[{'name':pool['name'],'backend':pool['backend'],'layout':pool['layout'],'state':pool['state'],'members':[ids[path] for path in pool['devices']]} for pool in resources['pools']]
+health={'schema':1,'generated_unix':int(time.time()),'overall':'healthy','read_only':True,
+ 'disks':[{'model':item['model'],'size_bytes':item['size_bytes'],'transport':item['transport'],'smart':{'available':True,'passed':True,'temperature_c':30,'power_on_hours':100,'power_mode':'ACTIVE','command_exit':0,'health':'healthy'}} for item in disks],
+ 'disk_candidates':public_candidates,'managed_pools':managed,
+ 'software_raid':{'md_arrays':[],'zfs':{'available':True,'pools':[]}},
+ 'hardware_raid':{'controllers':[],'management_tools':[],'vendor_reports':[],'explanation':'fixture'}}
+(root/'health.json').write_text(json.dumps(health,sort_keys=True,separators=(',',':'))+'\n')
+''')
+storage_collector.chmod(0o755)
+subprocess.run([str(storage_collector)], check=True, stdout=subprocess.DEVNULL)
 pathlib.Path("/etc/bedrock").mkdir(exist_ok=True)
 for name in ("web-gateway.conf", "web-proxy.conf"):
     shutil.copyfile(root / "etc/bedrock" / name, pathlib.Path("/etc/bedrock") / name)
@@ -527,6 +588,65 @@ try:
     assert [event["action"] for event in image_events] == ["image-upload", "image-import", "image-convert", "image-convert"]
     assert [event["outcome"] for event in image_events] == ["succeeded", "succeeded", "succeeded", "failed"]
     print("HTTPS image mutations passed: upload/import, checksum-bound conversion/provenance, failed-conversion rollback, refresh, replay/conflict, and terminal audit outcomes.")
+    storage_tasks = len(json.loads(task_file.read_text())["tasks"])
+    storage_audit = len(audit_file.read_text().splitlines())
+
+    def storage_request(method, path, body, key=None, match=None):
+        if match is None:
+            code, _, current = request("GET", "/api/v1/storage", headers=auth)
+            assert code == 200
+            match = current["ETag"]
+        headers = {**auth, "Content-Type": "application/json", "Idempotency-Key": key or str(uuid.uuid4()), "If-Match": match}
+        return request(method, path, json.dumps(body), headers)
+
+    storage_name = "gateway-pool"
+    create_storage = {"schema": 1, "id": storage_name, "backend": "zfs", "layout": "mirror",
+                      "disk_ids": storage_ids[:2],
+                      "confirmation": f"CREATE STORAGE {storage_name} USING {','.join(storage_ids[:2])}"}
+    assert storage_request("POST", "/api/v1/storage", {**create_storage, "confirmation": "wrong"})[0] == 400
+    assert storage_request("POST", "/api/v1/storage", create_storage, match='"stale"')[0] == 412
+    create_storage_key = str(uuid.uuid4())
+    assert storage_request("POST", "/api/v1/storage", create_storage, create_storage_key)[0] == 200
+    code, storage_body, _ = request("GET", "/api/v1/storage", headers=auth)
+    storage_feed = json.loads(storage_body)
+    pool = next(item for item in storage_feed["managed_pools"] if item["name"] == storage_name)
+    assert code == 200 and pool["state"] == "online" and pool["members"] == storage_ids[:2]
+    code, replay, _ = storage_request("POST", "/api/v1/storage", create_storage, create_storage_key)
+    assert code == 200 and json.loads(replay)["replayed"] is True
+    scrub_path = f"/api/v1/storage/{storage_name}/scrub"
+    scrub_storage = {"schema": 1, "confirmation": f"SCRUB STORAGE {storage_name}"}
+    assert storage_request("POST", scrub_path, scrub_storage, create_storage_key)[0] == 409
+    pathlib.Path("/run/bedrock-storage-fail-once").touch()
+    resources_before_failure = (storage_state / "resources.json").read_bytes()
+    assert storage_request("POST", scrub_path, scrub_storage)[0] == 422
+    assert (storage_state / "resources.json").read_bytes() == resources_before_failure
+    assert storage_request("POST", scrub_path, scrub_storage)[0] == 200
+    expand_path = f"/api/v1/storage/{storage_name}/expand"
+    expand_storage = {"schema": 1, "disk_ids": storage_ids[2:4],
+                      "confirmation": f"EXPAND STORAGE {storage_name} USING {','.join(storage_ids[2:4])}"}
+    assert storage_request("POST", expand_path, expand_storage)[0] == 200
+    export_path = f"/api/v1/storage/{storage_name}/export"
+    export_storage = {"schema": 1, "confirmation": f"EXPORT STORAGE {storage_name}"}
+    assert storage_request("POST", export_path, export_storage)[0] == 200
+    import_storage_path = f"/api/v1/storage/{storage_name}/import"
+    import_storage = {"schema": 1, "confirmation": f"IMPORT STORAGE {storage_name}"}
+    assert storage_request("POST", import_storage_path, import_storage)[0] == 200
+    replace_path = f"/api/v1/storage/{storage_name}/replace"
+    replace_storage = {"schema": 1, "old_disk_id": storage_ids[0], "new_disk_id": storage_ids[4],
+                       "confirmation": f"REPLACE STORAGE {storage_name} MEMBER {storage_ids[0]} WITH {storage_ids[4]}"}
+    assert storage_request("POST", replace_path, replace_storage)[0] == 200
+    code, storage_body, _ = request("GET", "/api/v1/storage", headers=auth)
+    storage_feed = json.loads(storage_body)
+    pool = next(item for item in storage_feed["managed_pools"] if item["name"] == storage_name)
+    assert code == 200 and pool["state"] == "rebuilding" and pool["members"] == storage_ids[1:]
+    assert all("path" not in item for item in storage_feed["disk_candidates"])
+    assert not any(path.name.endswith(".json") for path in (storage_state / "requests").iterdir())
+    storage_events = [json.loads(line) for line in audit_file.read_text().splitlines()[storage_audit:]]
+    assert len(json.loads(task_file.read_text())["tasks"]) == storage_tasks + 7
+    assert len(storage_events) == 7
+    assert [event["action"] for event in storage_events] == ["storage-create", "storage-scrub", "storage-scrub", "storage-expand", "storage-export", "storage-import", "storage-replace"]
+    assert [event["outcome"] for event in storage_events] == ["succeeded", "failed", "succeeded", "succeeded", "succeeded", "succeeded", "succeeded"]
+    print("HTTPS storage mutations passed: create/scrub/expand/export/import/replace, failure rollback, opaque disk identities, refresh, replay/conflict, and terminal audit outcomes.")
     websocket = {**auth, "Connection": "Upgrade", "Upgrade": "websocket", "Sec-WebSocket-Version": "13",
                  "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==", "Sec-WebSocket-Protocol": "binary"}
     assert request("GET", "/api/v1/vms/guest/console", headers=websocket)[0] == 400
